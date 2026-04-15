@@ -1,0 +1,31 @@
+import os
+import geopandas as gpd
+import pandas as pd
+from starter import load_config
+
+def main():
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    cfg = load_config()
+    points_df = gpd.read_file(os.path.abspath(cfg['paths']['corrected_all_filepath']))
+    points_df['idx'] = points_df['idx'].astype(int)
+    seg_results = pd.read_csv(os.path.abspath(cfg['paths']['seg_results_filepath']))
+    seg_results['idx'] = seg_results['img_name'].apply(lambda x: int(x.split('.')[0]))
+
+    cols = ['num_detection_circle', 'diameters', 'num_detection_rect', 'wwtp_area_rect']
+    extra_cols = ['wwtp_area_square', 'num_detection_square']
+    cols_to_drop = [col for col in cols + extra_cols if col in points_df.columns]
+    points_df = points_df.drop(columns=cols_to_drop)
+
+    # Merge the points_df with seg_results on 'idx'
+    merged_df = gpd.GeoDataFrame(pd.merge(points_df, seg_results, on='idx', how='left'), geometry='geometry', crs=points_df.crs)
+    merged_df.to_file(index=False, driver='GPKG', filename=os.path.abspath(cfg['paths']['corrected_all_filepath']))
+
+if __name__ == "__main__":
+    main() 
+
+
+
+
+
+
+
