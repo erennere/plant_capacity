@@ -1,3 +1,7 @@
+"""
+This script merges the segmentation results with the original geospatial dataset. 
+It reads the corrected geospatial data and the segmentation results,
+merges them based on a common index, and saves the updated geospatial dataset with the new segmentation information."""
 import os
 import geopandas as gpd
 import pandas as pd
