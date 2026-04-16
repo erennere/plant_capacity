@@ -25,12 +25,12 @@ set -e
 
 # Change to script directory (works in SLURM and local execution)
 if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    cd "$SLURM_SUBMIT_DIR"
+    cd "$SLURM_SUBMIT_DIR/.."
 else
     SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-    cd "$SCRIPT_DIR"
+    cd "$SCRIPT_DIR/.."
 fi
-PYTHON_SCRIPT="create_rasters.py"
+PYTHON_SCRIPT="pop_at_risk_river_calculations/create_rasters.py"
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 8)}
 export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS

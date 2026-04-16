@@ -28,8 +28,8 @@ def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS
 
 
 def main():
-    cfg = load_config()
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cfg = load_config()
     globals().update(cfg)
 
     verification_dir = paths['verification_dir']
