@@ -28,9 +28,9 @@ from shapely.geometry import shape, box
 from shapely import to_wkt
 from shapely.ops import unary_union
 
-from add_pop import get_iso_codes
-from starter import load_config
-from create_voronoi import download_overture_maps, duckdb_intersect
+from ..add_pop import get_iso_codes
+from ..starter import load_config
+from ..create_voronoi import download_overture_maps, duckdb_intersect
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -726,7 +726,7 @@ def shard_tif_dict(tif_dict, job_index, total_jobs, seed):
 def main():
     """Entry point: load configuration, prepare inputs, and run country batch processing."""
     args = parse_args()
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
     max_workers = cfg['annotations']['max_workers']
     seed = int(cfg['annotations']['random_seed'])
