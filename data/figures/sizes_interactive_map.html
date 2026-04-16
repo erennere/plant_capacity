@@ -1,0 +1,297 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>WWTP Dynamic Map - Hover Tooltips</title>
+    <link rel="stylesheet" href="libs/leaflet.css" />
+    <link rel="stylesheet" href="libs/MarkerCluster.css" />
+    <link rel="stylesheet" href="libs/MarkerCluster.Default.css" />
+    <script src="libs/leaflet.js"></script>
+    <script src="libs/leaflet.markercluster.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: sans-serif;
+      }
+      #map {
+        width: 100%;
+        height: 100vh;
+        background: #aad3df;
+      }
+
+      .agg-circle {
+        border-radius: 50%;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        border: 2px solid white;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.4);
+      }
+
+      .generic-pin {
+        width: 22px;
+        height: 22px;
+        border-radius: 50% 50% 50% 0;
+        transform: rotate(-45deg);
+        border: 1px solid white;
+        box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
+      }
+      .generic-pin::after {
+        content: "";
+        width: 8px;
+        height: 8px;
+        background: white;
+        position: absolute;
+        border-radius: 50%;
+        top: 7px;
+        left: 7px;
+      }
+
+      /* Tooltip Styling */
+      .cluster-tooltip {
+        background: rgba(0, 0, 0, 0.8) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 4px;
+        padding: 8px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .legend {
+        position: absolute;
+        bottom: 30px;
+        right: 30px;
+        background: white;
+        padding: 12px;
+        border-radius: 8px;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.3);
+        font-size: 11px;
+        width: 230px;
+        z-index: 1000;
+      }
+      .legend-header {
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 8px;
+        cursor: pointer;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 4px;
+      }
+      .legend-content {
+        overflow: hidden;
+        max-height: 0;
+        transition: max-height 0.3s ease;
+      }
+      .legend-content.open {
+        max-height: 800px;
+      }
+      .legend-item {
+        display: flex;
+        align-items: center;
+        margin: 10px 0;
+      }
+      .legend-circle {
+        border-radius: 50%;
+        border: 1.5px solid #666;
+        margin-right: 12px;
+        background: #999;
+        flex-shrink: 0;
+      }
+      .color-bar {
+        height: 12px;
+        width: 100%;
+        border-radius: 2px;
+        background: linear-gradient(
+          to right,
+          #000004,
+          #781c6d,
+          #ed6925,
+          #fcffa4
+        );
+      }
+      .color-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 9px;
+        margin-bottom: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <script>
+      const map = L.map("map", { worldCopyJump: true }).setView([0, 0], 2);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        minZoom: 0,
+      }).addTo(map);
+
+      const zoomThreshold = 13;
+      const toM2 = (v) => Math.round(v).toLocaleString() + " m²";
+      const toKm2 = (v) => (v / 1000000).toFixed(3) + " km²";
+      const ratioToColor = (r) => d3.interpolateInferno(r);
+
+      const markers = L.markerClusterGroup({
+        disableClusteringAtZoom: zoomThreshold,
+        maxClusterRadius: 80,
+        showCoverageOnHover: true,
+        iconCreateFunction: (cluster) => {
+          const children = cluster.getAllChildMarkers();
+          const total = children.reduce(
+            (acc, c) => acc + (c.feature.properties.total_area || 0),
+            0,
+          );
+          const round = children.reduce(
+            (acc, c) => acc + (c.feature.properties.round_area || 0),
+            0,
+          );
+          const ratio = total === 0 ? 0 : round / total;
+
+          const r = Math.max(Math.sqrt(total) * 0.012, 25);
+          cluster.options.calculatedArea = total;
+
+          return L.divIcon({
+            html: `<div class="agg-circle" style="width:${r}px; height:${r}px; background:${ratioToColor(ratio)}; line-height:${r}px;">${cluster.getChildCount()}</div>`,
+            className: "",
+            iconSize: [r, r],
+          });
+        },
+      });
+
+      // --- NEW: Tooltip Logic for Clusters ---
+      markers.on("clustermouseover", (a) => {
+        const cluster = a.layer;
+        const children = cluster.getAllChildMarkers();
+
+        const total_sum = children.reduce(
+          (acc, c) => acc + (c.feature.properties.total_area || 0),
+          0,
+        );
+        const round_sum = children.reduce(
+          (acc, c) => acc + (c.feature.properties.round_area || 0),
+          0,
+        );
+        const ratio = total_sum === 0 ? 0 : round_sum / total_sum;
+
+        // Calculate Median
+        const areas = children
+          .map((c) => c.feature.properties.total_area || 0)
+          .sort((a, b) => a - b);
+        const mid = Math.floor(areas.length / 2);
+        const median =
+          areas.length % 2 !== 0
+            ? areas[mid]
+            : (areas[mid - 1] + areas[mid]) / 2;
+
+        cluster
+          .bindTooltip(
+            `
+          <strong>Aggregate Info</strong><br>
+          Median Total Area: ${toKm2(median)}<br>
+          Aggregated Round Area: ${toKm2(round_sum)}<br>
+          Aggregated Total Area: ${toKm2(total_sum)}<br>
+          Ratio: ${ratio.toFixed(2)}
+        `,
+            { direction: "top", className: "cluster-tooltip", sticky: true },
+          )
+          .openTooltip();
+      });
+
+      const legend = L.control({ position: "bottomright" });
+      legend.onAdd = function () {
+        const div = L.DomUtil.create("div", "legend");
+        div.innerHTML = `
+          <div class="legend-header" id="leg-toggle">Dynamic Map Legend</div>
+          <div class="legend-content open" id="leg-content">
+            <div style="font-weight:bold; margin-bottom:4px;">Circularity Ratio</div>
+            <div class="color-bar"></div>
+            <div class="color-labels"><span>Rect (Dark)</span><span>Round (Bright)</span></div>
+            <div id="dynamic-info"></div>
+          </div>`;
+        return div;
+      };
+      legend.addTo(map);
+
+      function updateLegend() {
+        const container = document.getElementById("dynamic-info");
+        if (!container) return;
+
+        const zoom = map.getZoom();
+        const bounds = map.getBounds();
+
+        if (zoom >= zoomThreshold) {
+          container.innerHTML = `<div style="font-weight:bold; margin: 10px 0 5px 0;">Individual Facilities</div><div class="legend-item"><div class="generic-pin" style="background:#ed6925; transform: scale(0.7) rotate(-45deg); margin-right:15px;"></div><span>Pin per Facility</span></div>`;
+        } else {
+          let visibleValues = [];
+          markers.eachLayer((layer) => {
+            const parent = markers.getVisibleParent(layer);
+            if (
+              parent &&
+              parent.options.calculatedArea &&
+              bounds.contains(parent.getLatLng())
+            ) {
+              visibleValues.push(parent.options.calculatedArea);
+            } else if (!parent && bounds.contains(layer.getLatLng())) {
+              visibleValues.push(layer.feature.properties.total_area);
+            }
+          });
+          visibleValues = [...new Set(visibleValues)];
+
+          if (visibleValues.length === 0) {
+            container.innerHTML = `<div style="color:gray; margin:10px 0;">No aggregates in view</div>`;
+            return;
+          }
+
+          const min = Math.min(...visibleValues);
+          const max = Math.max(...visibleValues);
+          container.innerHTML = `<div style="font-weight:bold; margin: 10px 0 5px 0;">Visible Aggregation Scale</div>`;
+          [min, (min + max) / 2, max].forEach((area) => {
+            const pixelSize = Math.max(Math.sqrt(area) * 0.012, 10);
+            const item = document.createElement("div");
+            item.className = "legend-item";
+            item.innerHTML = `<div class="legend-circle" style="width:${pixelSize}px; height:${pixelSize}px;"></div><span>${toKm2(area)}</span>`;
+            container.appendChild(item);
+          });
+        }
+      }
+
+      document.getElementById("leg-toggle").onclick = () =>
+        document.getElementById("leg-content").classList.toggle("open");
+
+      fetch("./leaflet_size.geojson")
+        .then((res) => res.json())
+        .then((data) => {
+          data.features.forEach((f) => {
+            const [lng, lat] = f.geometry.coordinates;
+            const area = f.properties.total_area || 0;
+            const round = f.properties.round_area || 0;
+            const ratio = area === 0 ? 0 : round / area;
+
+            const marker = L.marker([lat, lng], {
+              icon: L.divIcon({
+                className: "",
+                html: `<div class="generic-pin" style="background:${ratioToColor(ratio)}; margin-top:-22px; margin-left:-11px;"></div>`,
+                iconAnchor: [0, 0],
+              }),
+            });
+
+            marker.feature = f;
+            marker.bindPopup(
+              `<strong>Facility Details</strong><br>Total Area: ${toM2(area)}<br>Round Area: ${toM2(round)}<br>Rect Area: ${toM2(area - round)}<br>Ratio: ${(ratio * 100).toFixed(1)}%`,
+            );
+            marker.on("click", () => map.flyTo([lat, lng], 18));
+            markers.addLayer(marker);
+          });
+          map.addLayer(markers);
+          updateLegend();
+        });
+
+      map.on("zoomend moveend", updateLegend);
+    </script>
+  </body>
+</html>
