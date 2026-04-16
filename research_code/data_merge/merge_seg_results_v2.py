@@ -5,10 +5,10 @@ merges them based on a common index, and saves the updated geospatial dataset wi
 import os
 import geopandas as gpd
 import pandas as pd
-from starter import load_config
+from ..starter import load_config
 
 def main():
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
     points_df = gpd.read_file(os.path.abspath(cfg['paths']['corrected_all_filepath']))
     points_df['idx'] = points_df['idx'].astype(int)
