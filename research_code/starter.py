@@ -148,7 +148,12 @@ def load_config(config="config.yaml"):
         "annotations_verf_image_outpath_dir":  f(cfg['paths']['annotations_verf_image_outpath_dir']),
         "annotations_results_filepath" : f(cfg['paths']['annotations_results_filepath']),
         "annotations_images_dir" : f(cfg['paths']['annotations_images_dir']),
-        "annotations_temp_parquet_dir" : f(cfg['paths']['annotations_temp_parquet_dir'])
+        "annotations_temp_parquet_dir" : f(cfg['paths']['annotations_temp_parquet_dir']),
+
+        "country_boundaries_filepath": f(cfg['paths']['country_boundaries_filepath']),
+        "interactive_piechart_html_filepath": f(cfg['paths']['interactive_piechart_html_filepath']),
+        "figure1_piechart_filepath": f(cfg['paths']['figure1_piechart_filepath']),
+        "leaflet_geojson_filepath": f(cfg['paths']['leaflet_geojson_filepath'])
     }
 
     params = cfg["params"]

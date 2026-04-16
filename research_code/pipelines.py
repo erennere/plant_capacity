@@ -58,6 +58,14 @@ def create_output_paths(cfg):
     }
     return paths
 
+def create_pop_output_paths(cfg):
+    voronois = create_output_paths(cfg)['voronoi']
+    return {
+        'voronoi' : {
+            k: os.path.abspath(os.path.join(cfg['paths']['pop_output_dir'], f'pop_added_{os.path.basename(v)}')) for k, v in voronois.items()
+            }
+        }
+    
 
 def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distance_fn, output_path, 
                         buffer_id_col='buffer_id', scale_weights=False, only_round=False, buffering=False, method='linear'):

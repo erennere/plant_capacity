@@ -61,6 +61,11 @@ paths:
   industrial_areas_ohsome_parquet_filepath: "{data_dir}/industrial_areas_final.parquet"
   pop_at_risk_output_filepath: "{data_dir}/pop_at_risk_pop.parquet"
 
+  country_boundaries_filepath: "{data_dir}/boundaries/ne_110m_admin_0_countries.shp"
+  interactive_piechart_html_filepath: "{data_dir}/figures/WWTP_type_interactive_piechart.html"
+  static_piechart_filepath: "{data_dir}/figures/WWTP_type_piechart.png"
+  leaflet_geojson_filepath: "{data_dir}/figures/leaflet_size.geojson"
+
 s3:
   latest_url: "s3://overturemaps-us-west-2/release/2025-01-22.0"
   divisions: "{latest_url}/theme=divisions/type=division_area/*"
@@ -101,6 +106,7 @@ booleans:
 
 figures:
   pop_threshold: 1000
+  approach: 3a
 
 credentials:
  s3_access_key_id: "lymqeBSuT1dt9FhcUv3z"
