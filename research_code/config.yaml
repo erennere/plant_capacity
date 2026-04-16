@@ -85,6 +85,7 @@ params:
   weight_method: square_root
   zoom_level: 8
   industrial_category_numbers: []
+  min_pixels: 9
   
 annotations:
   default_mode: array

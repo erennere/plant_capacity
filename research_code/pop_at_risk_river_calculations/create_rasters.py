@@ -31,6 +31,8 @@ from shapely.ops import unary_union
 from ..add_pop import get_iso_codes
 from ..starter import load_config
 from ..create_voronoi import download_overture_maps, duckdb_intersect
+from ..pipelines import create_pop_output_paths
+from .find_pop_in_danger_pop import finding_bbox, finding_tiles
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -131,7 +133,7 @@ def geotiff_exists_and_valid(path):
     final_gdf = gdf.dissolve(by='group', aggfunc={'pop_sum': 'sum'})
     return final_gdf.reset_index(drop=True) """
 
-def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9):
+def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9, zoom_level=8):
     """
     Extracts population islands from WorldPop rasters with strict RAM management.
     Designed for 64GB / 4 processes (16GB per worker).
@@ -272,12 +274,15 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
 
             for island in islands:
                 if not island.is_empty:
-                    final_rows.append({
-                        "geometry": island,
+                    tiles = finding_tiles(island, zoom_level=zoom_level)  # Example zoom level for tile assignment
+                    for tile in tiles:
+                        final_rows.append({
+                        "geometry": island.intersection(finding_bbox(tile)),  
                         "HYBAS_ID": h_id,
+                        "tile": tile,
                         **content["meta"]
                     })
-
+                                        
         del geom_registry
         gc.collect()
 
@@ -285,6 +290,7 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
             return None
 
         final_gdf = gpd.GeoDataFrame(final_rows, crs=crs)
+
         del final_rows
         logger.info("[%s] Total islands to check: %s", country_code, len(final_gdf))
 
@@ -600,14 +606,15 @@ def find_the_newest_tif_files(countries, tif_dir):
             del my_dict[country]
     return my_dict
 
-def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, output_path): 
+def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, output_path, min_pixels=9, zoom_level=8): 
     """Process one country raster: create signed raster and extract unserved islands."""
     filepath, sum_pos, sum_neg = polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path)
     #gdf = extract_worldpop_optimized_v2(raster_path, polygons_gdf)
-    gdf = extract_worldpop_universal(raster_path, watershed_gdf, polygons_gdf)
+    gdf = extract_worldpop_universal(raster_path, watershed_gdf, polygons_gdf, min_pixels=min_pixels, zoom_level=zoom_level)
     return filepath, sum_pos, sum_neg, gdf
 
-def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_output_filepath, non_served_outpath, max_workers=4):
+def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_output_filepath, non_served_outpath, max_workers=4,
+                              min_pixels=9, zoom_level=8):
     """
     Process multiple raster files in parallel, intersecting with polygons
     and creating signed rasters (+ inside polygons, - outside).
@@ -652,7 +659,9 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
                 tif_filepath,
                 gdf[gdf['ISO_2'] == country],
                 watershed_gdf[watershed_gdf['ISO_2'] == country],
-                output_filepath
+                output_filepath,
+                min_pixels=min_pixels,
+                zoom_level=zoom_level
             )
             future_to_country[future] = country
         # Collect results with a progress bar
@@ -730,16 +739,16 @@ def main():
     cfg = load_config()
     max_workers = cfg['annotations']['max_workers']
     seed = int(cfg['annotations']['random_seed'])
-    output_tif_dir = cfg['paths']['WWTP_tif_dir']
-    level = cfg['level']
-    version = cfg['version']
-    buffer = cfg['buffer']
-    particle = cfg['particle']
-    voronoi_dir = os.path.abspath(cfg['paths']['voronoi_dir'])
+    min_pixels = int(cfg['min_pixels'])
     tif_dir = os.path.abspath(cfg['paths']['pop_tif_dir'])
+
+    zoom_level = int(cfg['zoom_level'])
+    output_tif_dir = os.path.abspath(cfg['paths']['WWTP_tif_dir'])
     non_served_outpath = os.path.abspath(cfg['paths']['non_served_outpath'].replace('.gpkg', '.csv'))
     csv_output_filepath = os.path.abspath(cfg['paths']['csv_output_filepath'].replace('.gpkg', '.csv'))
-    voronoi_3a_filepath = os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_bf{str(int(buffer))}_{particle}.gpkg')
+
+    approach = cfg['figures']['approach']
+    voronoi_3a_filepath = os.path.abspath(create_pop_output_paths['voronoi'][approach])
     if not os.path.exists(output_tif_dir):
         os.makedirs(output_tif_dir, exist_ok=True)
     logger.info("Loading Voronoi polygons from %s", voronoi_3a_filepath)
@@ -765,7 +774,7 @@ def main():
         watesrhed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
     
     logger.info("Starting country intersection workflow with max_workers=%s", max_workers)
-    orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_tif_dir, csv_output_filepath, non_served_outpath, max_workers)
+    orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_tif_dir, csv_output_filepath, non_served_outpath, max_workers, min_pixels=min_pixels, zoom_level=zoom_level)
 if __name__ == '__main__':
     main()
     

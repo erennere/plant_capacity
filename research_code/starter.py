@@ -191,5 +191,6 @@ def load_config(config="config.yaml"):
         "weight_method": cfg["params"]["weight_method"],
         "zoom_level": cfg["params"]["zoom_level"],
         "remove_industrial": flags['remove_industrial'],
-        "industrial_category_numbers": cfg['params']['industrial_category_numbers']
+        "industrial_category_numbers": cfg['params']['industrial_category_numbers'],
+        "min_pixels": cfg['params']['min_pixels']
     }
