@@ -152,7 +152,7 @@ def load_config(config="config.yaml"):
 
         "country_boundaries_filepath": f(cfg['paths']['country_boundaries_filepath']),
         "interactive_piechart_html_filepath": f(cfg['paths']['interactive_piechart_html_filepath']),
-        "figure1_piechart_filepath": f(cfg['paths']['figure1_piechart_filepath']),
+        "static_piechart_filepath": f(cfg['paths']['static_piechart_filepath']),
         "leaflet_geojson_filepath": f(cfg['paths']['leaflet_geojson_filepath'])
     }
 

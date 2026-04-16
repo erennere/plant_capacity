@@ -82,7 +82,7 @@ params:
   eu_utm: 32634
   rad: 5000
   add_pop_max_workers: 8
-  weight_method: sigmoid
+  weight_method: square_root
   zoom_level: 8
   industrial_category_numbers: []
   

@@ -280,7 +280,7 @@ def main():
     ax.set_title("Worldwide Overview of WWTPs by Size and Technology",
                 fontsize=24, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(os.path.abspath(cfg['paths']['figure1_piechart_filepath']), dpi=200)
+    plt.savefig(os.path.abspath(cfg['paths']['static_piechart_filepath']), dpi=200)
 
 if __name__ == '__main__':
     main()
