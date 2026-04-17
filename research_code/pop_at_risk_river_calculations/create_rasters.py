@@ -33,13 +33,13 @@ try:
     from ..starter import load_config
     from ..create_voronoi import download_overture_maps, duckdb_intersect
     from ..pipelines import create_pop_output_paths
-    from .find_pop_in_danger_pop import finding_bbox, finding_tiles
+    from .find_pop_in_danger_pop import find_bbox, finding_tiles
 except ImportError:
     from research_code.add_pop import get_iso_codes
     from research_code.starter import load_config
     from research_code.create_voronoi import download_overture_maps, duckdb_intersect
     from research_code.pipelines import create_pop_output_paths
-    from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import finding_bbox, finding_tiles
+    from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import find_bbox, finding_tiles
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
                     tiles = finding_tiles(island, zoom_level=zoom_level)  # Example zoom level for tile assignment
                     for tile in tiles:
                         final_rows.append({
-                        "geometry": island.intersection(finding_bbox(tile)),  
+                        "geometry": island.intersection(find_bbox(tile)),  
                         "HYBAS_ID": h_id,
                         "tile": tile,
                         **content["meta"]
