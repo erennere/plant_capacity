@@ -25,7 +25,7 @@ from rasterio.features import shapes, geometry_mask, rasterize
 from exactextract import exact_extract
 from scipy.ndimage import label
 from shapely.geometry import shape, box
-from shapely import to_wkt
+from shapely import to_wkt, make_valid
 from shapely.ops import unary_union
 
 try:
@@ -43,6 +43,38 @@ except ImportError:
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_polygon_geom(geom):
+    """Return a valid Polygon/MultiPolygon geometry or None."""
+    if geom is None or geom.is_empty:
+        return None
+
+    try:
+        geom = make_valid(geom)
+    except Exception:
+        geom = geom.buffer(0)
+
+    if geom is None or geom.is_empty:
+        return None
+
+    if geom.geom_type in ("Polygon", "MultiPolygon"):
+        return geom
+
+    if geom.geom_type == "GeometryCollection":
+        polys = [
+            g for g in geom.geoms
+            if (not g.is_empty) and g.geom_type in ("Polygon", "MultiPolygon")
+        ]
+        if not polys:
+            return None
+        merged = unary_union(polys)
+        if merged.is_empty:
+            return None
+        if merged.geom_type in ("Polygon", "MultiPolygon"):
+            return merged
+
+    return None
 
 def geotiff_exists_and_valid(path):
     """Return True when a GeoTIFF exists and raster metadata can be read."""
@@ -283,8 +315,11 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
                 if not island.is_empty:
                     tiles = finding_tiles(island, zoom_level=zoom_level)  # Example zoom level for tile assignment
                     for tile in tiles:
+                        clipped = _sanitize_polygon_geom(island.intersection(find_bbox(tile)))
+                        if clipped is None:
+                            continue
                         final_rows.append({
-                        "geometry": island.intersection(find_bbox(tile)),  
+                        "geometry": clipped,
                         "HYBAS_ID": h_id,
                         "tile": tile,
                         **content["meta"]
@@ -302,7 +337,8 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
         logger.info("[%s] Total islands to check: %s", country_code, len(final_gdf))
 
         # 5. CHUNKED ZONAL STATS (The OOM-Killer Prevention)
-        sums, counts = [], []
+        sums = np.zeros(len(final_gdf), dtype=np.int64)
+        counts = np.zeros(len(final_gdf), dtype=np.int64)
         chunk_size = 100000
 
         for start_idx in range(0, len(final_gdf), chunk_size):
@@ -310,7 +346,22 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
             logger.info("[%s] Calculating stats for chunk %s-%s", country_code, start_idx, end_idx)
 
             # exact_extract is faster and more memory-efficient than rasterstats
-            chunk = final_gdf.iloc[start_idx:end_idx][["geometry"]]
+            chunk = final_gdf.iloc[start_idx:end_idx][["geometry"]].copy()
+            chunk["geometry"] = chunk["geometry"].apply(_sanitize_polygon_geom)
+            invalid = chunk["geometry"].isna()
+            if invalid.any():
+                logger.warning(
+                    "[%s] Dropping %s invalid geometries before exact_extract in chunk %s-%s",
+                    country_code,
+                    int(invalid.sum()),
+                    start_idx,
+                    end_idx,
+                )
+                chunk = chunk[~invalid]
+
+            if chunk.empty:
+                continue
+
             stats_df = exact_extract(
                 rast=raster_path,
                 vec=chunk,
@@ -318,13 +369,11 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
                 output="pandas"
             )
 
-            for _, r in stats_df.iterrows():
-                sums.append(int(np.round(r["sum"] or 0)))
-                counts.append(int(r["count"] or 0))
+            row_index = chunk.index.to_numpy()
+            sums[row_index] = np.round(stats_df["sum"].fillna(0)).astype(np.int64).to_numpy()
+            counts[row_index] = stats_df["count"].fillna(0).astype(np.int64).to_numpy()
 
             del stats_df, chunk
-
-            del stats
             gc.collect()
 
         final_gdf["pop_sum"] = sums
@@ -758,7 +807,7 @@ def main():
     csv_output_filepath = os.path.abspath(cfg['paths']['csv_output_filepath'].replace('.gpkg', '.csv'))
 
     approach = cfg['figures']['approach']
-    voronoi_3a_filepath = os.path.abspath(create_pop_output_paths['voronoi'][approach])
+    voronoi_3a_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     if not os.path.exists(output_tif_dir):
         os.makedirs(output_tif_dir, exist_ok=True)
     logger.info("Loading Voronoi polygons from %s", voronoi_3a_filepath)
