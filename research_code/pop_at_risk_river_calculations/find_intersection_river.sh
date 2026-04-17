@@ -4,8 +4,7 @@
 #SBATCH --mem=128gb
 #SBATCH --time=48:00:00
 
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(pwd)"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 

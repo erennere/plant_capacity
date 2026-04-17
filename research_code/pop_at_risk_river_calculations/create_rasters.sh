@@ -23,9 +23,9 @@
 
 set -e
 
-# Change to project root
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Use current working directory as project root.
+PROJECT_ROOT="$(pwd)"
+
 LOG_DIR="${PROJECT_ROOT}/logs"
 cd "$PROJECT_ROOT"
 PYTHON_CMD="python"

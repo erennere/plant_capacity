@@ -20,13 +20,7 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Configuration
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
-# Use SLURM_SUBMIT_DIR only if it is writable; otherwise keep script-derived root.
-if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -w "${SLURM_SUBMIT_DIR}" ]]; then
-    PROJECT_ROOT="${SLURM_SUBMIT_DIR}"
-fi
+PROJECT_ROOT="$(pwd)"
 
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"

@@ -4,7 +4,7 @@
 #SBATCH --mem=16gb
 #SBATCH --cpus-per-task=4
 
-PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+PROJECT_ROOT="$(pwd)"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 

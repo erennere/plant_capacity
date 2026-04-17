@@ -23,13 +23,8 @@
 
 set -e
 
-# Change to project root derived from the script location.
-PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-
-# Use SLURM_SUBMIT_DIR only when it is writable and contains config.yaml.
-if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -w "${SLURM_SUBMIT_DIR}" ]] && [[ -f "${SLURM_SUBMIT_DIR}/config.yaml" ]]; then
-    PROJECT_ROOT="${SLURM_SUBMIT_DIR}"
-fi
+# Change to project root from the current working directory.
+PROJECT_ROOT="$(pwd)"
 
 cd "$PROJECT_ROOT"
 LOG_DIR="${PROJECT_ROOT}/logs"

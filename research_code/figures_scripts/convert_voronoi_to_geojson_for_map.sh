@@ -4,7 +4,7 @@
 #SBATCH --mem=2gb
 #SBATCH --cpus-per-task=2
 
-PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+PROJECT_ROOT="$(pwd)"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 PYTHON_SCRIPT="research_code.figures_scripts.convert_voronoi_to_geojson_for_map"

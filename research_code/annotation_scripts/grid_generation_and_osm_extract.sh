@@ -5,14 +5,7 @@
 #SBATCH --time=48:00:00
 
 # Configuration
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-
-# Use SLURM_SUBMIT_DIR only if it is writable; otherwise keep script-derived directory.
-if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -w "${SLURM_SUBMIT_DIR}" ]]; then
-    SCRIPT_DIR="${SLURM_SUBMIT_DIR}"
-fi
-
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(pwd)"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 
