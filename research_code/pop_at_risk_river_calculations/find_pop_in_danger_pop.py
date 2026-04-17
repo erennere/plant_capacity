@@ -7,9 +7,14 @@ import geopandas as gpd
 from shapely.geometry import box
 import mercantile
 
-from ..add_pop import intersect_all_files
-from ..create_voronoi import duckdb_intersect
-from ..starter import load_config
+try:
+    from ..add_pop import intersect_all_files
+    from ..create_voronoi import duckdb_intersect
+    from ..starter import load_config
+except ImportError:
+    from research_code.add_pop import intersect_all_files
+    from research_code.create_voronoi import duckdb_intersect
+    from research_code.starter import load_config
 
 # Configure logging
 logging.basicConfig(

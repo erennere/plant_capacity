@@ -26,7 +26,10 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import pycountry
-from starter import load_config
+try:
+    from .starter import load_config
+except ImportError:  # Support running as a top-level script
+    from starter import load_config
 from exactextract import exact_extract
 
 # Configure logging
@@ -281,7 +284,7 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
 def main():
     """Main entry point for population data integration.
     
-    Reads configuration from first_3.load_config(), validates command-line arguments,
+    Reads configuration from starter.load_config(), validates command-line arguments,
     and orchestrates population raster intersection with Voronoi polygon layer.
     
     Command-line arguments:
@@ -289,7 +292,7 @@ def main():
     """
     # Validate command-line arguments
     if len(sys.argv) < 2:
-        logging.error("Usage: python add_pop.py <voronoi_file_index>")
+        logging.error("Usage: python -m research_code.add_pop <voronoi_file_index>")
         sys.exit(1)
     
     try:
@@ -324,9 +327,9 @@ def main():
     
     try:
         orchestrate_intersections(
-            os.path.abspath(paths['voronoi_dir']),
-            os.path.abspath(paths['pop_tif_dir']),
-            os.path.abspath(paths['pop_output_dir']),
+            paths['voronoi_dir'],
+            paths['pop_tif_dir'],
+            paths['pop_output_dir'],
             index,
             max_workers
         )

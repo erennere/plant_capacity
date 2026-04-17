@@ -12,6 +12,11 @@ import duckdb
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
+
 # Configure logging to flush output immediately (important for HPC batch jobs)
 logging.basicConfig(
     level=logging.INFO,
@@ -467,13 +472,8 @@ def main(
 CRS_OUT = "EPSG:4326"
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-    from first_3 import load_config
-    cfg = load_config('../config.yaml')
-    os.chdir(parent_dir)
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cfg = load_config()
     overwrite = cfg["annotations"]["overwrite"]
 
     points_path = cfg["paths"]["corrected_all_filepath"]

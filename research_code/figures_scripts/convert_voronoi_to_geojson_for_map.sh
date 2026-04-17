@@ -4,12 +4,20 @@
 #SBATCH --mem=2gb
 #SBATCH --cpus-per-task=2
 
-SCRIPT_DIR=""
+PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_CMD="python"
+PYTHON_SCRIPT="research_code.figures_scripts.convert_voronoi_to_geojson_for_map"
 
-if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR"
-else
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-fi
+mkdir -p "${LOG_DIR}"
 
-python "${SCRIPT_DIR}/convert_voronoi_to_geojson_for_map.py"
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
+}
+
+log "Installing research_code module"
+${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
+
+log "Running convert_voronoi_to_geojson"
+${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 2>&1 | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
+log "Completed convert_voronoi_to_geojson"

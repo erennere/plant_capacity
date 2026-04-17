@@ -17,6 +17,12 @@ import duckdb
 import logging
 import shapely.wkt
 
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -433,14 +439,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.info("Starting Bing annotation pipeline")
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-
-    from first_3 import load_config
-    cfg = load_config('../config.yaml')
-    os.chdir(parent_dir)
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cfg = load_config()
     logging.info("Configuration loaded")
 
     #images_dir = "./annotation_scripts/images"

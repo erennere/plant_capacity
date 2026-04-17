@@ -6,8 +6,12 @@ from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, t
 from shapely.geometry.base import BaseGeometry
 import duckdb
 import pycountry
-from ..create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry
-from ..starter import load_config
+try:
+    from ..create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry
+    from ..starter import load_config
+except ImportError:
+    from research_code.create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry
+    from research_code.starter import load_config
 
 def corr_locations_wOSM(rad, pdf, df):
     # Set spatial index on the OSM geometry
@@ -141,7 +145,7 @@ def main():
 
 # =============================================================================
     #Cleaning the corrected WWTP locations
-    corrected_WWTPs = gpd.read_file(os.path.abspath(paths["paul_corrected_filepath"]))
+    corrected_WWTPs = gpd.read_file(paths["paul_corrected_filepath"])
     corrected_WWTPs['corrected_geometry'] = corrected_WWTPs.apply(create_corrected_geom, axis=1)
     corrected_WWTPs['HW_geometry'] = corrected_WWTPs.apply(create_HW_geom, axis=1)
     corrected_WWTPs['combined_geometry'] = corrected_WWTPs.apply(lambda row: row['corrected_geometry'] if pd.notna(row['corrected_geometry'])
@@ -152,7 +156,7 @@ def main():
     newly_found_WWTPs = corrected_WWTPs[(corrected_WWTPs['newly_found_WWTPs'] == False) & (pd.isna(corrected_WWTPs['neigh_lon']))]
 # =============================================================================
     #read ohsome geojson for whole world
-    pdf = gpd.read_file(os.path.abspath(paths['osmgeo_filepath']))
+    pdf = gpd.read_file(paths['osmgeo_filepath'])
     pdf['epsg'] = pdf.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
                                                         if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
     newly_found_WWTPs['geometry'] = newly_found_WWTPs['combined_geometry']
@@ -185,13 +189,13 @@ def main():
     final_df = pd.concat([notna, na], ignore_index=True)
 
     if 'ISO_2' not in final_df.columns: 
-        if not os.path.exists(os.path.abspath(paths["overture"])):
+        if not os.path.exists(paths["overture"]):
             download_overture_maps(paths['overture_s3_url'], paths["overture"])
-        final_df = duckdb_intersect(final_df, os.path.abspath(paths["overture"]))
+        final_df = duckdb_intersect(final_df, paths["overture"])
         alpha_2_to_names, alpha_3_to_names, alpha_2_to_3, alpha_3_to_2 = country_isos()
         final_df['ISO_2'] = final_df.apply(lambda row: row['ISO_2'] if pd.notna(row['ISO_2']) else alpha_3_to_2.get(row['CNTRY_ISO'], None), axis=1)
 
-    final_df.to_file(os.path.abspath(paths['corrected_south']), driver='GeoJSON', index=False)
+    final_df.to_file(paths['corrected_south'], driver='GeoJSON', index=False)
 
     old_file = gpd.read_file(old_filename)
     new_points = final_df[~final_df.geometry.isin(old_file.geometry)]

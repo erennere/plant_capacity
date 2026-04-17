@@ -16,7 +16,10 @@ from shapely.ops import unary_union
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from shapely.geometry import Polygon
-from ..starter import load_config  # Configuration loader from starter module
+try:
+    from ..starter import load_config  # Configuration loader from starter module
+except ImportError:
+    from research_code.starter import load_config
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

@@ -10,6 +10,21 @@ import sys
 import yaml
 
 
+def _normalize_cfg_path(path_value, base_dir):
+    """Return absolute filesystem path for cfg path entries, keeping URLs unchanged."""
+    if not isinstance(path_value, str):
+        return path_value
+
+    # Keep URI-like values (e.g. s3://...) unchanged.
+    if "://" in path_value:
+        return path_value
+
+    expanded = os.path.expanduser(path_value)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded)
+    return os.path.abspath(os.path.join(base_dir, expanded))
+
+
 def load_config(config="config.yaml"):
     """
     Load and parse YAML configuration file, construct paths with variable expansion.
@@ -63,10 +78,16 @@ def load_config(config="config.yaml"):
         unpacking: cfg = load_config(); paths = cfg['paths']; buffer = cfg['buffer']
     """
     # Lazy import to avoid circular import issues
-    from create_voronoi import default_distance_multiplicative
+    try:
+        from .create_voronoi import default_distance_multiplicative
+    except ImportError:  # Support running as a top-level script
+        from create_voronoi import default_distance_multiplicative
     
-    with open(config) as f:
-        cfg = yaml.safe_load(f)
+    config_path = os.path.abspath(config)
+    config_dir = os.path.dirname(config_path)
+
+    with open(config_path) as stream:
+        cfg = yaml.safe_load(stream)
 
     # CLI arguments
     #weights_cond = False if len(sys.argv) > 1 and sys.argv[1] == "all_world" else True
@@ -155,6 +176,9 @@ def load_config(config="config.yaml"):
         "static_piechart_filepath": f(cfg['paths']['static_piechart_filepath']),
         "leaflet_geojson_filepath": f(cfg['paths']['leaflet_geojson_filepath'])
     }
+
+    # Normalize all configured filesystem paths once at load time.
+    paths = {k: _normalize_cfg_path(v, config_dir) for k, v in paths.items()}
 
     params = cfg["params"]
     flags = cfg["booleans"]

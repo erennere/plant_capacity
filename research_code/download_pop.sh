@@ -16,15 +16,15 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Configuration
-SCRIPT_DIR=""
+PROJECT_ROOT=""
 if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR"
+    PROJECT_ROOT="$SLURM_SUBMIT_DIR"
 else
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+    PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 fi
 
-LOG_DIR="${SCRIPT_DIR}/logs"
-PYTHON_SCRIPT="${SCRIPT_DIR}/download_pop.py"
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_SCRIPT="${PROJECT_ROOT}/research_code.download_pop"
 PYTHON_CMD="python"  # or specify full path if needed
 
 # Create log directory
@@ -38,13 +38,17 @@ log() {
 log "=========================================="
 log "Population Data Processing Started"
 log "=========================================="
-log "Script directory: ${SCRIPT_DIR}"
+log "Project root directory: ${PROJECT_ROOT}"
 log "Python command: ${PYTHON_CMD}"
 log "Processing with 8 parallel workers"
 
+# Install package in editable mode before running modules
+log "Installing research_code module (editable)"
+${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}"
+
 # Validate Python script exists
-if [[ ! -f "${PYTHON_SCRIPT}" ]]; then
-    log "ERROR: Python script not found: ${PYTHON_SCRIPT}"
+if ! python -c "import ${PYTHON_SCRIPT}" &> /dev/null; then
+    log "ERROR: Python script not found or cannot be imported: ${PYTHON_SCRIPT}"
     exit 1
 fi
 
@@ -60,7 +64,7 @@ log "Python version: $(${PYTHON_CMD} --version 2>&1)"
 log "Starting population data download and processing..."
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} "${PYTHON_SCRIPT}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

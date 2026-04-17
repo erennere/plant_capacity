@@ -12,8 +12,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-from .hw_comparison import ndvi, multiples, replace_inf, get_approach
-from ..starter import load_config
+try:
+    from .hw_comparison import ndvi, multiples, replace_inf, get_approach
+    from ..starter import load_config
+except ImportError:
+    from research_code.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf, get_approach
+    from research_code.starter import load_config
 
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
                         ylabel='N_WWTPs', xlabel=None, bins=100, lower_quantile=0.01, upper_quantile=0.95,
@@ -116,8 +120,8 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
     xlabel_hW_comp = r'$\alpha$'
     upper_quantile_ndi = 0.99
     upper_quantile_hw_comp = 0.95
-    ndi_output_filepath = os.path.join(output_dir, f'ndi_{filename.replace('.gpkg', '.png')}')
-    hw_comp_output_filepath = os.path.join(output_dir, f'eu_comp_{filename.replace('.gpkg', '.png')}')
+    ndi_output_filepath = os.path.join(output_dir, f"ndi_{filename.replace('.gpkg', '.png')}")
+    hw_comp_output_filepath = os.path.join(output_dir, f"eu_comp_{filename.replace('.gpkg', '.png')}")
 
     ndi_title = f'Normalized Difference Index (NDI) w.r.t. Reference EU, approach: {approach}\n ver: {verified}'
     hw_comp_title = fr'Population = $\alpha\cdot$Reference EU, approach: {approach}' + f'\n ver: {verified}'

@@ -28,11 +28,18 @@ from shapely.geometry import shape, box
 from shapely import to_wkt
 from shapely.ops import unary_union
 
-from ..add_pop import get_iso_codes
-from ..starter import load_config
-from ..create_voronoi import download_overture_maps, duckdb_intersect
-from ..pipelines import create_pop_output_paths
-from .find_pop_in_danger_pop import finding_bbox, finding_tiles
+try:
+    from ..add_pop import get_iso_codes
+    from ..starter import load_config
+    from ..create_voronoi import download_overture_maps, duckdb_intersect
+    from ..pipelines import create_pop_output_paths
+    from .find_pop_in_danger_pop import finding_bbox, finding_tiles
+except ImportError:
+    from research_code.add_pop import get_iso_codes
+    from research_code.starter import load_config
+    from research_code.create_voronoi import download_overture_maps, duckdb_intersect
+    from research_code.pipelines import create_pop_output_paths
+    from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import finding_bbox, finding_tiles
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -740,10 +747,10 @@ def main():
     max_workers = cfg['annotations']['max_workers']
     seed = int(cfg['annotations']['random_seed'])
     min_pixels = int(cfg['min_pixels'])
-    tif_dir = os.path.abspath(cfg['paths']['pop_tif_dir'])
+    tif_dir = cfg['paths']['pop_tif_dir']
 
     zoom_level = int(cfg['zoom_level'])
-    output_tif_dir = os.path.abspath(cfg['paths']['WWTP_tif_dir'])
+    output_tif_dir = cfg['paths']['WWTP_tif_dir']
     non_served_outpath = os.path.abspath(cfg['paths']['non_served_outpath'].replace('.gpkg', '.csv'))
     csv_output_filepath = os.path.abspath(cfg['paths']['csv_output_filepath'].replace('.gpkg', '.csv'))
 

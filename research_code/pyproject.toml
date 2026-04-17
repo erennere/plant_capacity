@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-code"
+version = "0.1.0"
+description = "Utilities and pipelines for plant capacity spatial analysis"
+readme = "README.md"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+packages = [
+  "research_code",
+  "research_code.annotation_scripts",
+  "research_code.data_merge",
+  "research_code.figures_scripts",
+  "research_code.pop_at_risk_river_calculations",
+  "research_code.pop_validation_scripts",
+]
+
+[tool.setuptools.package-dir]
+research_code = "."
+"research_code.annotation_scripts" = "annotation_scripts"
+"research_code.data_merge" = "data_merge"
+"research_code.figures_scripts" = "figures_scripts"
+"research_code.pop_at_risk_river_calculations" = "pop_at_risk_river_calculations"
+"research_code.pop_validation_scripts" = "pop_validation_scripts"

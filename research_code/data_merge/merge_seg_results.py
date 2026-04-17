@@ -2,7 +2,10 @@ import os
 import pandas as pd
 import geopandas as gpd
 import zipfile
-from ..starter import load_config
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
 
 def assign_to_nearest(gdf_source, gdf_target):
     gdf_source = gdf_source.copy()
@@ -46,7 +49,7 @@ def main():
     zip_filepath = os.path.abspath(os.path.join(paths["dl_dir"], paths["dl_zipfile"]))
     zip_output_path = os.path.abspath(os.path.join(paths["dl_dir"], os.path.basename(paths["dl_zipfile"]).split('.')[-2]))
     
-    gdf = gpd.read_file(os.path.abspath(paths["corrected_south"]))
+    gdf = gpd.read_file(paths["corrected_south"])
     mapping = gpd.read_file(os.path.abspath(mapping_filepath))
     mapping['idx'] = mapping['idx'].astype(int)
 

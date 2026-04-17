@@ -9,7 +9,10 @@ import os
 import logging
 import geopandas as gpd
 from shapely import from_wkt
-from ..starter import load_config
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

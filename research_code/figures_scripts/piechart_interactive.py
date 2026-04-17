@@ -5,8 +5,14 @@ import pandas as pd
 import folium
 from branca.element import Template, MacroElement
 import math
-from ..starter import load_config
-from ..pipelines import create_pop_output_paths
+
+from pipelines import create_output_paths
+try:
+    from ..starter import load_config
+    from ..pipelines import create_pop_output_paths
+except ImportError:
+    from research_code.starter import load_config
+    from research_code.pipelines import create_pop_output_paths
 
 # --- 1. CORE LOGIC ---
 
@@ -61,9 +67,9 @@ def main():
 
     # Path Setup
     approach = cfg['figures']['approach']
-    pop_fp = os.path.abspath(create_output_paths(cfg)['voronoi'][approach])
-    boundaries_fp = os.path.abspath(cfg['paths']['country_boundaries_filepath'])
-    stats_fp = os.path.abspath(cfg['paths']['csv_output_filepath'])
+    pop_fp = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
+    boundaries_fp = cfg['paths']['country_boundaries_filepath']
+    stats_fp = cfg['paths']['csv_output_filepath']
 
     pop_col, ind_col = 'population_served_index', 'IND/RES'
     tag1, tag2, agg_t = 'round_area', 'wwtp_area_rect_2', 'sum'
@@ -230,6 +236,6 @@ def main():
     macro._template = Template(legend_html)
     m.get_root().add_child(macro)
     
-    m.save(os.path.abspath(cfg['paths']['interactive_piechart_html_filepath']))
+    m.save(cfg['paths']['interactive_piechart_html_filepath'])
 
 if __name__ == '__main__': main()

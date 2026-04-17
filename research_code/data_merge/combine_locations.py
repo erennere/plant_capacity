@@ -2,8 +2,12 @@ import os
 import geopandas as gpd
 import pandas as pd
 from shapely import Point
-from .correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
-from ..starter import load_config
+try:
+    from .correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
+    from ..starter import load_config
+except ImportError:
+    from research_code.data_merge.correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
+    from research_code.starter import load_config
 
 def find_unmatched_targets(gdf_source, gdf_target, threshold):
     """
@@ -33,28 +37,28 @@ def main():
     cfg = load_config()
     globals().update(cfg)
 
-    canada_df = pd.read_csv(os.path.abspath(paths["canada_filepath"]), encoding='latin1')
+    canada_df = pd.read_csv(paths["canada_filepath"], encoding='latin1')
     canada_df['geometry'] = canada_df.apply(lambda row: Point(row['Longitude/ Longitude'], row['Latitude/ Latitude']), axis=1)
     canada_df = gpd.GeoDataFrame(canada_df, geometry='geometry', crs=4326)
 
-    us_df = pd.read_csv(os.path.abspath(paths["us_filepath"]), encoding='latin1')
+    us_df = pd.read_csv(paths["us_filepath"], encoding='latin1')
     us_df['geometry'] = us_df.apply(lambda row: Point(row['Longitude'], row['Latitude']), axis=1)
     us_df = gpd.GeoDataFrame(us_df, geometry='geometry', crs=4326)
 
-    germany_df = gpd.read_file(os.path.abspath(paths["germany_filepath"]))
+    germany_df = gpd.read_file(paths["germany_filepath"])
     germany_df['geometry'] = germany_df.apply(lambda row: Point(row['neigh_lon'],
                                                                  row['neigh_lat']) if pd.notna(row['neigh_lat'])
                                                                    else row['geometry'], axis=1)
-    old_df = gpd.read_file(os.path.abspath(paths["seg_corrected_south"]))
+    old_df = gpd.read_file(paths["seg_corrected_south"])
 
     # The EU dataset has to corrected as it seems to contain points that
     #do not correspond to any real location
-    eu_df = gpd.read_file(os.path.abspath(paths["eu_ref_filepath"]))
+    eu_df = gpd.read_file(paths["eu_ref_filepath"])
     if eu_correction:
         eu_df['epsg'] = eu_df.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
                                                             if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
         
-        pdf = gpd.read_file(os.path.abspath(paths["osmgeo_filepath"]))
+        pdf = gpd.read_file(paths["osmgeo_filepath"])
         pdf['epsg'] = pdf.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
                                                             if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
         

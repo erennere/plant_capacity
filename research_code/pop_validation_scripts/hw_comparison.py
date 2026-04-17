@@ -11,7 +11,10 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from ..starter import load_config
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
 
 
 def ndvi(df, col1, col2, new_col):
@@ -137,8 +140,8 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
     xlabel_hW_comp = r'$\alpha$'
     upper_quantile_ndi = 0.99
     upper_quantile_hw_comp = 0.9
-    ndi_output_filepath = os.path.join(output_dir, f'ndi_{filename.replace('.gpkg', '.png')}')
-    hw_comp_output_filepath = os.path.join(output_dir, f'hw_comp_{filename.replace('.gpkg', '.png')}')
+    ndi_output_filepath = os.path.join(output_dir, f"ndi_{filename.replace('.gpkg', '.png')}")
+    hw_comp_output_filepath = os.path.join(output_dir, f"hw_comp_{filename.replace('.gpkg', '.png')}")
 
     ndi_title = f'Normalized Difference Index (NDI) w.r.t. HydroWaste, approach: {approach}\n ver: {verified}'
     hw_comp_title = fr'Population = $\alpha\cdot$HydroWaste, approach: {approach}' + f'\n ver: {verified}'

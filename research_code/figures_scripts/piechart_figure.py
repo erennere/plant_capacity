@@ -10,8 +10,14 @@ from matplotlib.colors import LogNorm
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 
-from ..starter import load_config
-from ..pipelines import create_output_paths
+from pipelines import create_pop_output_paths
+
+try:
+    from ..starter import load_config
+    from ..pipelines import create_pop_output_paths
+except ImportError:
+    from research_code.starter import load_config
+    from research_code.pipelines import create_pop_output_paths
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
     gdf = gdf.copy()
@@ -110,9 +116,9 @@ def main():
     cfg = load_config()
 
     approach = cfg['figures']['approach']
-    boundaries_filepath = os.path.abspath(cfg['paths']['country_boundaries_filepath'])
-    pop_filepath = os.path.abspath(create_output_paths(cfg)['voronoi'][approach])
-    stats_filepath = os.path.abspath(cfg['paths']['raster_country_stats_filepath'])
+    boundaries_filepath = cfg['paths']['country_boundaries_filepath']
+    pop_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
+    stats_filepath = cfg['paths']['raster_country_stats_filepath']
 
     pop_column = 'population_served_index'
     filter_col = '2024_zonal_sum'
@@ -280,7 +286,7 @@ def main():
     ax.set_title("Worldwide Overview of WWTPs by Size and Technology",
                 fontsize=24, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(os.path.abspath(cfg['paths']['static_piechart_filepath']), dpi=200)
+    plt.savefig(cfg['paths']['static_piechart_filepath'], dpi=200)
 
 if __name__ == '__main__':
     main()

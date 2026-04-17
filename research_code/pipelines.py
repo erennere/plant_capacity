@@ -31,8 +31,8 @@ def create_output_paths(cfg):
     level = cfg['level']
     buffer = cfg['buffer']
     particle = cfg['particle']
-    data_dir = os.path.abspath(cfg['paths']['data_dir'])
-    voronoi_dir = os.path.abspath(cfg['paths']['voronoi_dir'])
+    data_dir = cfg['paths']['data_dir']
+    voronoi_dir = cfg['paths']['voronoi_dir']
     
     paths = {
         'buffers': {
@@ -88,7 +88,10 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     Returns:
         tuple: (df_waste, region_df, point_df) or None if output exists
     """
-    from create_voronoi import orchestrate_voronoi_weights, drop_duplicates
+    try:
+        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates
+    except ImportError:  # Support running as a top-level script
+        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates
     
     #if os.path.exists(output_path):
     #    logger.info(f"Approach {approach_id}: Output exists at {output_path}, skipping")
@@ -130,23 +133,30 @@ def prepare_data(cfg):
     Returns:
         dict: Dictionary with loaded GeoDataFrames (gdf_bbox, watershed_gdf, country_df)
     """
-    from create_voronoi import (
-        drop_duplicates, buffer_geometry, duckdb_intersect, 
-        download_overture_maps, intersect_watershed_sindex, 
-        orchestrate_overlaps
-    )
+    try:
+        from .create_voronoi import (
+            drop_duplicates, buffer_geometry, duckdb_intersect,
+            download_overture_maps, intersect_watershed_sindex,
+            orchestrate_overlaps,
+        )
+    except ImportError:  # Support running as a top-level script
+        from create_voronoi import (
+            drop_duplicates, buffer_geometry, duckdb_intersect,
+            download_overture_maps, intersect_watershed_sindex,
+            orchestrate_overlaps,
+        )
     
     logger.info("Preparing input data...")
     paths = cfg['paths']
     
     # Load WWTP bounding boxes
     if cfg['csv_files']:
-        gdf_bbox = pd.read_csv(os.path.abspath(paths['bboxes']))
-        hydrowaste_df = pd.read_csv(os.path.abspath(paths['hydrowaste']))
+        gdf_bbox = pd.read_csv(paths['bboxes'])
+        hydrowaste_df = pd.read_csv(paths['hydrowaste'])
         gdf_bbox = pd.merge(gdf_bbox, hydrowaste_df.drop(['LON_WWTP', 'LAT_WWTP', 'geometry', 'POP_SERVED'], axis=1), on=['WASTE_ID'])
         gdf_bbox = gpd.GeoDataFrame(gdf_bbox, geometry=shapely.wkt.loads(gdf_bbox['geometry']),  crs='epsg:4326')
     else:
-        gdf_bbox = gpd.read_file(os.path.abspath(paths['corrected_all_filepath']))
+        gdf_bbox = gpd.read_file(paths['corrected_all_filepath'])
         if 'final_geometry' in gdf_bbox.columns:
             gdf_bbox['geometry_wkt'] = gdf_bbox['geometry'].apply(to_wkt)
             gdf_bbox['geometry'] = gdf_bbox['final_geometry']
@@ -169,13 +179,13 @@ def prepare_data(cfg):
     if True:
         if 'ISO_2' in gdf_bbox.columns:
             gdf_bbox = gdf_bbox.drop(columns=['ISO_2'])
-        if not os.path.exists(os.path.abspath(paths['overture'])):
-            download_overture_maps(paths['overture_s3_url'], os.path.abspath(paths['overture']))
-        gdf_bbox = duckdb_intersect(gdf_bbox, os.path.abspath(paths['overture']))
+        if not os.path.exists(paths['overture']):
+            download_overture_maps(paths['overture_s3_url'], paths['overture'])
+        gdf_bbox = duckdb_intersect(gdf_bbox, paths['overture'])
     gdf_bbox.loc[gdf_bbox['ISO_2'].isna(), 'ISO_2'] = 'XX'
     
     # Load watersheds
-    watershed_gdf = gpd.read_file(os.path.abspath(paths['watershed']), crs='epsg:4326')
+    watershed_gdf = gpd.read_file(paths['watershed'], crs='epsg:4326')
     watershed_gdf = watershed_gdf.drop_duplicates(subset=['HYBAS_ID', 'geometry']).reset_index(drop=True)
     watershed_gdf['geometry'] = watershed_gdf['geometry'].apply(buffer_geometry)
     
@@ -183,9 +193,9 @@ def prepare_data(cfg):
     if True:
         if 'ISO_2' in watershed_gdf.columns:
             watershed_gdf = watershed_gdf.drop(columns=['ISO_2'])
-        if not os.path.exists(os.path.abspath(paths['overture'])):
-            download_overture_maps(paths['overture_s3_url'], os.path.abspath(paths['overture']))
-        watershed_gdf = duckdb_intersect(watershed_gdf, os.path.abspath(paths['overture']))
+        if not os.path.exists(paths['overture']):
+            download_overture_maps(paths['overture_s3_url'], paths['overture'])
+        watershed_gdf = duckdb_intersect(watershed_gdf, paths['overture'])
     watershed_gpkg_filepath = os.path.abspath(paths['watershed'].replace('.geojson', '.gpkg'))
     if not os.path.exists(watershed_gpkg_filepath):
         watershed_gdf.to_file(watershed_gpkg_filepath, driver='GPKG', index=False)
@@ -194,14 +204,14 @@ def prepare_data(cfg):
     if 'HYBAS_ID' not in gdf_bbox.columns:
         gdf_bbox = intersect_watershed_sindex(gdf_bbox, watershed_gdf, 'HYBAS_ID', concurrency=cfg['sindex_concurrency'])
         gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, 'WASTE_ID'), 'geometry')
-        filename = os.path.join(os.path.dirname(os.path.abspath(paths['bboxes'])), f"expanded_{os.path.basename(paths['bboxes'])}")
+        filename = os.path.join(os.path.dirname(paths['bboxes']), f"expanded_{os.path.basename(paths['bboxes'])}")
         if not os.path.exists(f"{filename}"):    
             gdf_bbox.to_csv(f"{filename}", index=False)
         if not os.path.exists(f"{filename.replace('.csv', '.gpkg')}"):
             gdf_bbox.to_file(f"{filename.replace('.csv', '.gpkg')}", index=False, driver='GPKG')
         
     # Load country boundaries
-    country_df = pd.read_parquet(os.path.abspath(paths['overture']))
+    country_df = pd.read_parquet(paths['overture'])
     country_df['geometry'] = country_df['geometry'].map(lambda geom: from_wkb(geom) if pd.notna(geom) else None)
     country_df = gpd.GeoDataFrame(country_df, geometry='geometry', crs=4326)
     

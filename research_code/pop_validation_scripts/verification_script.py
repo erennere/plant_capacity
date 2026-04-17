@@ -8,7 +8,10 @@ import os
 import pandas as pd
 import numpy as np
 import geopandas as gpd
-from ..starter import load_config
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
 
 def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS_ID'):
     gdf = gdf.copy()

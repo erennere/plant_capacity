@@ -5,8 +5,12 @@ import numpy as np
 import pandas as pd
 from shapely import Point, from_wkt, to_wkt
 from scipy.spatial import cKDTree
-from .correct_locations_w_OSMcorrect_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
-from ..starter import load_config
+try:
+    from .correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
+    from ..starter import load_config
+except ImportError:
+    from research_code.data_merge.correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
+    from research_code.starter import load_config
 
 def cluster_point_indices(geoms, threshold):
     geoms = [from_wkt(g) for g in geoms]
@@ -121,24 +125,24 @@ def main():
     cfg = load_config()
     globals().update(cfg)
 
-    old_df = gpd.read_file(os.path.abspath(paths["seg_corrected_south"]))
+    old_df = gpd.read_file(paths["seg_corrected_south"])
 
-    canada_df = pd.read_csv(os.path.abspath(paths["canada_filepath"]), encoding='latin1')
+    canada_df = pd.read_csv(paths["canada_filepath"], encoding='latin1')
     canada_df['geometry'] = canada_df.apply(lambda row: Point(row['Longitude/ Longitude'], row['Latitude/ Latitude']), axis=1)
     canada_df = gpd.GeoDataFrame(canada_df, geometry='geometry', crs=4326)
 
-    us_df = gpd.read_file(os.path.abspath(paths['us_new_filepath']))
+    us_df = gpd.read_file(paths['us_new_filepath'])
     high_conf_us, low_conf_us = get_best_points(us_df)
-    eu_df = gpd.read_file(os.path.abspath(paths['eu_new_filepath']))
+    eu_df = gpd.read_file(paths['eu_new_filepath'])
     high_conf_eu, low_conf_eu = get_best_points(eu_df)
     high_conf = gpd.GeoDataFrame(pd.concat([high_conf_eu, high_conf_us], ignore_index=True), geometry='geometry', crs=4326)
     low_conf = gpd.GeoDataFrame(pd.concat([low_conf_eu, low_conf_us], ignore_index=True), geometry='geometry', crs=4326)
 
-    thailand_df = gpd.read_file(os.path.abspath(paths['thailand_filepath']))
+    thailand_df = gpd.read_file(paths['thailand_filepath'])
 
     merged_df = gpd.GeoDataFrame(pd.concat([old_df, high_conf, canada_df, thailand_df], axis=0, ignore_index=True), crs=4326, geometry='geometry')
 
-    germany_df = gpd.read_file(os.path.abspath(paths["germany_filepath"]))
+    germany_df = gpd.read_file(paths["germany_filepath"])
     germany_df['geometry'] = germany_df.apply(lambda row: Point(row['neigh_lon'],
                                                                  row['neigh_lat']) if pd.notna(row['neigh_lat'])
                                                                    else row['geometry'], axis=1)
@@ -148,7 +152,7 @@ def main():
     merged_df = gpd.GeoDataFrame(merged_df, crs=4326, geometry='geometry')
     
     low_conf['epsg'] = low_conf.apply(find_safe_epsg, axis=1)
-    pdf = gpd.read_file(os.path.abspath(paths["osmgeo_filepath"]))
+    pdf = gpd.read_file(paths["osmgeo_filepath"])
     pdf['epsg'] = pdf.apply(find_safe_epsg, axis=1)
     
     low_conf = coordinate_corr_locations_wOSM(osm_threshold, pdf, low_conf)
@@ -178,8 +182,8 @@ def main():
         merged_df = merged_df.drop(columns=['fid'], errors='ignore')
 
     rest = merged_df[~merged_df['geometry'].isin(set(old_df['geometry'].tolist()))].reset_index(drop=True)
-    rest.to_file(os.path.abspath(paths["new_points_filepath"]), driver='GPKG', index=False)
-    merged_df.to_file(os.path.abspath(paths["corrected_all_filepath"]), driver='GPKG', index=False)
+    rest.to_file(paths["new_points_filepath"], driver='GPKG', index=False)
+    merged_df.to_file(paths["corrected_all_filepath"], driver='GPKG', index=False)
 
 if __name__ == '__main__':
     main()

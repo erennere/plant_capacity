@@ -11,6 +11,11 @@ import pandas as pd
 from shapely.geometry import LineString, Polygon
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
+
 # ------------------ USER INPUTS ------------------
 
 start_idx = 0     # <-- change here
@@ -198,13 +203,8 @@ def row_operation(bbox, idx_val, url, output_folder):
         print(f"✅ Saved {poly_path}")
 
 def main():
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-    from first_3 import load_config
-    cfg = load_config('../config.yaml')
-    os.chdir(parent_dir)
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cfg = load_config()
     overwrite = cfg["annotations"]["overwrite"]
 
     points_path = cfg["paths"]["corrected_all_filepath"]

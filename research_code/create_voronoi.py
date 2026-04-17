@@ -2286,19 +2286,19 @@ if __name__ == '__main__':
         epilog='''
 EXAMPLES:
   # Run approach 0 only
-  python create_voronoi.py --approach 0
+  python -m research_code.create_voronoi --approach 0
   
   # Run multiple approaches
-  python create_voronoi.py --approach 0 1a 1b 2
+  python -m research_code.create_voronoi --approach 0 1a 1b 2
   
   # Run all weighted variants
-  python create_voronoi.py --approach 1a 1b 1c 1d 3a 3b 3c 3d
+  python -m research_code.create_voronoi --approach 1a 1b 1c 1d 3a 3b 3c 3d
   
   # Run with verbose logging
-  python create_voronoi.py --approach 0 --verbose
+  python -m research_code.create_voronoi --approach 0 --verbose
   
   # Run all approaches (default)
-  python create_voronoi.py
+  python -m research_code.create_voronoi
         '''
     )
     parser.add_argument('--approach', nargs='+', type=str, default=None,
@@ -2320,8 +2320,12 @@ EXAMPLES:
     
     # Setup paths and logging
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    from starter import load_config
-    from pipelines import create_output_paths, prepare_data, run_voronoi_approach
+    try:
+        from .starter import load_config
+        from .pipelines import create_output_paths, prepare_data, run_voronoi_approach
+    except ImportError:  # Support running as a top-level script
+        from starter import load_config
+        from pipelines import create_output_paths, prepare_data, run_voronoi_approach
     
     if args.verbose:
         logger.setLevel(logging.DEBUG)
@@ -2335,7 +2339,7 @@ EXAMPLES:
     country_df = data['country_df']
     
     # Ensure output directory exists
-    os.makedirs(os.path.abspath(cfg['paths']['voronoi_dir']), exist_ok=True)
+    os.makedirs(cfg['paths']['voronoi_dir'], exist_ok=True)
     
     logger.info(f"Running approaches: {', '.join(approaches_to_run)}")
     print("=" * 80)
@@ -2446,7 +2450,7 @@ EXAMPLES:
                 # Setup city data if not already done
                 if dissolved_buffers_cities is None:
                     logger.info("Loading and processing city data for Approaches 4-5")
-                    df_cities = pd.read_csv(os.path.abspath(cfg['paths']['cities']))
+                    df_cities = pd.read_csv(cfg['paths']['cities'])
                     df_cities = gpd.GeoDataFrame(df_cities, 
                                                geometry=gpd.GeoSeries([from_wkt(geom) if isinstance(geom, str) else geom 
                                                                         for geom in df_cities['geometry']]), 
@@ -2454,9 +2458,9 @@ EXAMPLES:
                     df_cities['geometry'] = df_cities['geometry'].apply(buffer_geometry)
                     
                     if 'ISO_2' not in df_cities.columns:
-                        if not os.path.exists(os.path.abspath(cfg['paths']['overture'])):
-                            download_overture_maps(cfg['paths']['overture_s3_url'], os.path.abspath(cfg['paths']['overture']))
-                        df_cities = duckdb_intersect(df_cities, os.path.abspath(cfg['paths']['overture']))
+                        if not os.path.exists(cfg['paths']['overture']):
+                            download_overture_maps(cfg['paths']['overture_s3_url'], cfg['paths']['overture'])
+                        df_cities = duckdb_intersect(df_cities, cfg['paths']['overture'])
                     
                     dissolved_buffers_cities = orchestrate_overlaps(df_cities, cfg['max_workers'], 
                                                                    paths_dict['buffers']['city'], cfg['buffer'])

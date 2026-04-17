@@ -27,10 +27,23 @@ set -e
 if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
     cd "$SLURM_SUBMIT_DIR"
 else
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-    cd "$SCRIPT_DIR"
+    PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+    cd "$PROJECT_ROOT"
 fi
-PYTHON_SCRIPT="create_voronoi.py"
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_CMD="python"
+PYTHON_SCRIPT="research_code.create_voronoi"
+
+mkdir -p "${LOG_DIR}"
+
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/create_voronoi.log"
+}
+
+log "Installing research_code module"
+# Install package in editable mode before running modules
+${PYTHON_CMD} -m pip install -e "$PROJECT_ROOT" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+log "Installation complete"
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 8)}
 export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
@@ -50,26 +63,32 @@ fi
 MODE=$(sed -n '/execution:/,/mode:/p' config.yaml | grep "mode:" | sed 's/#.*//' | awk -F: '{print $2}' | tr -d ' "' | tr -d "'")
 MODE=${MODE:-$DEFAULT_MODE}
 
+log "Execution mode: ${MODE}"
+
 if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
     # Array job mode: one approach per SLURM task
     APPROACHES=('0' '1a' '1b' '1c' '1d' '2' '3a' '3b' '3c' '3d' '4' '5')
     APPROACH="${APPROACHES[$SLURM_ARRAY_TASK_ID]}"
-    python "$PYTHON_SCRIPT" --approach "$APPROACH"
+    log "Running approach ${APPROACH} in array mode (task ${SLURM_ARRAY_TASK_ID})"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
     if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
-        echo "Sequential mode: skipping task $SLURM_ARRAY_TASK_ID (only task 0 runs)"
+        log "Sequential mode: skipping task $SLURM_ARRAY_TASK_ID (only task 0 runs)"
         exit 0
     fi
-    python "$PYTHON_SCRIPT"
+    log "Running all approaches in sequential mode"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run multiple approaches concurrently on different CPUs
+    log "Running all approaches in parallel mode"
     APPROACHES=('0' '1a' '1b' '1c' '1d' '2' '3a' '3b' '3c' '3d' '4' '5')
     FAILED_APPROACHES=()
     
     for APPROACH in "${APPROACHES[@]}"; do
+        log "Launching approach ${APPROACH} in background"
         # Launch approach in background
-        python "$PYTHON_SCRIPT" --approach "$APPROACH" &
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log" &
     done
     
     # Wait for all background jobs to complete
@@ -80,10 +99,13 @@ elif [[ "$MODE" == "parallel" ]]; then
     done
     
     if [[ ${#FAILED_APPROACHES[@]} -gt 0 ]]; then
-        echo "ERROR: Some approaches failed"
+        log "ERROR: Some approaches failed"
         exit 1
     fi
+    log "All approaches completed successfully"
 else
-    echo "ERROR: Unknown execution mode '$MODE' in config.yaml (valid: array, sequential, parallel)"
+    log "ERROR: Unknown execution mode '$MODE' in config.yaml (valid: array, sequential, parallel)"
     exit 1
 fi
+
+log "create_voronoi execution completed"

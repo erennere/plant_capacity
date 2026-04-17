@@ -3,7 +3,10 @@ import zipfile
 import tempfile
 from pathlib import Path
 import geopandas as gpd
-from starter import load_config
+try:
+    from .starter import load_config
+except ImportError:  # Support running as a top-level script
+    from starter import load_config
 
 def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg"):
     zip_dir = Path(zip_dir)
@@ -52,7 +55,7 @@ def main():
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
     globals().update(cfg)
-    extract_and_merge_geodata(os.path.abspath(paths["watersheds_zip_dir"]), os.path.abspath(paths["data_dir"]), output_filename=f"hydrobase_lvl{str(level)}_combined.gpkg")
+    extract_and_merge_geodata(paths["watersheds_zip_dir"], paths["data_dir"], output_filename=f"hydrobase_lvl{str(level)}_combined.gpkg")
 if __name__ == '__main__':
     main()
 

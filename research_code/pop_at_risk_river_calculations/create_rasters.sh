@@ -23,14 +23,23 @@
 
 set -e
 
-# Change to script directory (works in SLURM and local execution)
-if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    cd "$SLURM_SUBMIT_DIR/.."
-else
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-    cd "$SCRIPT_DIR/.."
-fi
-PYTHON_SCRIPT="pop_at_risk_river_calculations/create_rasters.py"
+# Change to project root
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${PROJECT_ROOT}/logs"
+cd "$PROJECT_ROOT"
+PYTHON_CMD="python"
+PYTHON_SCRIPT="research_code.pop_at_risk_river_calculations.create_rasters"
+
+mkdir -p "${LOG_DIR}"
+
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/create_rasters.log"
+}
+
+log "Installing research_code module"
+${PYTHON_CMD} -m pip install -e "$PWD" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
+log "Installation complete"
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 8)}
 export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
@@ -73,6 +82,8 @@ fi
 
 MODE="${MODE:-$DEFAULT_MODE}"
 
+log "Execution mode: ${MODE}"
+
 if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
     # Array mode: one index per SLURM task.
     JOB_INDEX="$SLURM_ARRAY_TASK_ID"
@@ -83,22 +94,27 @@ if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
     else
         TOTAL_JOBS=1
     fi
-    python "$PYTHON_SCRIPT" "$JOB_INDEX" "$TOTAL_JOBS"
+    log "Running raster job ${JOB_INDEX} of ${TOTAL_JOBS} in array mode"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
     if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
-        echo "Sequential mode: skipping task $SLURM_ARRAY_TASK_ID (only task 0 runs)"
+        log "Sequential mode: skipping task $SLURM_ARRAY_TASK_ID (only task 0 runs)"
         exit 0
     fi
-    python "$PYTHON_SCRIPT" 0 1
+    log "Running raster processing in sequential mode"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 0 1 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run indices 0..X-1 concurrently.
     TOTAL_JOBS=$(get_yaml_value_from_section "annotations" "max_workers")
     TOTAL_JOBS=${TOTAL_JOBS:-${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 1)}}
     FAILED_COUNT=0
     
+    log "Running ${TOTAL_JOBS} raster jobs in parallel"
+    
     for ((JOB_INDEX=0; JOB_INDEX<TOTAL_JOBS; JOB_INDEX++)); do
-        python "$PYTHON_SCRIPT" "$JOB_INDEX" "$TOTAL_JOBS" &
+        log "Launching raster job ${JOB_INDEX} in background"
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log" &
     done
     
     # Wait for all background jobs to complete
@@ -109,10 +125,13 @@ elif [[ "$MODE" == "parallel" ]]; then
     done
     
     if [[ $FAILED_COUNT -gt 0 ]]; then
-        echo "ERROR: $FAILED_COUNT parallel job(s) failed"
+        log "ERROR: $FAILED_COUNT parallel job(s) failed"
         exit 1
     fi
+    log "All raster jobs completed successfully"
 else
-    echo "ERROR: Unknown execution mode '$MODE' (valid: array, sequential, parallel)"
+    log "ERROR: Unknown execution mode '$MODE' (valid: array, sequential, parallel)"
     exit 1
 fi
+
+log "create_rasters execution completed"

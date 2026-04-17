@@ -4,12 +4,19 @@
 #SBATCH --mem=16gb
 #SBATCH --cpus-per-task=4
 
-SCRIPT_DIR=""
+PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_CMD="python"
 
-if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR"
-else
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-fi
+mkdir -p "${LOG_DIR}"
 
-python "${SCRIPT_DIR}/merge_seg_results_v2.py"
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/merge_seg_results_v2.log"
+}
+
+log "Installing research_code module"
+${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/merge_seg_results_v2.log"
+
+log "Running merge_seg_results_v2"
+${PYTHON_CMD} -m research_code.data_merge.merge_seg_results_v2 2>&1 | tee -a "${LOG_DIR}/merge_seg_results_v2.log"
+log "Completed merge_seg_results_v2"

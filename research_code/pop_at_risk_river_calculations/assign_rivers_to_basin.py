@@ -12,7 +12,10 @@ import geopandas as gpd
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-from ..starter import load_config
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -142,9 +145,9 @@ def main():
     max_workers = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 2
     new_col = 'continent'
 
-    poly_path = os.path.abspath(cfg['paths']['watershed'])
-    line_path = os.path.abspath(cfg['paths']['rivershed'])
-    output_path = os.path.abspath(cfg['paths']['rivershed_output_path'])
+    poly_path = cfg['paths']['watershed']
+    line_path = cfg['paths']['rivershed']
+    output_path = cfg['paths']['rivershed_output_path']
 
     logger.info("Reading input files")
     hybas_gdf = gpd.read_file(poly_path)

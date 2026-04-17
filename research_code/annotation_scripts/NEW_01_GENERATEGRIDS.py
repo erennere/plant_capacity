@@ -1,9 +1,15 @@
+import logging
 import os
 import sys
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import box
 from shapely import Point
+
+try:
+    from ..starter import load_config
+except ImportError:
+    from research_code.starter import load_config
 
 def point_to_square(geom, half):
     if geom is None or geom.is_empty:
@@ -33,13 +39,10 @@ def main(cell_size, half, points_path, output_path):
     print(f"✅ Created {cell_size:.2f} m × {cell_size:.2f} m grid squares (Zoom 17, 3072×3072 px).")
 
 if __name__ == '__main__':
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-    from first_3 import load_config
-    cfg = load_config('../config.yaml')
-    os.chdir(parent_dir)
+    logging.info("Starting Bing annotation pipeline")
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cfg = load_config()
+    logging.info("Configuration loaded")
 
     cell_size = int(cfg["annotations"]["cell_size"])
     factor = float(cfg["annotations"]["factor"])

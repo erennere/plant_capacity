@@ -18,8 +18,12 @@ import numpy as np
 from shapely import box
 from tqdm import tqdm
 
-from ..starter import load_config
-from ..create_voronoi import estimate_utm_epsg
+try:
+    from ..starter import load_config
+    from ..create_voronoi import estimate_utm_epsg
+except ImportError:
+    from research_code.starter import load_config
+    from research_code.create_voronoi import estimate_utm_epsg
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -188,9 +192,9 @@ def main():
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
 
-    polygons_path = os.path.abspath(cfg['paths']['non_served_above_threshold_outpath'])
-    rivers_path = os.path.abspath(cfg['paths']['rivershed_output_path'])
-    output_path = os.path.abspath(cfg['paths']['non_served_nxt_river_outpath'])
+    polygons_path = cfg['paths']['non_served_above_threshold_outpath']
+    rivers_path = cfg['paths']['rivershed_output_path']
+    output_path = cfg['paths']['non_served_nxt_river_outpath']
     x_distance = 5000  # meters
     #max_workers = int(cfg['params'].get('max_workers', 8))
     max_workers = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 32

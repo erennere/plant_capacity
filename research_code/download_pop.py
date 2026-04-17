@@ -32,12 +32,14 @@ import rasterio.features
 from rasterio.merge import merge
 from rasterio.windows import from_bounds
 from pyproj import CRS
-#from hdx.utilities.easy_logging import setup_logging
-#from hdx.api.configuration import Configuration
-#from hdx.data.dataset import Dataset
 import pycountry
 import logging
-from create_voronoi import estimate_utm_crs, load_config
+try:
+    from .create_voronoi import estimate_utm_crs
+    from .starter import load_config
+except ImportError:  # Support running as a top-level script
+    from create_voronoi import estimate_utm_crs
+    from starter import load_config
 
 def extract_first_wildcard(test_string, pattern):
     """Extract first capture group from regex pattern match.
@@ -70,6 +72,9 @@ def add_country_url(country_urls, country, url):
         country_urls[country] = [url]
 
 def get_urls_from_hdx():
+    from hdx.utilities.easy_logging import setup_logging
+    from hdx.api.configuration import Configuration
+    from hdx.data.dataset import Dataset
     """
     Fetch population URLs from HDX (Humanitarian Data Exchange) API.
     Note: Currently not used in main workflow, but kept for future reference.
@@ -569,7 +574,7 @@ def main(res=30, max_workers=8):
         res: Raster resolution in meters (default 30)
         max_workers: Number of parallel workers (default 8)
     """
-    os.chdir(os.path.abspath(os.path.dirname(__file__)))
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'

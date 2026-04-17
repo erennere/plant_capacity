@@ -12,8 +12,23 @@ else
     SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 fi
 
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_CMD="python"
 
-python ${SCRIPT_DIR}/NEW_01_GENERATEGRIDS.py
-python ${SCRIPT_DIR}/NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py
-#python ${SCRIPT_DIR}/NEW_03_WASTEWATERJOIN_GEOJSON.py
-#python ${SCRIPT_DIR}/export_dataset_from_db.py
+mkdir -p "${LOG_DIR}"
+
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/grid_generation_osm_extract.log"
+}
+
+log "Installing research_code module"
+${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/grid_generation_osm_extract.log"
+
+log "Running NEW_01_GENERATEGRIDS"
+${PYTHON_CMD} -m research_code.annotation_scripts.NEW_01_GENERATEGRIDS 2>&1 | tee -a "${LOG_DIR}/grid_generation_osm_extract.log"
+
+log "Running NEW_02_EXTRACTOSMDATAFULL_GEOJSON"
+${PYTHON_CMD} -m research_code.annotation_scripts.NEW_02_EXTRACTOSMDATAFULL_GEOJSON 2>&1 | tee -a "${LOG_DIR}/grid_generation_osm_extract.log"
+
+log "Grid generation and OSM extraction completed"

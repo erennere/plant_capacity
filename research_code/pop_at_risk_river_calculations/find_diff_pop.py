@@ -14,9 +14,14 @@ import pandas as pd
 import geopandas as gpd
 from shapely import from_wkt, to_wkt
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from ..starter import load_config
-from ..create_voronoi import estimate_utm_epsg
-from ..add_pop import intersect_all_files
+try:
+    from ..starter import load_config
+    from ..create_voronoi import estimate_utm_epsg
+    from ..add_pop import intersect_all_files
+except ImportError:
+    from research_code.starter import load_config
+    from research_code.create_voronoi import estimate_utm_epsg
+    from research_code.add_pop import intersect_all_files
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -150,11 +155,11 @@ def main():
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
 
-    watershed_filepath = os.path.abspath(cfg['paths']['hydrowaste'])
+    watershed_filepath = cfg['paths']['hydrowaste']
     max_workers = cfg['params']['max_workers']
-    pop_output_dir = os.path.abspath(cfg['paths']['pop_output_dir'])
-    tif_dir = os.path.abspath(cfg['paths']['pop_tif_dir'])
-    pop_dif_output_dir = os.path.abspath(cfg['paths']['pop_dif_output_dir'])
+    pop_output_dir = cfg['paths']['pop_output_dir']
+    tif_dir = cfg['paths']['pop_tif_dir']
+    pop_dif_output_dir = cfg['paths']['pop_dif_output_dir']
 
     filenames = sorted([
         x for x in os.listdir(pop_output_dir)

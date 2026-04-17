@@ -21,17 +21,16 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Configuration
-SCRIPT_DIR=""
+PROJECT_ROOT=""
 if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR"
+    PROJECT_ROOT="$SLURM_SUBMIT_DIR"
 else
-    SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+    PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 fi
 
 # ADD THIS LINE:
-LOG_DIR="${SCRIPT_DIR}/logs"
-
-PYTHON_SCRIPT="${SCRIPT_DIR}/add_pop.py"
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_SCRIPT="research_code.add_pop"
 PYTHON_CMD="python"
 
 # Create log directory
@@ -45,7 +44,7 @@ log() {
 log "=========================================="
 log "Population Data Integration Task Started"
 log "=========================================="
-log "Script directory: ${SCRIPT_DIR}"
+log "Project root directory: ${PROJECT_ROOT}"
 
 # Determine task ID: from SLURM or command-line argument
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
@@ -75,9 +74,13 @@ fi
 
 log "Python command: ${PYTHON_CMD}"
 
+# Install package in editable mode before running modules
+log "Installing research_code module (editable)"
+${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}"
+
 # Validate Python script exists
-if [[ ! -f "${PYTHON_SCRIPT}" ]]; then
-    log "ERROR: Python script not found: ${PYTHON_SCRIPT}"
+if ! python -c "import ${PYTHON_SCRIPT}" &> /dev/null; then
+    log "ERROR: Python script not found or cannot be imported: ${PYTHON_SCRIPT}"
     exit 1
 fi
 
@@ -93,7 +96,7 @@ log "Processing Voronoi file index: ${TASK_ID}"
 # Run the population data integration
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} "${PYTHON_SCRIPT}" "${TASK_ID}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="
