@@ -23,13 +23,15 @@
 
 set -e
 
-# Change to script directory (works in SLURM and local execution)
-if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    cd "$SLURM_SUBMIT_DIR"
-else
-    PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-    cd "$PROJECT_ROOT"
+# Change to project root derived from the script location.
+PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Use SLURM_SUBMIT_DIR only when it is writable and contains config.yaml.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -w "${SLURM_SUBMIT_DIR}" ]] && [[ -f "${SLURM_SUBMIT_DIR}/config.yaml" ]]; then
+    PROJECT_ROOT="${SLURM_SUBMIT_DIR}"
 fi
+
+cd "$PROJECT_ROOT"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 PYTHON_SCRIPT="research_code.create_voronoi"

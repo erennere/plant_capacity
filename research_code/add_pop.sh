@@ -21,11 +21,12 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Configuration
-PROJECT_ROOT=""
-if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    PROJECT_ROOT="$SLURM_SUBMIT_DIR"
-else
-    PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}"
+
+# Use SLURM_SUBMIT_DIR only if it is writable; otherwise keep script-derived root.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -w "${SLURM_SUBMIT_DIR}" ]]; then
+    PROJECT_ROOT="${SLURM_SUBMIT_DIR}"
 fi
 
 # ADD THIS LINE:

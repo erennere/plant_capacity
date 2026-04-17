@@ -20,11 +20,12 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Configuration
-PROJECT_ROOT=""
-if [[ -n "$SLURM_SUBMIT_DIR" ]]; then
-    PROJECT_ROOT="$SLURM_SUBMIT_DIR"
-else
-    PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd/../.. && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Use SLURM_SUBMIT_DIR only if it is writable; otherwise keep script-derived root.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -w "${SLURM_SUBMIT_DIR}" ]]; then
+    PROJECT_ROOT="${SLURM_SUBMIT_DIR}"
 fi
 
 LOG_DIR="${PROJECT_ROOT}/logs"
@@ -45,7 +46,7 @@ log "Project root directory: ${PROJECT_ROOT}"
 
 # Install package in editable mode
 log "Installing package in editable mode..."
-pip install -e . > /dev/null 2>&1 || true
+${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" > /dev/null 2>&1
 
 log "Starting data merge pipeline..."
 
