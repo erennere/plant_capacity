@@ -22,7 +22,7 @@ import geopandas as gpd
 import rasterio
 from rasterio import windows
 from rasterio.features import shapes, geometry_mask, rasterize
-from rasterstats import gen_zonal_stats
+from exactextract import exact_extract
 from scipy.ndimage import label
 from shapely.geometry import shape, box
 from shapely import to_wkt
@@ -309,17 +309,20 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
             end_idx = min(start_idx + chunk_size, len(final_gdf))
             logger.info("[%s] Calculating stats for chunk %s-%s", country_code, start_idx, end_idx)
 
-            # Calculate stats on geometry only to minimize object overhead
-            stats = gen_zonal_stats(
-                final_gdf.geometry.iloc[start_idx:end_idx],
-                raster_path,
-                stats=["sum", "count"],
-                nodata=0
+            # exact_extract is faster and more memory-efficient than rasterstats
+            chunk = final_gdf.iloc[start_idx:end_idx][["geometry"]]
+            stats_df = exact_extract(
+                rast=raster_path,
+                vec=chunk,
+                ops=["sum", "count"],
+                output="pandas"
             )
 
-            for r in stats:
+            for _, r in stats_df.iterrows():
                 sums.append(int(np.round(r["sum"] or 0)))
                 counts.append(int(r["count"] or 0))
+
+            del stats_df, chunk
 
             del stats
             gc.collect()

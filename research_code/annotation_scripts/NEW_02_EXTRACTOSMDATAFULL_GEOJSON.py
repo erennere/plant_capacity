@@ -31,8 +31,8 @@ queries = {
 }
 
 urls = ["https://overpass.kumi.systems/api/interpreter",
-         "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]
-         #"https://overpass-api.de/api/interpreter"]
+         "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+         "https://overpass-api.de/api/interpreter"]
 pause_seconds = 0.1
 # -------------------------------------------------
 
@@ -206,6 +206,7 @@ def main():
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
     overwrite = cfg["annotations"]["overwrite"]
+    retrials = int(cfg["annotations"]["retries"])
 
     points_path = cfg["paths"]["corrected_all_filepath"]
     #points_path = './annotation_scripts/ref.geojson'
@@ -221,29 +222,34 @@ def main():
     poly = gpd.read_file(grid_filepath).to_crs(4326)
     poly['bbox'] = poly['geometry'].map(find_bbox)
 
-    if not overwrite:
-        output_list = set(os.listdir(output_folder))
-        mask = []
-        for idx in poly['idx'].values:
-            line_file = f"idx_{idx}_lines.geojson"
-            poly_file = f"idx_{idx}_polygons.geojson"
-            if line_file in output_list or poly_file in output_list:
-                mask.append(False)
-            else:
-                mask.append(True)
-        poly = poly[mask]
-    print(len(poly))
-    print(poly.head())
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for tasks in create_tasks(poly, batch_size):
-            futures = [executor.submit(row_operation, bbox, idx_val, url, output_folder) for bbox, idx_val, url in tasks]
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"⚠️ Error processing task: {e}")
-        print("\n🎯 All requested idx features processed successfully!")
+    for _ in range(retrials):
+        if not overwrite:
+            output_list = set(os.listdir(output_folder))
+            mask = []
+            for idx in poly['idx'].values:
+                line_file = f"idx_{idx}_lines.geojson"
+                poly_file = f"idx_{idx}_polygons.geojson"
+                if line_file in output_list or poly_file in output_list:
+                    mask.append(False)
+                else:
+                    mask.append(True)
+            poly = poly[mask]
+            if poly.empty:
+                print("🎉 All idx features already processed, no retrials needed!")
+                return
+            
+        print(len(poly))
+        print(poly.head())
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for tasks in create_tasks(poly, batch_size):
+                futures = [executor.submit(row_operation, bbox, idx_val, url, output_folder) for bbox, idx_val, url in tasks]
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"⚠️ Error processing task: {e}")
+            print("\n🎯 All requested idx features processed successfully!")
 
 if __name__ == "__main__":
     main()

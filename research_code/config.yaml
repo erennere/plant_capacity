@@ -94,6 +94,7 @@ annotations:
   max_workers: 8
   random_seed: 42
   overwrite: false
+  retries: 5
 
 booleans:
   scipy: false
@@ -121,7 +122,7 @@ execution:
 
                          # Leave empty for environment defaults
 
-defaults:
+impact_polygons_pop_params:
   org_per_pop: 60.0
   width: 12.0
   c_limit: 5.0
