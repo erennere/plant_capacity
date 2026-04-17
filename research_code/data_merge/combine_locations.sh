@@ -49,20 +49,19 @@ log "Step 1: Correcting locations with OSM data..."
 ${PYTHON_CMD} -m research_code.data_merge.correct_locations_w_OSM 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
 log "Step 1 completed"
 
-# Step 2: Merge segmentation results
-log "Step 2: Merging segmentation results..."
-${PYTHON_CMD} -m research_code.data_merge.merge_seg_results 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+# Step 2: Merge old segmentation results because of compatibility issues with indices
+log "Step 2: Merging old segmentation results..."
+${PYTHON_CMD} -m research_code.data_merge.merge_seg_results --variant old 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
 log "Step 2 completed"
 
 # Step 3: Combine locations
 log "Step 3: Combining location data..."
-${PYTHON_CMD} -m research_code.data_merge.combine_locations 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+${PYTHON_CMD} -m research_code.data_merge.final_data_merge 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
 log "Step 3 completed"
 
-# Step 4: Final data merge
-log "Step 4: Final data merge..."
-${PYTHON_CMD} -m research_code.data_merge.final_data_merge 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
-log "Step 4 completed"
+log "Running merge_seg_results (variant=new)"
+${PYTHON_CMD} -m research_code.data_merge.merge_seg_results --variant new 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
+log "Completed merge_seg_results (variant=new)"
 
 log "=========================================="
 log "Combined Location Data Merge Completed"

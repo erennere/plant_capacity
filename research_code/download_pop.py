@@ -41,6 +41,18 @@ except ImportError:  # Support running as a top-level script
     from create_voronoi import estimate_utm_crs
     from starter import load_config
 
+def country_isos():
+    alpha_3_to_2 = {}
+    alpha_2_to_3 = {}
+    alpha_3_to_names = {}
+    alpha_2_to_names = {}
+    for country in pycountry.countries:
+        alpha_3_to_2[country.alpha_3] = country.alpha_2
+        alpha_2_to_3[country.alpha_2] = country.alpha_3
+        alpha_3_to_names[country.alpha_3] = country.name
+        alpha_2_to_names[country.alpha_2] = country.name
+    return alpha_2_to_names, alpha_3_to_names, alpha_2_to_3, alpha_3_to_2
+
 def extract_first_wildcard(test_string, pattern):
     """Extract first capture group from regex pattern match.
     
@@ -169,17 +181,6 @@ def get_urls_from_hdx():
                     continue
                 country_set.add(iso3)
                 add_country_url(country_urls, iso3, url)
-    
-    alpha_3_to_2 = {}
-    alpha_2_to_3 = {}
-    alpha_3_to_names = {}
-    alpha_2_to_names = {}
-    for country in pycountry.countries:
-        alpha_3_to_2[country.alpha_3] = country.alpha_2
-        alpha_2_to_3[country.alpha_2] = country.alpha_3
-        alpha_3_to_names[country.alpha_3] = country.name
-        alpha_2_to_names[country.alpha_2] = country.name
-
     return country_urls
 
 def get_urls():
@@ -187,16 +188,12 @@ def get_urls():
     Generate WorldPop population data URLs for all countries.
     Returns a dictionary mapping country codes to lists of download URLs.
     """
-    alpha_3_to_2 = {}
-    for country in pycountry.countries:
-        alpha_3_to_2[country.alpha_3] = country.alpha_2
-
+    alpha_2_to_names, alpha_3_to_names, alpha_2_to_3, alpha_3_to_2 = country_isos()
     all_countries = list(alpha_3_to_2.keys())
     country_urls = {k.lower(): [f'https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2014/{k.upper()}/{k.lower()}_ppp_2014_1km_Aggregated.tif'] for k in all_countries}
     for k in country_urls.keys():
         for year in range(2015, 2025):
             country_urls[k].append(f'https://data.worldpop.org/GIS/Population/Global_2015_2030/R2024B/{str(int(year))}/{k.upper()}/v1/100m/constrained/{k.lower()}_pop_{str(int(year))}_CN_100m_R2024B_v1.tif')    
-
     return country_urls
 
 def download_file(url, output_path):
