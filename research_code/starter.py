@@ -209,12 +209,14 @@ def load_config(config="config.yaml"):
         "eu_correction": flags["eu_correction"],
         "distance_fn": default_distance_multiplicative,
         "annotations": cfg["annotations"],
-        "figures_params": cfg["figures"],
+        "figures": cfg["figures"],
         "credentials": cfg["credentials"],
         "add_pop_max_workers": cfg["params"]["add_pop_max_workers"],
         "weight_method": cfg["params"]["weight_method"],
         "zoom_level": cfg["params"]["zoom_level"],
         "remove_industrial": flags['remove_industrial'],
         "industrial_category_numbers": cfg['params']['industrial_category_numbers'],
-        "min_pixels": cfg['params']['min_pixels']
+        "min_pixels": cfg['params']['min_pixels'],
+        "impact_polygons_pop_params": cfg['impact_polygons_pop_params']
+        
     }
