@@ -104,6 +104,7 @@ booleans:
   duckdb: false
   sindex_concurrency: true
   eu_correction: true
+  legacy_merge: true
   remove_industrial: false
 
 figures:

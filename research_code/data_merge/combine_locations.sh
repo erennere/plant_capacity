@@ -49,8 +49,9 @@ log "Step 1: Correcting locations with OSM data..."
 ${PYTHON_CMD} -m research_code.data_merge.correct_locations_w_OSM 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
 log "Step 1 completed"
 
-# Step 2: Merge old segmentation results because of compatibility issues with indices
-log "Step 2: Merging old segmentation results..."
+# Step 2: Optionally merge legacy segmentation outputs.
+# Whether this actually runs is controlled by booleans.legacy_merge in config.yaml.
+log "Step 2: Running legacy segmentation merge if enabled in config.yaml..."
 ${PYTHON_CMD} -m research_code.data_merge.merge_seg_results --variant old 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
 log "Step 2 completed"
 

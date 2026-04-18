@@ -100,22 +100,10 @@ This wrapper should be run as-is first. It executes:
 
 Why there are two merge variants:
 
-- `--variant old` is kept for legacy index compatibility.
+- `--variant old` is kept for legacy index compatibility with segmentation results which were already run before the cleaning of code.
 - `--variant new` applies the current segmentation merge path.
 
-If you fully re-run segmentation and do not need backward-compatibility merges, you can deactivate legacy merge sections by commenting the merge calls in `data_merge/combine_locations.sh`.
-
-The two calls to look for are:
-
-```bash
-python -m research_code.data_merge.merge_seg_results --variant old
-python -m research_code.data_merge.merge_seg_results --variant new
-```
-
-Practical note:
-
-- `combine_locations.sh` currently combines multiple concerns (core harmonization plus segmentation merge variants).
-- If you refactor later, splitting this wrapper into separate combine and segmentation-merge wrappers can make reruns cleaner.
+If you fully re-run segmentation and do not need backward-compatibility merges, set `booleans.legacy_merge: false` in `research_code/config.yaml`. In that mode the pipeline skips the legacy segmentation merge and `final_data_merge.py` reads from `corrected_south` instead of `seg_corrected_south`.
 
 ### 2) Annotation scripts (after data_merge, before population download)
 
@@ -151,6 +139,16 @@ When to enable `NEW_03_WASTEWATERJOIN_GEOJSON.py`:
 
 - Only if you explicitly need a merged metadata/parquet consolidation stage.
 - For normal annotation reruns, keep it disabled.
+
+New scripts added under `annotation_scripts/`:
+
+- `merge_annotations.py` + `merge_annotations.sh`
+  - Purpose: parse model annotation text fields and merge them into the main points dataset (`corrected_all_filepath`) by image-derived `idx`.
+  - Run timing: after annotation inference CSV is produced, before Voronoi/population stages.
+
+- `annotations_inspection.py` + `annotations_inspection.sh` (optional)
+  - Purpose: create a category histogram, write a stratified review sample CSV, and copy sampled images into per-category folders for manual QA.
+  - Outputs are written to `paths.annotations_verf_image_outpath_dir`.
 
 ### 3) Population + Voronoi + population attachment
 
@@ -243,6 +241,8 @@ Example submission sequence (from `research_code/`):
 sbatch data_merge/combine_locations.sh
 sbatch annotation_scripts/grid_generation_and_osm_extract.sh
 sbatch annotation_scripts/run_download_bing_annotate_array.sh
+sbatch annotation_scripts/merge_annotations.sh
+sbatch annotation_scripts/annotations_inspection.sh  # optional QA sampling
 sbatch download_pop.sh
 sbatch create_voronoi.sh
 sbatch add_pop.sh

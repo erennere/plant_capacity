@@ -54,9 +54,9 @@ def assign_to_nearest(gdf_source, gdf_target):
 def merge_old(cfg):
     """Merge zipped segmentation outputs with corrected old dataset."""
     paths = cfg['paths']
-    mapping_filepath = os.path.abspath(os.path.join(paths["dl_dir"], paths["dl_mapfile"]))
-    zip_filepath = os.path.abspath(os.path.join(paths["dl_dir"], paths["dl_zipfile"]))
-    zip_output_path = os.path.abspath(os.path.join(paths["dl_dir"], os.path.basename(paths["dl_zipfile"]).split('.')[-2]))
+    mapping_filepath = paths["dl_mapfile"]
+    zip_filepath = paths["dl_zipfile"]
+    zip_output_path = os.path.join(paths['data_dir'], paths["dl_dir"], os.path.basename(paths["dl_zipfile"]).split('.')[-2])
 
     gdf = gpd.read_file(paths["corrected_south"])
     mapping = gpd.read_file(os.path.abspath(mapping_filepath))
@@ -126,7 +126,8 @@ def main():
     args = parse_args()
 
     if args.variant == 'old':
-        merge_old(cfg)
+        if cfg['legacy_merge']:
+            merge_old(cfg)
         return
     merge_new(cfg)
 

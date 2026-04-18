@@ -219,6 +219,6 @@ def load_config(config="config.yaml"):
         "remove_industrial": flags['remove_industrial'],
         "industrial_category_numbers": cfg['params']['industrial_category_numbers'],
         "min_pixels": cfg['params']['min_pixels'],
-        "impact_polygons_pop_params": cfg['impact_polygons_pop_params']
-        
+        "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],
+        "legacy_merge": flags['legacy_merge']
     }

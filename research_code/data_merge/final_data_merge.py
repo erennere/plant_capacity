@@ -129,67 +129,17 @@ def find_meter_coordinates(df):
         geometry='geometry'
     )
 
-def old_merging_logic(paths, eu_correction, eu_utm, osm_threshold, threshold):
-    """Legacy merge routine retained for compatibility with historical outputs."""
-    canada_df = pd.read_csv(paths["canada_filepath"], encoding='latin1')
-    canada_df['geometry'] = canada_df.apply(lambda row: Point(row['Longitude/ Longitude'], row['Latitude/ Latitude']), axis=1)
-    canada_df = gpd.GeoDataFrame(canada_df, geometry='geometry', crs=4326)
-
-    us_df = pd.read_csv(paths["us_filepath"], encoding='latin1')
-    us_df['geometry'] = us_df.apply(lambda row: Point(row['Longitude'], row['Latitude']), axis=1)
-    us_df = gpd.GeoDataFrame(us_df, geometry='geometry', crs=4326)
-
-    germany_df = gpd.read_file(paths["germany_filepath"])
-    germany_df['geometry'] = germany_df.apply(lambda row: Point(row['neigh_lon'],
-                                                                 row['neigh_lat']) if pd.notna(row['neigh_lat'])
-                                                                   else row['geometry'], axis=1)
-    old_df = gpd.read_file(paths["seg_corrected_south"])
-
-    # The EU dataset has to corrected as it seems to contain points that
-    #do not correspond to any real location
-    eu_df = gpd.read_file(paths["eu_ref_filepath"])
-    if eu_correction:
-        eu_df['epsg'] = eu_df.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-                                                            if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
-        
-        pdf = gpd.read_file(paths["osmgeo_filepath"])
-        pdf['epsg'] = pdf.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-                                                            if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
-        
-        eu_df = coordinate_corr_locations_wOSM(osm_threshold, pdf, eu_df)
-        eu_df['geometry'] = eu_df['matched_osm_geometry']
-        eu_df = eu_df.to_crs(4326)
-    eu_df = eu_df.to_crs(eu_utm)
-
-    merged_df = gpd.GeoDataFrame(pd.concat([old_df, germany_df, us_df, canada_df], axis=0, ignore_index=True), crs=4326, geometry='geometry')
-    new_ones = find_unmatched_targets(merged_df, eu_df, threshold).to_crs(4326)
-    merged_df = pd.concat([merged_df, new_ones], axis=0, ignore_index=True)
-    merged_df = gpd.GeoDataFrame(merged_df, crs=4326, geometry='geometry')
-    
-    #rest = merged_df[~merged_df['geometry'].isin(set(old_df['geometry'].tolist()))].reset_index(drop=True)
-    #rest.to_file(paths["new_points_filepath"], driver='GPKG', index=False)
-    #merged_df.to_file(paths["corrected_all_filepath"], driver='GPKG', index=False)
-
 def main():
     """Run final merge, confidence handling, OSM correction, and deduplication."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg = load_config()
     paths = cfg['paths']
-    eu_correction = cfg['eu_correction']
-    eu_utm = cfg['eu_utm']
     osm_threshold = cfg['osm_threshold']
     threshold = cfg['threshold']
 
-    # Keep legacy merge logic for compatibility with downstream index assumptions.
-    # The newer logic below builds the final dataset used by this project.
-    # old merging logic, we keep it here for now, in case we need to go back to it,
-    # but the new merging logic is more streamlined and has better handling of the
-    # different datasets, so we will use the new merging logic for the final dataset
-    # but the old logic has to be run because of paths building on another and index issues
-    old_merging_logic(paths, eu_correction, eu_utm, osm_threshold, threshold)
-
     # reading the old dataset
-    old_df = gpd.read_file(paths["seg_corrected_south"])
+    old_filepath = paths["seg_corrected_south"] if cfg['legacy_merge'] else paths["corrected_south"]
+    old_df = gpd.read_file(old_filepath)
 
     # adding extra countries to the merged dataset
     canada_df = pd.read_csv(paths["canada_filepath"], encoding='latin1')
