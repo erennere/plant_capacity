@@ -15,9 +15,11 @@ import numpy as np
 try:
     from .hw_comparison import ndvi, multiples, replace_inf, get_approach
     from ..starter import load_config
+    from ..data_merge.merge_seg_results import assign_to_nearest
 except ImportError:
     from research_code.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf, get_approach
     from research_code.starter import load_config
+    from research_code.data_merge.merge_seg_results import assign_to_nearest
 
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
                         ylabel='N_WWTPs', xlabel=None, bins=100, lower_quantile=0.01, upper_quantile=0.95,
@@ -129,40 +131,6 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
                          upper_quantile=upper_quantile_ndi, **plot_args)
     composite_histogram(gdf, HW_comp_dict, hw_comp_title, output_filepath=hw_comp_output_filepath, ylabel=ylabel, xlabel=xlabel_hW_comp,
                         upper_quantile=upper_quantile_hw_comp, **plot_args)
-
-def assign_to_nearest(gdf_source, gdf_target, threshold):
-    gdf_source = gdf_source.copy()
-    source_crs = gdf_source.crs
-    gdf_source = gdf_source.to_crs(gdf_target.crs)
-    sindex = gdf_target.sindex
-
-    nearest_matches = []
-    for geom in gdf_source.geometry:
-        if geom is None or geom.is_empty:
-            nearest_matches.append(None)
-            continue
-        try:
-            nearest_idx = list(sindex.nearest(geom, max_distance=threshold))[1][0]
-
-            nearest_matches.append(nearest_idx)
-        except Exception:
-            nearest_matches.append(None)
-
-    gdf_source['nearest_index'] = nearest_matches
-    gdf_source_na = gdf_source[gdf_source['nearest_index'].isna()]
-    gdf_source = gdf_source[gdf_source['nearest_index'].notna()].copy()
-    gdf_source['nearest_index'] = gdf_source['nearest_index'].astype(int)
-    gdf_source = gdf_source.merge(
-        gdf_target, left_on='nearest_index', right_index=True, suffixes=('', '_nearest')
-    )
-    gdf_source = pd.concat([gdf_source, gdf_source_na], ignore_index=True)
-    gdf_source = gpd.GeoDataFrame(gdf_source, geometry='geometry', crs=gdf_target.crs)
-
-    if 'nearest_index' in gdf_source.columns:
-        gdf_source.drop(columns=['nearest_index'], inplace=True)
-    if 'geometry_nearest' in gdf_source.columns:
-        gdf_source.drop(columns=['geometry_nearest'], inplace=True)
-    return gdf_source.to_crs(source_crs)
 
 def main():
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

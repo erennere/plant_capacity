@@ -49,7 +49,7 @@ def assign_to_nearest(gdf_source, gdf_target):
         gdf_source.drop(columns=['nearest_index'], inplace=True)
     if 'geometry_nearest' in gdf_source.columns:
         gdf_source.drop(columns=['geometry_nearest'], inplace=True)
-    return gdf_source
+    return gdf_source.to_crs(source_crs)
 
 def merge_old(cfg):
     """Merge zipped segmentation outputs with corrected old dataset."""
