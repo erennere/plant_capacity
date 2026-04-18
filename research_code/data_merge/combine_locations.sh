@@ -38,9 +38,20 @@ log "Combined Location Data Merge Started"
 log "=========================================="
 log "Project root directory: ${PROJECT_ROOT}"
 
-# Install package in editable mode
-log "Installing package in editable mode..."
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" > /dev/null 2>&1
+# Install package in editable mode only if import is unavailable.
+ensure_research_code_importable() {
+    if ${PYTHON_CMD} -c "import research_code" >/dev/null 2>&1; then
+        log "research_code import check passed; skipping editable install"
+        return 0
+    fi
+
+    log "research_code not importable; attempting editable install"
+    ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+    ${PYTHON_CMD} -c "import research_code" >/dev/null 2>&1
+}
+
+log "Checking package importability..."
+ensure_research_code_importable
 
 log "Starting data merge pipeline..."
 
