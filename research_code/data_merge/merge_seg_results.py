@@ -21,6 +21,7 @@ def assign_to_nearest(gdf_source, gdf_target):
     Source rows without valid geometry or nearest match are preserved.
     """
     gdf_source = gdf_source.copy()
+    source_crs = gdf_source.crs
     gdf_source = gdf_source.to_crs(gdf_target.crs)
     sindex = gdf_target.sindex
 
