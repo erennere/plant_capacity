@@ -102,6 +102,7 @@ def load_config(config="config.yaml"):
     buffer = cfg['params']['buffer']
     final_data_dir = cfg["paths"]["final_data_dir"]
     annotations_dir = cfg["paths"]["annotations_dir"]
+    dl_dir = cfg["paths"]["dl_dir"]
     def f(path):
         return path.format(
             data_dir=data_dir,
@@ -111,7 +112,8 @@ def load_config(config="config.yaml"):
             level=level,
             buffer=buffer,
             final_data_dir=final_data_dir,
-            annotations_dir=annotations_dir
+            annotations_dir=annotations_dir,
+            dl_dir=dl_dir
         )
 
     paths = {
@@ -132,8 +134,8 @@ def load_config(config="config.yaml"):
                     else f(cfg["paths"]["seg_corrected_south"]),
         "overture_s3_url": cfg["s3"]["divisions"].format(latest_url=cfg["s3"]["latest_url"]),
         "dl_dir": f(cfg["paths"]["dl_dir"]),
-        "dl_zipfile": cfg["paths"]["dl_zipfile"],
-        "dl_mapfile": cfg["paths"]["dl_mapfile"],
+        "dl_zipfile": f(cfg["paths"]["dl_zipfile"]),
+        "dl_mapfile": f(cfg["paths"]["dl_mapfile"]),
         "seg_corrected_south": f(cfg["paths"]["seg_corrected_south"]),
         "corrected_south": f(cfg["paths"]["corrected_south"]),
         "corrected_all_filepath": f(cfg["paths"]["corrected_all"]),
