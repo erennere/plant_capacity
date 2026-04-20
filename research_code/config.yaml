@@ -30,7 +30,7 @@ paths:
   
   watershed: "{data_dir}/hydroshed_river_levels/hydrobase_lvl{level}_combined.gpkg"
   rivershed: "{data_dir}/hydrorivers.gpkg"
-  rivershed_output_path: "{data_dir}/hydroshed_basin_assigned.gpkg"
+  rivershed_output_path: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/hydroshed_basin_assigned_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
   
   overture: "{data_dir}/overture_maps_countries.parquet"
   hydrowaste: "{data_dir}/cleaned_hydrowaste.csv"
@@ -59,21 +59,21 @@ paths:
   eu_new_filepath: "{data_dir}/{final_data_dir}/final_W_europe_WWT_dec3.geojson"
   thailand_filepath: "{data_dir}/{final_data_dir}/Thailand_500m_merged.geojson"
 
-  csv_output_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/raster_country_stats_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.csv"
-  non_served_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.gpkg"
-  non_served_above_threshold_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_above_threshold_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.gpkg"
-  non_served_nxt_river_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_nxt_river_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.gpkg"
-  impact_pop_polygons_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/impact_pop_polygons_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.gpkg"
-  industrial_areas_temp_db_path: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/temp_ingestion_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.duckdb"
-  industrial_areas_ohsome_parquet_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/industrial_areas_final_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.parquet"
+  csv_output_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/raster_country_stats_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.csv"
+  non_served_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
+  non_served_above_threshold_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_above_threshold_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
+  non_served_nxt_river_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_nxt_river_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
+  impact_pop_polygons_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/impact_pop_polygons_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
+  industrial_areas_temp_db_path: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/temp_ingestion_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.duckdb"
+  industrial_areas_ohsome_parquet_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/industrial_areas_final_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet"
   
-  pop_at_risk_output_filepath: "{data_dir}/results_pop_at_risk/v{version}/lvl{level}/bf{buffer}/{weight_type}/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.parquet"
+  pop_at_risk_output_filepath: "{data_dir}/results_pop_at_risk/v{version}/lvl{level}/bf{buffer}/{weight_type}/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet"
 
   country_boundaries_filepath: "{data_dir}/boundaries/ne_110m_admin_0_countries.shp"
 
-  interactive_piechart_html_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.html"
-  static_piechart_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.png"
-  leaflet_geojson_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/leaflet_size_v{version}_lvl{level}_bf{buffer}_{weight_type}_{weight_func}.geojson"
+  interactive_piechart_html_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html"
+  static_piechart_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
+  leaflet_geojson_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/leaflet_size_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.geojson"
 
 s3:
   latest_url: "s3://overturemaps-us-west-2/release/2025-01-22.0"
