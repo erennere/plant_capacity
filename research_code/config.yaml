@@ -19,7 +19,7 @@ paths:
   pop_dif_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}/diff"
   hw_plots_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/hw_plots"
   eu_plots_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/eu_plots"
-  watersheds_zip_dir: "{data_dir}/hydrowaste_watersheds/lvl{level}"
+  watersheds_zip_dir: "{data_dir}/hydroshed_river_levels/lvl{level}"
   dl_dir: "DL_results"
   extra_points_dir: "extra_points"
   annotations_dir: "annotations"

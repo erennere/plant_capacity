@@ -64,10 +64,11 @@ def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg
 
 def main():
     """Load config overrides and build the configured combined watershed layer."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
-    levels = [k for k in os.listdir(os.path.dirname(cfg["paths"]["watersheds_zip_dir"]))]
+    levels = [k for k in os.listdir(os.path.dirname(cfg["paths"]["watersheds_zip_dir"]))
+              if os.path.isdir(os.path.join(os.path.dirname(cfg["paths"]["watersheds_zip_dir"]), k))]
     for level in levels:
         if not level.startswith('lvl'):
             continue
