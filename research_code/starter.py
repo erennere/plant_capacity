@@ -197,6 +197,7 @@ def load_config(
 
     paths = {
         "data_dir": data_dir,
+        "buffers_dir": f(cfg["paths"]["buffers_dir"]),
         "pop_dir" : f(cfg["paths"]["pop_dir"]),
         "watersheds_zip_dir" : f(cfg["paths"]["watersheds_zip_dir"]),
         "voronoi_dir": f(cfg["paths"]["voronoi_dir"]),

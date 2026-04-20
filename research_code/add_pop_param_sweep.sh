@@ -1,7 +1,7 @@
 #!/bin/bash
 # Lightweight parameter sweep for add_pop
 #SBATCH --partition=cpu-single
-#SBATCH --time=48:00:00
+#SBATCH --time=96:00:00
 #SBATCH --mem=192gb
 #SBATCH --cpus-per-task=8
 #SBATCH --array=0-9
