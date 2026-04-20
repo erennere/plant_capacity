@@ -1,9 +1,8 @@
-# ===============================================================
-# Overpass Downloader — Multi-category OSM data extractor (by idx)
-# Extracts only LINES and POLYGONS
-# Each feature (by 'idx') saved as GeoJSON
-# Fully Fiona-free, 100% safe for QGIS Python 3.12
-# ===============================================================
+"""Download OSM line and polygon features for each annotation grid cell.
+
+For every grid feature, the script queries Overpass, converts the response into
+GeoDataFrames, and writes one GeoJSON per grid cell for lines and polygons.
+"""
 
 import os, requests, json, time, re, sys
 import geopandas as gpd
@@ -12,14 +11,9 @@ from shapely.geometry import LineString, Polygon
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
-
-# ------------------ USER INPUTS ------------------
-
-start_idx = 0     # <-- change here
-end_idx   = 100000     # <-- change here
+    from research_code.starter import load_config, parse_config_overrides
 
 queries = {
     "man_made": "wastewater_plant",
@@ -34,9 +28,6 @@ urls = ["https://overpass.kumi.systems/api/interpreter",
          "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
          "https://overpass-api.de/api/interpreter"]
 pause_seconds = 0.1
-# -------------------------------------------------
-
-# ------------------ SUPPORT FUNCTIONS ------------------
 
 def clean_columns(gdf):
     """Clean column names and ensure valid types for GeoJSON export."""
@@ -144,8 +135,8 @@ def elements_to_gdf(data):
     return gdf_lns, gdf_poly
 
 
-# ------------------ MAIN SCRIPT ------------------
 def timer(label):
+    """Return a decorator that prints the runtime of the wrapped function."""
     def wrap(func):
         def inner(*args, **kwargs):
             t0 = time.time()
@@ -156,11 +147,8 @@ def timer(label):
         return inner
     return wrap
 
-#query_overpass = timer("Overpass query")(query_overpass)
-#elements_to_gdf = timer("JSON ➜ GeoDataFrame")(elements_to_gdf)
-#clean_columns = timer("Clean columns")(clean_columns)
-
 def find_bbox(geometry):
+    """Return an Overpass bbox string for a geometry, or None when invalid."""
     if geometry is None or pd.isna(geometry) or geometry.is_empty:
         return None
     
@@ -174,6 +162,20 @@ def find_bbox(geometry):
     return f"{miny},{minx},{maxy},{maxx}"
 
 def create_tasks(gdf, batch_size):
+    """Yield batched Overpass download tasks across the configured endpoints.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Grid features with ``bbox`` and ``idx`` columns.
+    batch_size : int
+        Number of requests to include in each yielded batch.
+
+    Yields
+    ------
+    list[tuple[str, int, str]]
+        Tuples of ``(bbox, idx, url)`` for one download batch.
+    """
     rows = list(gdf.itertuples())
     url_count = len(urls)
 
@@ -183,13 +185,25 @@ def create_tasks(gdf, batch_size):
                for i, r in enumerate(batch)]
 
 def row_operation(bbox, idx_val, url, output_folder):
+    """Fetch and persist OSM features for one grid-cell bbox.
+
+    Parameters
+    ----------
+    bbox : str | None
+        Overpass bbox string.
+    idx_val : int
+        Grid-cell identifier.
+    url : str
+        Overpass endpoint URL.
+    output_folder : str
+        Directory where per-tile GeoJSON outputs are written.
+    """
     if bbox is None: return
     line_path = os.path.join(output_folder, f"idx_{idx_val}_lines.geojson")
     poly_path = os.path.join(output_folder, f"idx_{idx_val}_polygons.geojson")
     data = query_overpass(bbox, queries, url)
     all_lines, all_polys = elements_to_gdf(data)
 
-    # Save each idx as separate GeoJSON files
     if not all_lines.empty:
         all_lines = clean_columns(all_lines)
 
@@ -203,13 +217,20 @@ def row_operation(bbox, idx_val, url, output_folder):
         print(f"✅ Saved {poly_path}")
 
 def main():
+    """Load annotation grids, query Overpass, and persist per-tile OSM outputs.
+
+    Returns
+    -------
+    None
+        The function writes per-grid polygon and line GeoJSON files to disk.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     overwrite = cfg["annotations"]["overwrite"]
     retrials = int(cfg["annotations"]["retries"])
 
     points_path = cfg["paths"]["corrected_all_filepath"]
-    #points_path = './annotation_scripts/ref.geojson'
 
     grid_filedir = cfg["paths"]["annotations_grid_dir"]
     grid_filepath = os.path.join(grid_filedir, f'grids_{os.path.basename(points_path)}')

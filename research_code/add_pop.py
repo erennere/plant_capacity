@@ -20,16 +20,14 @@ import sys
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-from rasterstats import zonal_stats
 import rasterio
 import geopandas as gpd
 import pandas as pd
-import numpy as np
 import pycountry
 try:
-    from .starter import load_config
+    from .starter import load_config, parse_config_overrides
 except ImportError:  # Support running as a top-level script
-    from starter import load_config
+    from starter import load_config, parse_config_overrides
 from exactextract import exact_extract
 
 # Configure logging
@@ -63,71 +61,13 @@ def get_iso_codes():
         alpha_2_to_names[country.alpha_2.upper()] = country.name
     return alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names
 
-"""
- def intersect_single_file(gdf, tif_paths):
-    org_crs = gdf.crs 
-    my_dict = {}
-    for file in tif_paths:
-        if not os.path.exists(file):
-            logging.warning(f"Raster file does not exist: {file}")
-            continue
-        
-        basename = os.path.basename(file)
-        parts = [int(k) for k in basename.split('_') if k.startswith('20') and len(k) == 4]
-        
-        if parts:
-            year = parts[0]
-            my_dict[year] = file
-        else:
-            logging.warning(f"Could not extract year from filename: {basename} - skipping")
-    for year, tif_path in my_dict.items():
-        if tif_path is not None and os.path.exists(tif_path):
-            try:
-                with rasterio.open(tif_path) as src:
-                    raster_crs = src.crs
-                    nodata_val = src.nodata
-
-                if raster_crs is not None and gdf.crs != raster_crs:
-                    gdf = gdf.to_crs(raster_crs)
-            
-                try:
-                    stats = zonal_stats(
-                        vectors=gdf,
-                        raster=tif_path,
-                        stats=["sum", "std"],
-                        geojson_out=False,
-                        nodata=nodata_val if nodata_val is not None else None
-                    )
-
-                    if not stats or len(stats) == 0:
-                        logging.warning(f"No zonal statistics returned for {os.path.basename(tif_path)} - geometry may not intersect raster")
-                        continue
-
-                    for key in stats[0].keys():
-                        values = [
-                            s.get(key, np.nan) if s and s.get("sum") is not None else np.nan
-                            for s in stats
-                        ]
-                        numeric_values = [v if isinstance(v, (int, float)) else np.nan for v in values]
-                        gdf[f"{str(year)}_zonal_{key}"] = np.maximum(np.asarray(numeric_values), 0)
-                except Exception as err:
-                    logging.warning(f"Zonal stats returned None for some features — possibly due to invalid geometry or no intersection: {err}")
-            except Exception as err:
-                logging.warning(f"Problem with rasterio or CRS conversion: {err}")
-        else:
-            logging.warning(f"Population raster file does not exist: {tif_path}")
-    if gdf.crs != org_crs:
-        gdf = gdf.to_crs(org_crs)
-    return gdf 
-"""
-
 def intersect_single_file(gdf, tif_paths, all_years=True):
     """Compute zonal statistics of population rasters within polygons using exactextract.
     
     Args:
         gdf: GeoDataFrame with polygon geometries
         tif_paths: List of population raster file paths (single or multiple years)
-        all_years: Boolean indicating whether to process all years or just the first available year
+        all_years: When false, only process the most recent year found in tif_paths.
     Returns:
         GeoDataFrame: Input GeoDataFrame with added columns for year-specific population stats
     """
@@ -136,7 +76,7 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
     
     org_crs = gdf.crs 
     
-    # 1. Map files to years
+    # Map raster files to the year encoded in their filenames.
     my_dict = {}
     for file in tif_paths:
         if not os.path.exists(file):
@@ -151,21 +91,20 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
         else:
             logging.warning(f"Could not extract year from filename: {basename}")
 
-    # 2. Process each raster
+    # Process each raster year and attach exactextract outputs back onto gdf.
     last_year = sorted(my_dict.keys())[-1]
     for year, tif_path in my_dict.items():
         if not all_years and year != last_year:
             continue
         try:
-            # Check CRS match
+            # Reproject polygons to raster CRS before extracting zonal statistics.
             with rasterio.open(tif_path) as src:
                 raster_crs = src.crs
             
             if raster_crs is not None and gdf.crs != raster_crs:
                 gdf = gdf.to_crs(raster_crs)
 
-            # exact_extract is much faster and memory-efficient
-            # 'ops' names correspond to stats (sum, stdev, etc.)
+            # exact_extract is the active zonal-statistics backend for this module.
             stats_df = exact_extract(
                 rast=tif_path,
                 vec=gdf,
@@ -173,8 +112,7 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
                 output='pandas' # Returns a tidy dataframe
             )
 
-            # 3. Merge stats back to gdf with year prefix
-            # exact_extract returns columns named 'sum' and 'stdev'
+            # exact_extract returns canonical 'sum' and 'stdev' columns.
             gdf[f"{year}_zonal_sum"] = stats_df['sum'].clip(lower=0).values
             gdf[f"{year}_zonal_std"] = stats_df['stdev'].clip(lower=0).values
 
@@ -183,7 +121,7 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
         except Exception as err:
             logging.error(f"Error processing {tif_path}: {err}")
 
-    # 4. Restore original CRS if changed
+    # Restore the original CRS expected by downstream writers.
     if gdf.crs != org_crs:
         gdf = gdf.to_crs(org_crs)
         
@@ -192,16 +130,22 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
 
 def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True):
     """Intersect population rasters with polygons across all countries.
-    
-    Parallelizes zonal statistics computation across countries using ProcessPoolExecutor.
-    
-    Args:
-        gdf: GeoDataFrame with 'ISO_2' column indicating country codes
-        tif_dir: Root directory containing subdirectories for each country (organized by ISO-3 code)
-        max_workers: Maximum number of parallel workers for processing
-        
-    Returns:
-        GeoDataFrame: Concatenated results from all countries with population statistics
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input polygons with an ``ISO_2`` column.
+    tif_dir : str
+        Root directory containing country raster subdirectories.
+    max_workers : int, default=16
+        Maximum number of worker processes.
+    all_years : bool, default=True
+        Whether to attach all discovered raster years instead of only the latest.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Concatenated result with population statistics attached.
     """
     alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
 
@@ -244,21 +188,27 @@ def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True):
         return gpd.GeoDataFrame()
     
 def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=16):
-    """Orchestrate population data intersection for a single Voronoi file.
-    
-    Loads a Voronoi polygon layer by index, intersects with population rasters,
-    and exports results with '_pop_added_' prefix.
-    
-    Args:
-        data_dir: Directory containing input Voronoi GeoPackage files
-        tif_dir: Root directory containing population raster tiles by country
-        output_dir: Output directory for enhanced GeoPackages
-        index: Zero-based index selecting which Voronoi file to process
-        max_workers: Maximum parallel workers for zonal statistics computation
-        
-    Raises:
-        IndexError: If index is out of range for available Voronoi files
-        Exception: File I/O or processing errors with detailed logging
+    """Run the population-intersection workflow for one Voronoi file.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing input Voronoi GeoPackage files.
+    tif_dir : str
+        Root directory containing country population rasters.
+    output_dir : str
+        Directory where population-enriched GeoPackages are written.
+    index : int
+        Zero-based index of the Voronoi file to process.
+    max_workers : int, default=16
+        Maximum number of worker processes for zonal statistics.
+
+    Raises
+    ------
+    IndexError
+        If ``index`` is outside the available file range.
+    Exception
+        If reading, processing, or writing the selected file fails.
     """
     voronoi_files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.gpkg')])
     
@@ -282,17 +232,15 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
         raise
 
 def main():
-    """Main entry point for population data integration.
-    
-    Reads configuration from starter.load_config(), validates command-line arguments,
-    and orchestrates population raster intersection with Voronoi polygon layer.
-    
-    Command-line arguments:
-        sys.argv[1]: Zero-based index of Voronoi file to process
+    """Validate CLI args, load config, and run population enrichment.
+
+    Notes
+    -----
+    The first positional argument selects the Voronoi file index. Optional
+    trailing positionals override ``level``, ``version``, and ``buffer``.
     """
-    # Validate command-line arguments
     if len(sys.argv) < 2:
-        logging.error("Usage: python -m research_code.add_pop <voronoi_file_index>")
+        logging.error("Usage: python -m research_code.add_pop <voronoi_file_index> [level] [version] [buffer] [weight_method] [is_multiplicative]")
         sys.exit(1)
     
     try:
@@ -301,11 +249,16 @@ def main():
         logging.error(f"Invalid index {sys.argv[1]}: must be an integer")
         sys.exit(1)
     
-    # Setup paths
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    cfg = load_config()
+    try:
+        overrides = parse_config_overrides(start_index=2)
+    except ValueError as exc:
+        logging.error(str(exc))
+        sys.exit(1)
     
-    # Extract configuration parameters
+    # Switch to the package directory so the relative config path resolves correctly.
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    cfg = load_config(**overrides)
+    
     paths = cfg.get('paths', {})
     max_workers = cfg.get('add_pop_max_workers', 8)
     
@@ -319,7 +272,6 @@ def main():
             logging.error(f"Missing required path '{path_key}' in configuration")
             sys.exit(1)
     
-    # Create output directory
     os.makedirs(paths["pop_output_dir"], exist_ok=True)
     
     logging.info(f"Configuration loaded: voronoi_dir={paths['voronoi_dir']}, "

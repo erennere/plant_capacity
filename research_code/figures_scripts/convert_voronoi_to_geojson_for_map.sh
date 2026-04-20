@@ -11,6 +11,13 @@ PYTHON_SCRIPT="research_code.figures_scripts.convert_voronoi_to_geojson_for_map"
 
 mkdir -p "${LOG_DIR}"
 
+# Parse optional config override arguments
+LEVEL="${1:-}"
+VERSION="${2:-}"
+BUFFER="${3:-}"
+WEIGHT_METHOD="${4:-}"
+IS_MULTIPLICATIVE="${5:-}"
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
 }
@@ -19,5 +26,5 @@ log "Installing research_code module"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
 
 log "Running convert_voronoi_to_geojson"
-${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 2>&1 | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
+${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/convert_voronoi_to_geojson.log"
 log "Completed convert_voronoi_to_geojson"

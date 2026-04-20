@@ -1,19 +1,23 @@
+# Runtime defaults used by load_config() when shell wrappers do not pass
+# [level] [version] [buffer] [weight_method] [is_multiplicative] overrides.
 arguments:
   default_version: "2"
   default_level: "8"
 
 paths:
+  # Template variables available below: {data_dir}, {version}, {level},
+  # {buffer}, {final_data_dir}, {extra_points_dir}, {annotations_dir}, {dl_dir}.
   data_dir: "../data"
   pop_dir: "{data_dir}/population"
   final_data_dir : "final_data_source"
-  voronoi_dir: "{data_dir}/voronoi_layers/v{version}/{buffer}"
-  verification_dir: "{data_dir}/verification/v{version}/{buffer}"
+  voronoi_dir: "{data_dir}/voronoi_layers/v{version}/{level}/{buffer}"
+  verification_dir: "{data_dir}/verification/v{version}/{level}/{buffer}"
   pop_tif_dir: "{data_dir}/population/unzipped"
-  WWTP_tif_dir: "{data_dir}/WWTP_tifs"
-  pop_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/{buffer}"
-  pop_dif_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/{buffer}/diff"
-  hw_plots_dir: "{data_dir}/verification/v{version}/{buffer}/plots/hw_plots"
-  eu_plots_dir: "{data_dir}/verification/v{version}/{buffer}/plots/eu_plots"
+  WWTP_tif_dir: "{data_dir}/WWTP_tifs/v{version}/{level}/{buffer}"
+  pop_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/{level}/{buffer}"
+  pop_dif_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/{level}/{buffer}/diff"
+  hw_plots_dir: "{data_dir}/verification/v{version}/{level}/{buffer}/plots/hw_plots"
+  eu_plots_dir: "{data_dir}/verification/v{version}/{level}/{buffer}/plots/eu_plots"
   watersheds_zip_dir: "{data_dir}/hydrowaste_watersheds/{level}"
   dl_dir: "DL_results"
   extra_points_dir: "extra_points"
@@ -22,9 +26,11 @@ paths:
   annotations_by_osm_dir: "{data_dir}/{annotations_dir}/osm_by_idx"
   bboxes: "{data_dir}/bboxes.csv"
   cities: "{data_dir}/cities.csv"
-  watershed: "{data_dir}/hydrobase_lvl8_combined.gpkg"
+  
+  watershed: "{data_dir}/hydroshed_river_levels/hydrobase_lvl{level}_combined.gpkg"
   rivershed: "{data_dir}/hydrorivers.gpkg"
   rivershed_output_path: "{data_dir}/hydroshed_basin_assigned.gpkg"
+  
   overture: "{data_dir}/overture_maps_countries.parquet"
   hydrowaste: "{data_dir}/cleaned_hydrowaste.csv"
   dl_zipfile: "{data_dir}/{dl_dir}/csvv2-2.zip"
@@ -52,19 +58,21 @@ paths:
   us_new_filepath: "{data_dir}/{final_data_dir}/final_USA_WWT_dec3.geojson"
   eu_new_filepath: "{data_dir}/{final_data_dir}/final_W_europe_WWT_dec3.geojson"
   thailand_filepath: "{data_dir}/{final_data_dir}/Thailand_500m_merged.geojson"
-  csv_output_filepath: "{data_dir}/raster_country_stats.csv"
-  non_served_outpath: "{data_dir}/non_served_areas.gpkg"
-  non_served_above_threshold_outpath: "{data_dir}/non_served_areas_above_threshold.gpkg"
-  non_served_nxt_river_outpath: "{data_dir}/non_served_nxt_river.gpkg"
-  impact_pop_polygons_outpath: "{data_dir}/impact_pop_polygons.gpkg"
-  industrial_areas_temp_db_path: "{data_dir}/temp_ingestion.duckdb"
-  industrial_areas_ohsome_parquet_filepath: "{data_dir}/industrial_areas_final.parquet"
-  pop_at_risk_output_filepath: "{data_dir}/pop_at_risk_pop.parquet"
+
+  csv_output_filepath: "{data_dir}/risk_calculation/raster_country_stats_v{version}_lvl{level}_bf{buffer}.csv"
+  non_served_outpath: "{data_dir}/risk_calculation/non_served_areas_v{version}_lvl{level}_bf{buffer}.gpkg"
+  non_served_above_threshold_outpath: "{data_dir}/risk_calculation/non_served_areas_above_threshold_v{version}_lvl{level}_bf{buffer}.gpkg"
+  non_served_nxt_river_outpath: "{data_dir}/risk_calculation/non_served_nxt_river_v{version}_lvl{level}_bf{buffer}.gpkg"
+  impact_pop_polygons_outpath: "{data_dir}/risk_calculation/impact_pop_polygons_v{version}_lvl{level}_bf{buffer}.gpkg"
+  industrial_areas_temp_db_path: "{data_dir}/risk_calculation/temp_ingestion_v{version}_lvl{level}_bf{buffer}.duckdb"
+  industrial_areas_ohsome_parquet_filepath: "{data_dir}/risk_calculation/industrial_areas_final_v{version}_lvl{level}_bf{buffer}.parquet"
+  pop_at_risk_output_filepath: "{data_dir}/results_pop_at_risk/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}.parquet"
 
   country_boundaries_filepath: "{data_dir}/boundaries/ne_110m_admin_0_countries.shp"
-  interactive_piechart_html_filepath: "{data_dir}/figures/WWTP_type_interactive_piechart.html"
-  static_piechart_filepath: "{data_dir}/figures/WWTP_type_piechart.png"
-  leaflet_geojson_filepath: "{data_dir}/figures/leaflet_size.geojson"
+
+  interactive_piechart_html_filepath: "{data_dir}/figures/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}.html"
+  static_piechart_filepath: "{data_dir}/figures/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}.png"
+  leaflet_geojson_filepath: "{data_dir}/figures/leaflet_size_v{version}_lvl{level}_bf{buffer}.geojson"
 
 s3:
   latest_url: "s3://overturemaps-us-west-2/release/2025-01-22.0"
@@ -83,13 +91,17 @@ params:
   rad: 5000
   add_pop_max_workers: 8
   weight_method: square_root
+  is_multiplicative: true
   zoom_level: 8
   industrial_category_numbers: []
   min_pixels: 9
   
 annotations:
+  # default_mode controls create_rasters.sh execution: array | sequential | parallel.
   default_mode: array
+  # cell_size is the base tile size in meters before multiplying by factor.
   cell_size: 3072
+  # factor expands the nominal tile footprint to preserve context around each point.
   factor: 1.194
   max_workers: 8
   random_seed: 42
@@ -117,11 +129,9 @@ credentials:
  url: "s3://heigit-ohsome-planet/data/v1/global/2026-03-09/contributions/latest/*.parquet"
 
 execution:
- mode: "array"            # array | sequential | parallel
+ mode: "array"            # array: SLURM array, sequential: one process, parallel: local background jobs
 
-                         # Defaults: array (HPC), sequential (local)
-
-                         # Leave empty for environment defaults
+                         # Leave empty to let shell wrappers choose environment defaults.
 
 impact_polygons_pop_params:
   org_per_pop: 60.0

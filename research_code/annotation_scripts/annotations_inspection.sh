@@ -9,6 +9,13 @@ PROJECT_ROOT="$(pwd)"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 
+# Parse optional config override arguments
+LEVEL="${1:-}"
+VERSION="${2:-}"
+BUFFER="${3:-}"
+WEIGHT_METHOD="${4:-}"
+IS_MULTIPLICATIVE="${5:-}"
+
 mkdir -p "${LOG_DIR}"
 
 log() {
@@ -30,4 +37,4 @@ log "Checking package importability..."
 ensure_research_code_importable
 
 log "Running annotations_inspection.py"
-${PYTHON_CMD} -m research_code.annotation_scripts.annotations_inspection 2>&1 | tee -a "${LOG_DIR}/annotations_inspection.log"
+${PYTHON_CMD} -m research_code.annotation_scripts.annotations_inspection "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/annotations_inspection.log"

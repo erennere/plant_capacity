@@ -1,3 +1,9 @@
+"""Create a static world map summarizing served population and WWTP mix.
+
+The figure combines a choropleth background with country-level donut markers
+that split residential and industrial WWTP area indicators.
+"""
+
 import os
 import numpy as np
 import geopandas as gpd
@@ -13,13 +19,14 @@ from matplotlib.cm import ScalarMappable
 from pipelines import create_pop_output_paths
 
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.pipelines import create_pop_output_paths
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
+    """Aggregate facility-level attributes to country-level summary statistics."""
     gdf = gdf.copy()
     agg_dict = {
         f"{agg_column}_sum": "sum",
@@ -50,6 +57,12 @@ def plot_splitted_piechart(dist_tag1, dist_tag2, ax,
                             size_tag1, size_tag2, min_size,
                             labels=False, labels_text = ['Paved', 'Unpaved', ''],
                             cmap="tab20c"):
+    """Draw a two-sided donut pie chart comparing residential and industrial shares.
+
+    `dist_tag1` and `dist_tag2` hold the category counts for the left and right
+    halves, while `size_tag1` and `size_tag2` control the relative radii of the
+    two pies.
+    """
     ax.grid(False)
     ax.set_axis_off()
     
@@ -68,7 +81,8 @@ def plot_splitted_piechart(dist_tag1, dist_tag2, ax,
     pie_labels =  labels_text if labels else None
 
     def plot_pie(values, radius, cols, min_size, startangle, counterclock):
-        # min_size here is the min size of WWTPs and the halving is due to the sum of all sizes as the last element
+        """Draw one half-donut only when the requested marker is large enough."""
+        # Skip pies that would render below the configured minimum visible size.
         if radius <= 0 or sum(values)/2 < min_size:
             return
         wedgeprops = dict(width=0.7) if radius > 0.5 else None
@@ -85,6 +99,7 @@ def plot_splitted_piechart(dist_tag1, dist_tag2, ax,
     ax.set_axis_off()
 
 def get_pos(geometry):
+    """Return a representative plotting position for polygon or multipolygon geometry."""
     if geometry.geom_type == 'Polygon':
         return geometry.centroid.x, geometry.centroid.y
     elif geometry.geom_type == 'MultiPolygon':
@@ -92,6 +107,7 @@ def get_pos(geometry):
     raise ValueError("Invalid geometry type")
 
 def calculate_size(value, min_value, max_value, min_size, max_size, scale='log'):
+    """Map a value to a plotted pie size using log or linear scaling."""
     if scale == 'log':
         return (np.log(value) - np.log(min_value)) / (np.log(max_value) - np.log(min_value)) * (max_size - min_size) + min_size
     elif scale == 'linear':
@@ -100,6 +116,7 @@ def calculate_size(value, min_value, max_value, min_size, max_size, scale='log')
         raise ValueError("Invalid scale")
     
 def round_numbers(arr, breaks):
+    """Generate rounded legend break labels spanning the observed value range."""
     arr = np.asarray(arr)
     arr = arr[np.isfinite(arr) & (arr > 0)]
     nums = np.linspace(arr.min(), arr.max(), len(breaks)).astype(int)
@@ -112,8 +129,10 @@ def round_numbers(arr, breaks):
     return rounded
             
 def main():
+    """Create the static global WWTP-type summary figure and save it to disk."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
 
     approach = cfg['figures']['approach']
     boundaries_filepath = cfg['paths']['country_boundaries_filepath']
@@ -247,11 +266,9 @@ def main():
             continue
 
         #size_ind = max(calculate_size(sum(dist_ind), min_size, max_size, min_pie_size, max_pie_size, scale), min_pie_size)
-        #size_res = max(calculate_size(sum(dist_res), min_size, max_size, min_pie_size, max_pie_size, scale), min_pie_size)
         size_ind = calculate_size(sum(dist_ind), min_size, max_size, min_pie_size, max_pie_size, scale)
         size_res = calculate_size(sum(dist_res), min_size, max_size, min_pie_size, max_pie_size, scale)
 
-        #size = max(size_ind, size_res)
         size = size_ind + size_res
         if size_res < min_pie_size and size_ind < min_pie_size:
             continue

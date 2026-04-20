@@ -2,8 +2,8 @@
 
 Workflow:
 1. Spatially match polygons to nearby rivers within a search distance.
-2. Assign each polygon a river-system ID (`MAIN_RIV`).
-3. Compute the common downstream juncture (`NXT_DIS`) from matched rivers.
+2. Assign each polygon a river-system ID (`MAIN_RIV`, the HydroRIVERS main stem).
+3. Compute the common downstream juncture (`NXT_DIS`, the first shared downstream segment ID) from matched rivers.
 4. Write enriched polygons to output.
 """
 
@@ -19,10 +19,10 @@ from shapely import box
 from tqdm import tqdm
 
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..create_voronoi import estimate_utm_epsg
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.create_voronoi import estimate_utm_epsg
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -56,7 +56,24 @@ def find_common_intersection(ids, graph):
     return current
 
 def optimize_river_lookup(polygons_gdf, rivers_gdf, x_distance, utm_epsg):
-    """Match polygons to nearby rivers (same HYBAS_ID) in one UTM zone."""
+    """Match polygons to nearby rivers with the same basin ID in one UTM zone.
+
+    Parameters
+    ----------
+    polygons_gdf : geopandas.GeoDataFrame
+        Non-served polygons to enrich.
+    rivers_gdf : geopandas.GeoDataFrame
+        River segments to match against.
+    x_distance : float
+        Buffer distance used for the candidate search.
+    utm_epsg : int
+        Projected CRS used for the lookup.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Polygon layer with a ``river_list`` column.
+    """
     # Project rivers once
     rivers_gdf = rivers_gdf.to_crs(utm_epsg)
     polygons_gdf = polygons_gdf.to_crs(utm_epsg)
@@ -81,7 +98,24 @@ def optimize_river_lookup(polygons_gdf, rivers_gdf, x_distance, utm_epsg):
 
 
 def orchestrate_settlement_river_intersections(polygons_gdf, rivers_gdf, x_distance, max_workers=4):
-    """Run spatial river lookup by UTM zone in parallel."""
+    """Run spatial river lookup by UTM zone in parallel.
+
+    Parameters
+    ----------
+    polygons_gdf : geopandas.GeoDataFrame
+        Non-served polygons to enrich.
+    rivers_gdf : geopandas.GeoDataFrame
+        River segments used for matching.
+    x_distance : float
+        Buffer distance used for the candidate search.
+    max_workers : int, default=4
+        Maximum number of worker processes.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Polygon layer with ``river_list`` assignments.
+    """
     if 'utm' not in polygons_gdf.columns:
         logger.info("Estimating UTM zones")
         polygons_gdf['utm'] = polygons_gdf.geometry.centroid.apply(
@@ -156,7 +190,22 @@ def assign_river_juncture(polygons_batch, rivers_batch):
 
 
 def orchestrate_river_assignment(polygons_gdf, rivers_gdf, max_workers=8):
-    """Compute river-juncture assignment grouped by MAIN_RIV in parallel."""
+    """Compute river-juncture assignment grouped by ``MAIN_RIV`` in parallel.
+
+    Parameters
+    ----------
+    polygons_gdf : geopandas.GeoDataFrame
+        Polygon layer with ``river_list`` and ``MAIN_RIV`` assignments.
+    rivers_gdf : geopandas.GeoDataFrame
+        River segments providing downstream topology.
+    max_workers : int, default=8
+        Maximum number of worker processes.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Polygon layer with the downstream-junction column ``NXT_DIS``.
+    """
     work_todo = polygons_gdf[polygons_gdf['river_list'].map(len) > 0].copy()
     work_done_empty = polygons_gdf[polygons_gdf['river_list'].map(len) == 0].copy()
     work_done_empty['NXT_DIS'] = None
@@ -188,9 +237,27 @@ def orchestrate_river_assignment(polygons_gdf, rivers_gdf, max_workers=8):
     return work_done_empty
 
 def main():
-    """Load inputs, perform river matching + juncture assignment, and save output."""
+    """Load inputs, perform river matching + juncture assignment, and save output.
+
+    Parameters
+    ----------
+    None
+        Runtime inputs are read from the configured files and optional CLI
+        overrides.
+
+    Returns
+    -------
+    None
+        The enriched polygon layer is written to the configured output path.
+
+    Notes
+    -----
+    CLI usage is ``python -m ...find_intersection_river <max_workers> [level]
+    [version] [buffer]``.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=2)
+    cfg = load_config(**overrides)
 
     polygons_path = cfg['paths']['non_served_above_threshold_outpath']
     rivers_path = cfg['paths']['rivershed_output_path']

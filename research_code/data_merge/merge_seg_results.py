@@ -11,14 +11,15 @@ import pandas as pd
 import geopandas as gpd
 import zipfile
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 def assign_to_nearest(gdf_source, gdf_target):
     """Attach nearest target attributes to each source geometry.
 
-    Source rows without valid geometry or nearest match are preserved.
+    Source rows without valid geometry or without a successful nearest-neighbor
+    lookup are preserved and returned without merged target attributes.
     """
     gdf_source = gdf_source.copy()
     source_crs = gdf_source.crs
@@ -53,7 +54,13 @@ def assign_to_nearest(gdf_source, gdf_target):
     return gdf_source.to_crs(source_crs)
 
 def merge_old(cfg):
-    """Merge zipped segmentation outputs with corrected old dataset."""
+    """Merge zipped segmentation outputs into the legacy corrected dataset.
+
+    Parameters
+    ----------
+    cfg : dict
+        Runtime configuration dictionary.
+    """
     paths = cfg['paths']
     mapping_filepath = paths["dl_mapfile"]
     zip_filepath = paths["dl_zipfile"]
@@ -90,7 +97,13 @@ def merge_old(cfg):
     )
 
 def merge_new(cfg):
-    """Merge flat CSV segmentation outputs with corrected new dataset."""
+    """Merge flat CSV segmentation outputs into the current corrected dataset.
+
+    Parameters
+    ----------
+    cfg : dict
+        Runtime configuration dictionary.
+    """
     paths = cfg['paths']
     points_df = gpd.read_file(paths['corrected_all_filepath'])
     points_df['idx'] = points_df['idx'].astype(int)
@@ -112,6 +125,11 @@ def merge_new(cfg):
 def parse_args():
     """Parse command-line arguments for merge workflow selection."""
     parser = argparse.ArgumentParser(description='Merge segmentation outputs into geospatial datasets.')
+    parser.add_argument('level', nargs='?', default=None, help='Optional config level override')
+    parser.add_argument('version', nargs='?', default=None, help='Optional config version override')
+    parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
+    parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
+    parser.add_argument('is_multiplicative', nargs='?', default=None, help='Optional config is_multiplicative override')
     parser.add_argument(
         '--variant',
         choices=['old', 'new'],
@@ -121,10 +139,17 @@ def parse_args():
     return parser.parse_args()
 
 def main():
-    """Entry point for segmentation merge workflows."""
+    """Parse CLI options and run the selected segmentation-merge workflow.
+
+    Returns
+    -------
+    None
+        This function dispatches to either the legacy or current merge path.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
     args = parse_args()
+    overrides = parse_config_overrides(args=args)
+    cfg = load_config(**overrides)
 
     if args.variant == 'old':
         if cfg['legacy_merge']:

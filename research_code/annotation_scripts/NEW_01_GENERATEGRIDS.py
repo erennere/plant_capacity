@@ -1,17 +1,23 @@
+"""Build square annotation tiles around WWTP point features.
+
+The output grid is derived from the current `corrected_all_filepath` point layer
+and uses the configured annotation cell size and scale factor.
+"""
+
 import logging
 import os
-import sys
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import box
 from shapely import Point
 
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 def point_to_square(geom, half):
+    """Return a square polygon centered on a point geometry."""
     if geom is None or geom.is_empty:
         return None
     return box(
@@ -20,18 +26,29 @@ def point_to_square(geom, half):
     )
 
 def main(cell_size, half, points_path, output_path):
-    # === Step 1. Read point layer ===
+    """Read points, expand them to square tiles, and write a GeoPackage grid.
+
+    Parameters
+    ----------
+    cell_size : float
+        Full annotation tile width in meters.
+    half : float
+        Half-width used to build centered square polygons.
+    points_path : str
+        Input point layer.
+    output_path : str
+        Output GeoPackage path for the generated grid.
+    """
     gdf = gpd.read_file(points_path)
     gdf = gdf[gdf['geometry'].map(lambda geom: pd.notna(geom) and isinstance(geom, Point))].reset_index(drop=True)
     if not all(gdf.geometry.geom_type == "Point"):
         raise ValueError("Input layer must contain only Point geometries")
 
-    # === Step 2. Reproject to Web Mercator ===
+    # Create the square tiles in Web Mercator so the cell size is interpreted in meters.
     gdf_3857 = gdf.to_crs(epsg=3857)
     gdf_3857["geometry"] = gdf_3857.geometry.apply(lambda geom: point_to_square(geom, half))
     gdf_3857.set_crs(epsg=3857, inplace=True)
 
-    # === Step 5. Write to disk ===
     gdf_3857.to_file(
         output_path,
         driver="GPKG"
@@ -41,7 +58,8 @@ def main(cell_size, half, points_path, output_path):
 if __name__ == '__main__':
     logging.info("Starting Bing annotation pipeline")
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     logging.info("Configuration loaded")
 
     cell_size = int(cfg["annotations"]["cell_size"])
@@ -50,7 +68,6 @@ if __name__ == '__main__':
     half = cell_size / 2
 
     points_path = cfg["paths"]["corrected_all_filepath"]
-    #points_path = './annotation_scripts/ref.geojson'
     output_dir = cfg["paths"]["annotations_grid_dir"]
 
     if not os.path.exists(output_dir):

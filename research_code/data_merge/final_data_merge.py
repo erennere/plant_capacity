@@ -13,10 +13,10 @@ from shapely import Point, from_wkt, to_wkt
 from scipy.spatial import KDTree as cKDTree
 try:
     from .correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
     from research_code.data_merge.correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 def cluster_point_indices(geoms, threshold):
     """Group point geometries into connected components within a distance threshold."""
@@ -132,23 +132,26 @@ def find_meter_coordinates(df):
 def main():
     """Run final merge, confidence handling, OSM correction, and deduplication."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     paths = cfg['paths']
     osm_threshold = cfg['osm_threshold']
     threshold = cfg['threshold']
 
-    # reading the old dataset
+    # Start from the configured merged baseline; legacy_merge controls whether
+    # segmentation-adjusted outputs are preferred over the directly corrected set.
     old_filepath = paths["seg_corrected_south"] if cfg['legacy_merge'] else paths["corrected_south"]
     old_df = gpd.read_file(old_filepath)
 
-    # adding extra countries to the merged dataset
+    # Add external country datasets that are maintained outside the core merge.
     canada_df = pd.read_csv(paths["canada_filepath"], encoding='latin1')
     canada_df['geometry'] = canada_df.apply(lambda row: Point(row['Longitude/ Longitude'], row['Latitude/ Latitude']), axis=1)
     canada_df = gpd.GeoDataFrame(canada_df, geometry='geometry', crs=4326)
 
     thailand_df = gpd.read_file(paths['thailand_filepath'])
     
-    # us and eu have high and low confidence points, we will merge them separately and then combine
+    # US and EU sources contain confidence scores, so high- and low-confidence
+    # records are handled separately before the final union.
     us_df = gpd.read_file(paths['us_new_filepath'])
     high_conf_us, low_conf_us = get_best_points(us_df)
 
@@ -160,9 +163,8 @@ def main():
 
     merged_df = gpd.GeoDataFrame(pd.concat([old_df, high_conf, canada_df, thailand_df], axis=0, ignore_index=True), crs=4326, geometry='geometry')
 
-    # before adding germany, we will find the unmatched points in germany and add them to the merged dataset,
-    # this is because the germany dataset have new corrections which we want to add to the merged dataset
-    # and we do not want to add the same points twice
+    # Germany corrections are appended only for unmatched sites to avoid adding
+    # duplicate facilities that are already covered by the merged baseline.
     germany_df = gpd.read_file(paths["germany_filepath"])
     germany_df['geometry'] = germany_df.apply(lambda row: Point(row['neigh_lon'],
                                                                  row['neigh_lat']) if pd.notna(row['neigh_lat'])
@@ -172,8 +174,7 @@ def main():
     merged_df = pd.concat([merged_df, new_ones], axis=0, ignore_index=True)
     merged_df = gpd.GeoDataFrame(merged_df, crs=4326, geometry='geometry')
     
-    # for low confidence points, we run a correction with OSM data to try to find better coordinates,
-    #  we will add the corrected points to the merged dataset 
+    # Low-confidence sites are re-snapped against OSM features before inclusion.
     low_conf['epsg'] = low_conf.apply(find_safe_epsg, axis=1)
     pdf = gpd.read_file(paths["osmgeo_filepath"])
     pdf['epsg'] = pdf.apply(find_safe_epsg, axis=1)
@@ -185,9 +186,8 @@ def main():
     merged_df = gpd.GeoDataFrame(pd.concat([merged_df, low_conf], axis=0, ignore_index=True), crs=4326, geometry='geometry')
     del low_conf, low_conf_eu,low_conf_us, high_conf, high_conf_eu, high_conf_us, new_ones, germany_df, canada_df, thailand_df, us_df, eu_df
 
-    # lastly, we do a clustering of nearby points to try to merge duplicates, 
-    # we keep the geometry of the point with most filled attributes and 
-    # we sum the population served and the wwtp area if they exist
+    # Finally, cluster nearby points into single facilities while preserving the
+    # richest attribute record and aggregating key numeric fields.
     none_geo_df = merged_df[merged_df.geometry.isna()].reset_index(drop=True)
     merged_df   = merged_df[merged_df.geometry.notna()].reset_index(drop=True)
 
@@ -197,11 +197,6 @@ def main():
     merged_df = gpd.GeoDataFrame(pd.concat([merged_df, none_geo_df], axis=0, ignore_index=True), crs=4326, geometry='geometry')
     merged_df['idx'] = range(0, len(merged_df))
 
-    """     
-    merged_df = merged_df[
-    merged_df.geometry.notna() & merged_df.is_valid].reset_index(drop=True) 
-    """
-    
     if "FID" in merged_df:
         merged_df = merged_df.drop(columns=['FID'], errors='ignore')
     if "fid" in merged_df:

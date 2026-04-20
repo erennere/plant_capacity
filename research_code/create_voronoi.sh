@@ -47,6 +47,13 @@ export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
 export MKL_NUM_THREADS=$OMP_NUM_THREADS
 export NUMEXPR_NUM_THREADS=$OMP_NUM_THREADS
 
+# Parse optional config override arguments
+LEVEL="${1:-}"
+VERSION="${2:-}"
+BUFFER="${3:-}"
+WEIGHT_METHOD="${4:-}"
+IS_MULTIPLICATIVE="${5:-}"
+
 # Determine execution mode: environment default + config override
 # Defaults: array on HPC, sequential on local
 if [[ -n "$SLURM_JOB_ID" ]]; then
@@ -55,9 +62,17 @@ else
     DEFAULT_MODE="sequential"
 fi
 
-# FIX: Robust extraction of the mode value from config.yaml
-# This removes comments, handles the 'execution:' block specifically, and strips quotes.
-MODE=$(sed -n '/execution:/,/mode:/p' config.yaml | grep "mode:" | sed 's/#.*//' | awk -F: '{print $2}' | tr -d ' "' | tr -d "'")
+# Read execution.mode from config.yaml using Python so YAML comments and quoting
+# do not affect parsing.
+MODE=$("${PYTHON_CMD}" - <<'PY'
+import pathlib
+import yaml
+
+cfg = yaml.safe_load(pathlib.Path("config.yaml").read_text()) or {}
+execution = cfg.get("execution") or {}
+print(execution.get("mode", ""))
+PY
+)
 MODE=${MODE:-$DEFAULT_MODE}
 
 log "Execution mode: ${MODE}"
@@ -67,7 +82,7 @@ if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
     APPROACHES=('0' '1a' '1b' '1c' '1d' '2' '3a' '3b' '3c' '3d' '4' '5')
     APPROACH="${APPROACHES[$SLURM_ARRAY_TASK_ID]}"
     log "Running approach ${APPROACH} in array mode (task ${SLURM_ARRAY_TASK_ID})"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
     if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
@@ -75,7 +90,7 @@ elif [[ "$MODE" == "sequential" ]]; then
         exit 0
     fi
     log "Running all approaches in sequential mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run multiple approaches concurrently on different CPUs
     log "Running all approaches in parallel mode"
@@ -85,7 +100,7 @@ elif [[ "$MODE" == "parallel" ]]; then
     for APPROACH in "${APPROACHES[@]}"; do
         log "Launching approach ${APPROACH} in background"
         # Launch approach in background
-        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log" &
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log" &
     done
     
     # Wait for all background jobs to complete

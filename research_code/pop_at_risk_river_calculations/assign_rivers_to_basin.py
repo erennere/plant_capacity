@@ -2,7 +2,8 @@
 
 The script spatially intersects river lines with watershed polygons, resolves
 ambiguous line-to-polygon matches by longest overlap, and writes enriched river
-features to the configured output path.
+features to the configured output path. It expects HydroRIVERS-style river IDs
+(`HYRIV_ID`) and HydroBASINS basin IDs (`HYBAS_ID`).
 """
 
 import os
@@ -13,9 +14,9 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -97,7 +98,28 @@ def extract_first_digit(df, source_col, new_col='first_digit'):
     return df
 
 def orchestrate_intersections(hybas_gdf, rivers_gdf, hybas_col, hyshed_col, new_col, max_workers=2):
-    """Run per-region basin assignment in parallel and concatenate results."""
+    """Run per-region basin assignment in parallel and concatenate results.
+
+    Parameters
+    ----------
+    hybas_gdf : geopandas.GeoDataFrame
+        Watershed polygons.
+    rivers_gdf : geopandas.GeoDataFrame
+        River segments to enrich with basin IDs.
+    hybas_col : str
+        Basin identifier column in ``hybas_gdf``.
+    hyshed_col : str
+        River identifier column used to derive the grouping region.
+    new_col : str
+        Temporary grouping column created from the leading identifier digit.
+    max_workers : int, default=2
+        Maximum number of worker processes.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        River segments with assigned basin IDs.
+    """
     # 1. Extract digits
     rivers_gdf = extract_first_digit(rivers_gdf, hyshed_col, new_col)
     hybas_gdf = extract_first_digit(hybas_gdf, hybas_col, new_col)
@@ -136,9 +158,15 @@ def orchestrate_intersections(hybas_gdf, rivers_gdf, hybas_col, hyshed_col, new_
     return rivers_gdf
 
 def main():
-    """Load config, assign basin IDs to rivers, and write output GeoPackage."""
+    """Load config, assign basin IDs to rivers, and write output GeoPackage.
+
+    CLI usage:
+        python -m ...assign_rivers_to_basin <max_workers> [level] [version] [buffer] [weight_method] [is_multiplicative]
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    
+    overrides = parse_config_overrides(start_index=2)
+    cfg = load_config(**overrides)
 
     hyshed_col = 'HYRIV_ID'
     hybas_col = 'HYBAS_ID'

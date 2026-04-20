@@ -1,3 +1,9 @@
+"""Aggregate population-at-risk outputs onto web-map tiles.
+
+The script assigns impact polygons to XYZ tiles, intersects them with country
+metadata and raster-derived population sums, and exports a tiled summary layer.
+"""
+
 import os
 from glob import glob
 import logging
@@ -10,11 +16,11 @@ import mercantile
 try:
     from ..add_pop import intersect_all_files
     from ..create_voronoi import duckdb_intersect
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
     from research_code.add_pop import intersect_all_files
     from research_code.create_voronoi import duckdb_intersect
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 # Configure logging
 logging.basicConfig(
@@ -88,12 +94,14 @@ def find_tiles_in_countries(countries_gdf, zoom_level, max_workers=4):
         return pd.DataFrame(columns=['tile', 'geometry', 'ISO_2'])
     
 def assign_tile_to_df_worker(df, zoom_level):
+    """Assign one dataframe chunk to intersecting tiles and clip each row to tile bounds."""
     df['tile'] = df['geometry'].apply(lambda geom: finding_tiles(geom, zoom_level))
     df = df.explode('tile', ignore_index=True)
     df['geometry'] = df.apply(lambda row: row['geometry'].intersection(find_bbox(row['tile'])) if pd.notna(row['tile']) else row['geometry'], axis=1)
     return df
     
 def assign_tile_to_df(df, zoom_level, max_workers=4):
+    """Assign all rows to tiles in parallel and concatenate the exploded chunks."""
     if df.empty:
         return df
 
@@ -107,6 +115,7 @@ def assign_tile_to_df(df, zoom_level, max_workers=4):
     return pd.concat(results, ignore_index=True)
 
 def group_tile_population_sums(df):
+    """Aggregate all zonal-sum columns to one row per tile."""
     zonal_sum_cols = [col for col in df.columns if col.endswith('_zonal_sum')]
     if 'tile' not in df.columns or not zonal_sum_cols:
         return df
@@ -115,12 +124,14 @@ def group_tile_population_sums(df):
     return grouped
 
 def rename_cols(df, radius):
+    """Prefix non-geometry result columns with the source impact radius."""
     return df.rename({col: f'{radius}_{col}' for col in df.columns if col not in ['tile', 'geometry']}, axis=1) 
 
 def main():
+    """Load impact polygons, tile them, attach population sums, and export parquet."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     zoom_level = int(cfg['zoom_level'])
     max_workers = 64
     tif_dir = cfg['paths']['pop_tif_dir']

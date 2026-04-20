@@ -1,8 +1,7 @@
-"""
-This script performs a comparative analysis of wastewater
-treatment plant (WWTP) data across different years using two approaches:
-    - Normalized Difference Index (NDI) and 
-    - a population-based comparison(HydroWaste QUAL_POP = 1 which comes from governmental agencies).
+"""Compare project population estimates against HydroWaste reference values.
+
+The script builds yearly comparison metrics for verification subsets and saves
+histogram panels for both normalized-difference and multiplicative views.
 """
 import os
 import re
@@ -12,17 +11,19 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 
 def ndvi(df, col1, col2, new_col):
+    """Compute a normalized difference index between two numeric columns."""
     df = df.copy()
     df[new_col] = (df[col1] - df[col2]) / (df[col1] + df[col2])
     return df
 
 def get_approach(filename):
+    """Extract the approach identifier encoded in an output filename."""
     result = None
     match = re.search(r'_appr_([^_]+)_', filename)
     if match:
@@ -30,11 +31,13 @@ def get_approach(filename):
     return result
 
 def multiples(df, col1, col2, new_col):
+    """Compute the multiplicative comparison ratio between two columns."""
     df = df.copy()
     df[new_col] = (df[col1]-df[col2])/df[col2] + 1
     return df
 
 def replace_inf(df, col):
+    """Replace infinite values in one column with NaN for plotting safety."""
     df = df.copy()
     df[col] = df[col].replace([np.inf, -np.inf], np.nan)
     return df
@@ -42,6 +45,11 @@ def replace_inf(df, col):
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
                         ylabel='N_WWTPs', xlabel=None, bins=100, lower_quantile=0.01, upper_quantile=0.95,
                         fontsize=26, small_fontsize=18):
+    """Plot a grid of histograms for multiple year-specific comparison columns.
+
+    Quantile clipping is applied per column before plotting so extreme outliers
+    do not dominate the axis range.
+    """
     fig, axes = plt.subplots(2, 5, figsize=(15, 6))
 
     pastel_colors = sns.color_palette("pastel", n_colors=len(my_dict))
@@ -100,6 +108,23 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
     plt.close(fig)
 
 def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='POP_SERVED'):
+    """Compute HydroWaste comparison metrics for one verification file.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Verification subset to analyse.
+    approach : str | None
+        Approach identifier parsed from the file name.
+    plot_args : dict
+        Keyword arguments forwarded to ``composite_histogram``.
+    output_dir : str
+        Directory where plot images are written.
+    filename : str
+        Source verification filename.
+    pop_col : str, default='POP_SERVED'
+        Population reference column used for comparisons.
+    """
     years_and_cols = dict(sorted({int(col.split('_')[0]): col for col in gdf.columns if col.endswith('_zonal_sum')}.items()))
     ndi_dict = {}
     HW_comp_dict = {}
@@ -151,11 +176,19 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
                         upper_quantile=upper_quantile_hw_comp, **plot_args)
     
 def main():
+    """Load verification files and export HydroWaste comparison histograms.
+
+    Returns
+    -------
+    None
+        The function iterates over configured verification files and writes the
+        generated comparison plots to disk.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
-    globals().update(cfg)
-    ver_dir = paths['verification_dir']
-    plots_dir = paths['hw_plots_dir']
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
+    ver_dir = cfg['paths']['verification_dir']
+    plots_dir = cfg['paths']['hw_plots_dir']
     pop_filepaths = [os.path.join(ver_dir, f) for f in os.listdir(ver_dir) if f.endswith('.gpkg')]
     plot_args = {
     'dpi' : 300,

@@ -1,3 +1,9 @@
+"""Build an interactive Folium map summarizing WWTP mix and served population.
+
+The map combines a choropleth, Voronoi polygon tooltips, and country-level pie
+markers to provide a lightweight interactive overview for communication outputs.
+"""
+
 import os
 import numpy as np
 import geopandas as gpd
@@ -6,17 +12,15 @@ import folium
 from branca.element import Template, MacroElement
 import math
 
-from pipelines import create_output_paths
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.pipelines import create_pop_output_paths
 
-# --- 1. CORE LOGIC ---
-
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
+    """Aggregate per-facility metrics to country-level totals for mapping."""
     gdf = gdf.copy()
     agg_dict = {f"{agg_column}_sum": "sum"}
     if is_pop:
@@ -34,16 +38,24 @@ def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None
     return aggregated
 
 def calculate_size(value, min_value, max_value, min_size, max_size):
+    """Map a numeric value to a marker size within a configured range."""
     if value <= 0: return min_size
     return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
 
 def get_pie_svg(res_vals, ind_vals, size_px):
+    """Return an inline SVG donut chart for one country marker.
+
+    The left semicircle visualizes residential shares and the right semicircle
+    visualizes industrial shares.
+    """
     colors = ['#3182bd', '#9ecae1', '#e6550d', '#fdae6b'] 
     
     def polar_to_cartesian(cx, cy, r, angle_deg):
+        """Convert polar coordinates on the marker circle into SVG coordinates."""
         return cx + r * math.cos(math.radians(angle_deg)), cy + r * math.sin(math.radians(angle_deg))
     
     def sector_path(start_deg, end_deg, color):
+        """Build an SVG path for one donut-chart sector."""
         if abs(end_deg - start_deg) <= 0.1: return ""
         x1, y1 = polar_to_cartesian(50, 50, 45, start_deg)
         x2, y2 = polar_to_cartesian(50, 50, 45, end_deg)
@@ -59,11 +71,11 @@ def get_pie_svg(res_vals, ind_vals, size_px):
         <circle cx="50" cy="50" r="18" fill="white" />
     </svg>'''
 
-# --- 2. MAIN EXECUTION ---
-
 def main():
+    """Assemble the interactive served-population and WWTP-type overview map."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
 
     # Path Setup
     approach = cfg['figures']['approach']

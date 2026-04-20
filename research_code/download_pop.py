@@ -36,12 +36,13 @@ import pycountry
 import logging
 try:
     from .create_voronoi import estimate_utm_crs
-    from .starter import load_config
+    from .starter import load_config, parse_config_overrides
 except ImportError:  # Support running as a top-level script
     from create_voronoi import estimate_utm_crs
-    from starter import load_config
+    from starter import load_config, parse_config_overrides
 
 def country_isos():
+    """Build ISO-code lookup dictionaries used by the download helpers."""
     alpha_3_to_2 = {}
     alpha_2_to_3 = {}
     alpha_3_to_names = {}
@@ -84,13 +85,15 @@ def add_country_url(country_urls, country, url):
         country_urls[country] = [url]
 
 def get_urls_from_hdx():
+    """Fetch population URLs from HDX for legacy workflows.
+
+    This helper is not used by the default `main()` workflow, which currently
+    builds WorldPop URLs directly in `get_urls()`. It is retained as a fallback
+    for cases where HDX-hosted artifacts need to be revisited manually.
+    """
     from hdx.utilities.easy_logging import setup_logging
     from hdx.api.configuration import Configuration
     from hdx.data.dataset import Dataset
-    """
-    Fetch population URLs from HDX (Humanitarian Data Exchange) API.
-    Note: Currently not used in main workflow, but kept for future reference.
-    """
     setup_logging()
     Configuration.create(hdx_site="prod", user_agent="HeiGIT", hdx_read_only=True)
     country_set = set()
@@ -197,6 +200,7 @@ def get_urls():
     return country_urls
 
 def download_file(url, output_path):
+    """Stream a remote file to disk using an adaptive chunk size."""
     try:
         with requests.get(url, stream=True) as response:
             response.raise_for_status()
@@ -324,18 +328,21 @@ def find_files(folder):
     return result, True
     
 def rasterize_csv(df, output_path, res=30):
-    """Rasterize point-based population CSV to GeoTIFF.
-    
-    Converts point locations with population values to a raster grid.
-    Projects from lat/lon (EPSG:4326) to UTM and back to ensure accuracy.
-    
-    Args:
-        df: DataFrame with latitude, longitude, and population columns
-        output_path: Path to save output GeoTIFF
-        res: Raster resolution in meters (default 30)
-        
-    Returns:
-        output_path if successful, None if required columns missing
+    """Rasterize a point-based population CSV into a GeoTIFF.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Table containing latitude, longitude, and population columns.
+    output_path : str
+        Path of the GeoTIFF to create.
+    res : int | float, default=30
+        Target raster resolution in meters.
+
+    Returns
+    -------
+    str | None
+        Output path when rasterization succeeds, otherwise ``None``.
     """
     df.columns = [c.lower() for c in df.columns]
 
@@ -396,17 +403,25 @@ def rasterize_csv(df, output_path, res=30):
     return output_path
 
 def resample_raster(src, target_transform, target_shape, target_crs, resampling_method=Resampling.nearest):
-    """Resample raster to match target transform and shape.
-    
-    Args:
-        src: Rasterio source object
-        target_transform: Target affine transform
-        target_shape: Target (height, width) shape
-        target_crs: Target coordinate reference system
-        resampling_method: Resampling algorithm (default: nearest neighbor)
-        
-    Returns:
-        Resampled data array
+    """Resample a raster band to a target grid definition.
+
+    Parameters
+    ----------
+    src : rasterio.io.DatasetReader
+        Open raster dataset to resample.
+    target_transform : affine.Affine
+        Target affine transform.
+    target_shape : tuple[int, int]
+        Output ``(height, width)`` shape.
+    target_crs : rasterio.crs.CRS | str
+        Coordinate reference system of the output grid.
+    resampling_method : rasterio.warp.Resampling, default=Resampling.nearest
+        Resampling algorithm to use.
+
+    Returns
+    -------
+    numpy.ndarray
+        Resampled band array.
     """
     data = src.read(1)  # Read the first band (assuming 1 band)
     resampled_data = np.zeros(target_shape, dtype=data.dtype)
@@ -423,13 +438,14 @@ def resample_raster(src, target_transform, target_shape, target_crs, resampling_
     return resampled_data
 
 def mosaic_large_rasters(raster_files, output_path):
-    """Mosaic multiple raster tiles into single output file.
-    
-    Handles rasters with different resolutions by resampling to common grid.
-    
-    Args:
-        raster_files: List of raster file paths
-        output_path: Path to save mosaicked output
+    """Mosaic one or more raster tiles into a single output file.
+
+    Parameters
+    ----------
+    raster_files : list[str]
+        Raster files to combine.
+    output_path : str
+        Destination path of the merged raster.
     """
     if len(raster_files) == 1:
         shutil.copy(raster_files[0], output_path)
@@ -499,13 +515,18 @@ def mosaic_large_rasters(raster_files, output_path):
         mosaic.write(mosaic_data)
 
 def process_single_country(country_urls, country, res=30, data_dir='../data/population'):
-    """Download, process, and mosaic population data for a single country.
-    
-    Args:
-        country_urls: Dictionary mapping countries to lists of URLs
-        country: ISO3 country code
-        res: Raster resolution in meters (default 30)
-        data_dir: Base directory for data storage
+    """Download, prepare, and mosaic population data for one country.
+
+    Parameters
+    ----------
+    country_urls : dict[str, list[str]]
+        Mapping from ISO-3 country codes to source URLs.
+    country : str
+        ISO-3 country code to process.
+    res : int | float, default=30
+        Rasterization resolution used for CSV sources.
+    data_dir : str, default='../data/population'
+        Base directory for downloaded and processed files.
     """
     extract_folder = download_save_and_unzip_pops(country_urls, country, data_dir)
     if extract_folder is None:
@@ -521,9 +542,6 @@ def process_single_country(country_urls, country, res=30, data_dir='../data/popu
             os.makedirs(output_path, exist_ok=True)
 
     merged_path = os.path.join(merged_path, f'pop_{country}_merged.tif')
-    #if os.path.exists(merged_path):
-    #    return 
-    
     if if_tif:
         mosaic_large_rasters(result, merged_path)
     else:
@@ -545,13 +563,18 @@ def process_single_country(country_urls, country, res=30, data_dir='../data/popu
             logging.error(f'No successfully rasterized files for {country}')
 
 def process_all_countries(country_urls, res=30, max_workers=16, data_dir='../data/population'):
-    """Process population data for all countries in parallel.
-    
-    Args:
-        country_urls: Dictionary mapping countries to lists of URLs
-        res: Raster resolution in meters (default 30)
-        max_workers: Number of parallel workers (default 16)
-        data_dir: Base directory for data storage
+    """Process population data for all configured countries in parallel.
+
+    Parameters
+    ----------
+    country_urls : dict[str, list[str]]
+        Mapping from ISO-3 codes to source URLs.
+    res : int | float, default=30
+        Rasterization resolution used for CSV sources.
+    max_workers : int, default=16
+        Maximum number of worker processes.
+    data_dir : str, default='../data/population'
+        Base directory for downloaded and processed files.
     """
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_single_country, country_urls, country, res, data_dir) 
@@ -565,11 +588,21 @@ def process_all_countries(country_urls, res=30, max_workers=16, data_dir='../dat
                 logging.error(f'Error processing country: {err}')
 
 def main(res=30, max_workers=8):
-    """Main entry point for population data processing.
-    
-    Args:
-        res: Raster resolution in meters (default 30)
-        max_workers: Number of parallel workers (default 8)
+    """Load config, collect download URLs, and run the population pipeline.
+
+    Parameters
+    ----------
+    res : int | float, default=30
+        Rasterization resolution used when the function is called directly.
+    max_workers : int, default=8
+        Worker count used when the function is called directly.
+
+    Notes
+    -----
+    The CLI entrypoint accepts optional config overrides in the form
+    ``[level] [version] [buffer] [weight_method] [is_multiplicative]``.
+    Resolution and worker count remain direct Python-call parameters unless
+    separate CLI support is added.
     """
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     logging.basicConfig(
@@ -577,7 +610,8 @@ def main(res=30, max_workers=8):
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     data_dir = os.path.abspath(cfg["paths"]["pop_dir"])
     
     logging.info('Retrieving population data URLs')

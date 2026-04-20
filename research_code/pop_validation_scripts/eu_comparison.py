@@ -1,9 +1,8 @@
-"""
-This script performs a comparative analysis of wastewater treatment plant (WWTP) data across different years using two approaches: 
-Normalized Difference Index (NDI) and a population-based comparison (HW_comp, EU data, The Urban Waste Water Treatment Directive (UWWTD)). 
-It generates composite histograms for both approaches, visualizing the distribution of NDI and HW_comp values for each year.
-The script also includes functionality to assign geometries to their nearest neighbors within a specified threshold, ensuring accurate spatial comparisons.
-The results are saved as high-resolution images for further interpretation and reporting.
+"""Compare WWTP-derived served-population estimates against the EU reference layer.
+
+The script joins project outputs to the UWWTD reference dataset, computes both
+normalized difference and multiplicative comparison metrics, and exports yearly
+histogram panels for verification subsets.
 """
 import os
 import pandas as pd
@@ -14,16 +13,17 @@ import numpy as np
 
 try:
     from .hw_comparison import ndvi, multiples, replace_inf, get_approach
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..data_merge.merge_seg_results import assign_to_nearest
 except ImportError:
     from research_code.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf, get_approach
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.data_merge.merge_seg_results import assign_to_nearest
 
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
                         ylabel='N_WWTPs', xlabel=None, bins=100, lower_quantile=0.01, upper_quantile=0.95,
                         fontsize=26, small_fontsize=18):
+    """Plot a grid of histograms for EU-reference comparison metrics by year."""
     fig, axes = plt.subplots(2, 5, figsize=(15, 6))
 
     pastel_colors = sns.color_palette("pastel", n_colors=len(my_dict))
@@ -82,6 +82,23 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
     plt.close(fig)
 
 def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='POP_SERVED'):
+    """Compute EU comparison metrics for one verification file and save plots.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Verification subset to analyse.
+    approach : str | None
+        Approach identifier parsed from the file name.
+    plot_args : dict
+        Keyword arguments forwarded to ``composite_histogram``.
+    output_dir : str
+        Directory where plot images are written.
+    filename : str
+        Source verification filename.
+    pop_col : str, default='POP_SERVED'
+        Population reference column used for comparisons.
+    """
     years_and_cols = dict(sorted({int(col.split('_')[0]): col for col in gdf.columns if col.endswith('_zonal_sum')}.items()))
     ndi_dict = {}
     HW_comp_dict = {}
@@ -133,11 +150,19 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
                         upper_quantile=upper_quantile_hw_comp, **plot_args)
 
 def main():
+    """Load verification files, align them to the EU reference layer, and plot comparisons.
+
+    Returns
+    -------
+    None
+        The function iterates over configured verification files and writes the
+        generated comparison plots to disk.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
-    globals().update(cfg)
-    ver_dir = paths['verification_dir']
-    plots_dir = paths['eu_plots_dir']
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
+    ver_dir = cfg['paths']['verification_dir']
+    plots_dir = cfg['paths']['eu_plots_dir']
     pop_filepaths = [os.path.join(ver_dir, f) for f in os.listdir(ver_dir) if f.endswith('.gpkg')]
     plot_args = {
     'dpi' : 300,
@@ -151,7 +176,7 @@ def main():
     threshold = 250
     utm = 32634 
     pop_col = 'POP_SERVED_EU'
-    ref_filepath = paths['eu_ref_filepath']
+    ref_filepath = cfg['paths']['eu_ref_filepath']
     organic_m_column = 'uwwCapacity'
 
     ref_file = gpd.read_file(ref_filepath)

@@ -10,7 +10,7 @@ import re
 import geopandas as gpd
 import pandas as pd
 
-from research_code.starter import load_config
+from research_code.starter import load_config, parse_config_overrides
 
 def decode_gen_text(text):
     """Parse model output text into category number/name and justification.
@@ -55,9 +55,16 @@ def parse_idx_from_image_name(image_name):
     return int(match.group(1)) if match else None
 
 def main():
-    """Load annotations, merge parsed labels onto WWTP points, and overwrite output."""
+    """Load annotations, merge parsed labels onto WWTP points, and overwrite output.
+
+    Returns
+    -------
+    None
+        The merged geospatial output is written back to the configured dataset.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
 
     image_input_dir = cfg['paths']['annotated_images_output_dir']
     filepath = cfg['paths']['annotations_results_filepath']

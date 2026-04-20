@@ -30,13 +30,13 @@ from shapely.ops import unary_union
 
 try:
     from ..add_pop import get_iso_codes
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..create_voronoi import download_overture_maps, duckdb_intersect
     from ..pipelines import create_pop_output_paths
     from .find_pop_in_danger_pop import find_bbox, finding_tiles
 except ImportError:
     from research_code.add_pop import get_iso_codes
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.create_voronoi import download_overture_maps, duckdb_intersect
     from research_code.pipelines import create_pop_output_paths
     from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import find_bbox, finding_tiles
@@ -87,91 +87,6 @@ def geotiff_exists_and_valid(path):
     except Exception:
         return False
     
-""" def extract_worldpop_optimized_v2(raster_path, exclude_gdf):
-    temp_polygons = []
-    temp_sums = []
-
-    with rasterio.open(raster_path) as src:
-        nodata = src.nodata
-        crs = src.crs
-        transform = src.transform
-        
-        for _, window in src.block_windows(1):
-            # 1. Read and Clean (Requirement 1 & 2)
-            data = src.read(1, window=window)
-            if nodata is not None:
-                data[np.isclose(data, nodata)] = 0
-            data = np.nan_to_num(data, nan=0)
-            data[data < 0] = 0
-            data = data.astype(np.int64)
-
-            # 2. Masking (Requirement 3)
-            window_transform = rasterio.windows.transform(window, transform)
-            burn_mask = geometry_mask(
-                exclude_gdf.geometry,
-                out_shape=(window.height, window.width),
-                transform=window_transform,
-                invert=True
-            )
-            data[burn_mask] = 0
-            
-            # 3. Polygonize and Sum (Requirement 5)
-            # We use an internal labeling step ONLY for the current window 
-            # to sum the population before creating the polygon.
-            pop_mask = (data > 0)
-            if not np.any(pop_mask):
-                continue
-
-            # This generates polygons where each 'value' is the population of that cell
-            # But we want the sum of the whole connected region in this block.
-            labeled_array, num_features = label(pop_mask)
-            
-            for i in range(1, num_features + 1):
-                feature_mask = (labeled_array == i)
-                # Calculate sum for this specific cluster in this block
-                cluster_sum = np.sum(data[feature_mask])
-                
-                # Convert this specific cluster to a polygon
-                # We use a dummy constant (1) for 'shapes' because we already have the mask
-                shape_gen = shapes(feature_mask.astype(np.uint8), mask=feature_mask, transform=window_transform)
-                for geom, _ in shape_gen:
-                    temp_polygons.append(shape(geom))
-                    temp_sums.append(cluster_sum)
-
-    if not temp_polygons:
-        return gpd.GeoDataFrame(columns=['geometry', 'pop_sum'], crs=crs)
-
-    # 4. Dissolve and Aggregate
-    # This is the "Big Data" step. We dissolve geometries and SUM their pop_sum tags.
-    gdf = gpd.GeoDataFrame({'pop_sum': temp_sums, 'geometry': temp_polygons}, crs=crs)
-    
-    # We use 'cluster' logic to group touching polygons
-    # spatial_index makes this fast even for Russia
-    sindex = gdf.sindex
-    # Grouping polygons that touch
-    gdf['group'] = -1
-    group_id = 0
-    
-    # This is a high-speed way to find which block-fragments belong together
-    for i in range(len(gdf)):
-        if gdf.iloc[i]['group'] == -1:
-            possible_matches = list(sindex.intersection(gdf.iloc[i].geometry.bounds))
-            precise_matches = gdf.iloc[possible_matches][gdf.iloc[possible_matches].intersects(gdf.iloc[i].geometry)]
-            
-            # Assign all connected pieces the same group ID
-            existing_groups = precise_matches['group'][precise_matches['group'] != -1]
-            if not existing_groups.empty:
-                this_group = existing_groups.iloc[0]
-            else:
-                this_group = group_id
-                group_id += 1
-            
-            gdf.loc[precise_matches.index, 'group'] = this_group
-
-    # Final Dissolve: Merge geometries and SUM the population
-    final_gdf = gdf.dissolve(by='group', aggfunc={'pop_sum': 'sum'})
-    return final_gdf.reset_index(drop=True) """
-
 def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9, zoom_level=8):
     """
     Extracts population islands from WorldPop rasters with strict RAM management.
@@ -192,6 +107,12 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
     -------
     geopandas.GeoDataFrame | None
         Extracted islands with basin metadata and zonal statistics.
+
+    Notes
+    -----
+    This chunked implementation is the maintained extraction path. Earlier
+    experimental versions were removed to avoid ambiguity about which logic is
+    currently in use.
     """
     geom_registry = {}
     country_code = os.path.basename(raster_path)
@@ -397,153 +318,22 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
         logger.exception("[%s] CRITICAL FAILURE: %s", country_code, str(e))
         return None
     
-""" def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9):
-    geom_registry = {}
-    country_code = os.path.basename(raster_path)
-    
-    try:
-        with rasterio.open(raster_path) as src:
-            crs = src.crs
-            res = src.res[0]
-            transform = src.transform
-            
-            logging.warning(f"[{country_code}] Aligning CRS...")
-            hybas_gdf = hybas_gdf.to_crs(crs)
-            exclude_gdf = exclude_gdf.to_crs(crs)
-            
-            # Using list(src.block_windows) consumes RAM, so we just iterate
-            for i, (index, window) in enumerate(src.block_windows(1)):
-                if i % 500 == 0:
-                    logging.warning(f"[{country_code}] Window {i} processing...")
-
-                w_bounds = rasterio.windows.bounds(window, transform)
-                w_transform = rasterio.windows.transform(window, transform)
-                w_poly_boundary = box(*w_bounds).boundary
-                
-                possible_idx = list(hybas_gdf.sindex.intersection(w_bounds))
-                if not possible_idx: continue
-
-                data = src.read(1, window=window)
-                binary_data = (np.nan_to_num(data) > 0).astype(np.uint8)
-                del data 
-
-                rel_excl = exclude_gdf.iloc[list(exclude_gdf.sindex.intersection(w_bounds))]
-                if not rel_excl.empty:
-                    excl_mask = geometry_mask(rel_excl.geometry, (window.height, window.width), 
-                                             w_transform, invert=True)
-                    binary_data[excl_mask] = 0
-
-                for idx in possible_idx:
-                    row = hybas_gdf.iloc[idx]
-                    h_id = row.get('HYBAS_ID')
-                    
-                    h_mask = geometry_mask([row.geometry], (window.height, window.width), 
-                                           w_transform, invert=False)
-                    
-                    target_binary = binary_data.copy()
-                    target_binary[h_mask] = 0
-                    
-                    if not np.any(target_binary > 0): continue
-
-                    shape_gen = shapes(target_binary, mask=target_binary, 
-                                       transform=w_transform, connectivity=8)
-
-                    window_shards = []
-                    for geom, _ in shape_gen:
-                        poly = shape(geom)
-                        shard_pixels = round(poly.area / (res * res))
-                        if shard_pixels < min_pixels and not poly.intersects(w_poly_boundary):
-                            continue
-                        window_shards.append(poly.buffer(0))
-
-                    if not window_shards: continue
-
-                    if h_id not in geom_registry:
-                        geom_registry[h_id] = {
-                            'geom': unary_union(window_shards),
-                            'meta': {k: row.get(k) for k in ['NEXT_DOWN', 'NEXT_SINK', 'MAIN_BAS']}
-                        }
-                    else:
-                        geom_registry[h_id]['geom'] = unary_union([geom_registry[h_id]['geom']] + window_shards)
-
-                del binary_data
-                gc.collect()
-
-        # STEP 6: Exploding (Memory-Sensitive)
-        logging.warning(f"[{country_code}] Exploding {len(geom_registry)} Basins...")
-        final_rows = []
-        for h_id, content in geom_registry.items():
-            merged = content['geom']
-            islands = merged.geoms if hasattr(merged, 'geoms') else [merged]
-            for island in islands:
-                if not island.is_empty:
-                    final_rows.append({'geometry': island, 'HYBAS_ID': h_id, **content['meta']})
-        
-        # KEY: Clear registry before making GDF
-        del geom_registry
-        gc.collect()
-        
-        final_gdf = gpd.GeoDataFrame(final_rows, crs=crs)
-        del final_rows
-        
-        logging.warning(f"[{country_code}] Total islands: {len(final_gdf)}")
-
-        # STEP 7: Chunked Zonal Stats
-        sums, counts = [], []
-        chunk_size = 100000 
-        
-        for start_idx in range(0, len(final_gdf), chunk_size):
-            end_idx = min(start_idx + chunk_size, len(final_gdf))
-            logging.warning(f"[{country_code}] Stats chunk: {start_idx}-{end_idx}")
-            
-            # Using gen_zonal_stats on just the geometry series is the lightest possible call
-            stats = gen_zonal_stats(final_gdf.geometry.iloc[start_idx:end_idx], 
-                                   raster_path, stats=["sum", "count"], nodata=0)
-            
-            for r in stats:
-                sums.append(int(np.round(r['sum'] or 0)))
-                counts.append(int(r['count'] or 0))
-            
-            del stats
-            gc.collect()
-        
-        final_gdf['pop_sum'] = sums
-        final_gdf['pixel_count'] = counts
-        del sums, counts
-
-        # STEP 8: Final Cleanup
-        final_gdf = final_gdf[
-            (final_gdf['pop_sum'] > 0) & (final_gdf['pixel_count'] >= min_pixels)
-        ].copy().reset_index(drop=True)
-        
-        final_gdf['pop_sum'] = final_gdf['pop_sum'].astype(np.int64)
-        final_gdf['pixel_count'] = final_gdf['pixel_count'].astype(np.int64)
-        
-        logging.warning(f"[{country_code}] SUCCESS. Saved {len(final_gdf)} islands.")
-        return final_gdf
-
-    except Exception as e:
-        logging.warning(f"[{country_code}] FAILED: {str(e)}")
-        return None """
-
 def polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path):
-    """
-    Optimized for continental-scale rasters (e.g., WorldPop Russia 100m).
-    Uses spatial indexing to filter polygons per window.
+    """Write a signed raster that is positive inside served polygons and negative outside.
 
     Parameters
     ----------
     raster_path : str
-        Input population raster.
+        Input population raster path.
     polygons_gdf : geopandas.GeoDataFrame
-        Served area polygons used to assign positive signs.
+        Served-area polygons used to determine the sign mask.
     output_path : str
-        Output signed raster path.
+        Output raster path.
 
     Returns
     -------
     tuple[str, int | None, int | None]
-        Output path, positive sum, negative sum.
+        Output path, positive sum, and negative sum.
     """
     try:
         # 1. Build a spatial index for the GDF (CRITICAL for speed)
@@ -620,7 +410,7 @@ def polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path):
         return output_path, None, None
 
 def find_the_newest_tif_files(countries, tif_dir):
-    """Map ISO-2 country codes to the newest available TIFF file in country subfolders."""
+    """Map each ISO-2 code to its newest available population TIFF file."""
     alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
     tif_filepaths = {}
     my_dict = {}
@@ -666,7 +456,29 @@ def find_the_newest_tif_files(countries, tif_dir):
     return my_dict
 
 def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, output_path, min_pixels=9, zoom_level=8): 
-    """Process one country raster: create signed raster and extract unserved islands."""
+    """Process one country raster and return signed-raster stats plus extracted islands.
+
+    Parameters
+    ----------
+    raster_path : str
+        Input country raster path.
+    polygons_gdf : geopandas.GeoDataFrame
+        Served-area polygons for the country.
+    watershed_gdf : geopandas.GeoDataFrame
+        Watershed polygons used to aggregate non-served islands.
+    output_path : str
+        Output path for the signed raster.
+    min_pixels : int, default=9
+        Minimum island size retained after extraction.
+    zoom_level : int, default=8
+        Tile zoom level used for non-served island tagging.
+
+    Returns
+    -------
+    tuple
+        Tuple ``(filepath, sum_pos, sum_neg, gdf)`` containing signed-raster
+        statistics and the extracted island GeoDataFrame.
+    """
     filepath, sum_pos, sum_neg = polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path)
     #gdf = extract_worldpop_optimized_v2(raster_path, polygons_gdf)
     gdf = extract_worldpop_universal(raster_path, watershed_gdf, polygons_gdf, min_pixels=min_pixels, zoom_level=zoom_level)
@@ -684,10 +496,25 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
         Dictionary mapping country codes to raster filepaths.
     gdf : geopandas.GeoDataFrame
         GeoDataFrame containing polygons with 'ISO_2' column.
+    watershed_gdf : geopandas.GeoDataFrame
+        Watershed polygons used for island extraction.
     output_dir : str
         Directory where output rasters will be saved.
+    csv_output_filepath : str
+        Output CSV path for per-country population statistics.
+    non_served_outpath : str
+        Output base path for the extracted non-served polygons.
     max_workers : int
         Maximum number of parallel processes.
+    min_pixels : int, default=9
+        Minimum island size retained after extraction.
+    zoom_level : int, default=8
+        Tile zoom level used for non-served island tagging.
+
+    Returns
+    -------
+    dict[str, bool]
+        Mapping from country code to success flag.
     """
     logger.info("Starting orchestration for %s countries", len(tif_dict))
     results = {}
@@ -777,10 +604,15 @@ def parse_args():
     )
     parser.add_argument("job_index", nargs="?", type=int, default=0)
     parser.add_argument("total_jobs", nargs="?", type=int, default=1)
+    parser.add_argument("level", nargs="?", default=None)
+    parser.add_argument("version", nargs="?", default=None)
+    parser.add_argument("buffer", nargs="?", default=None)
+    parser.add_argument("weight_method", nargs="?", default=None)
+    parser.add_argument("is_multiplicative", nargs="?", default=None)
     return parser.parse_args()
 
 def shard_tif_dict(tif_dict, job_index, total_jobs, seed):
-    """Return a deterministic job shard of country rasters for this worker."""
+    """Split the country-to-raster mapping into a deterministic worker shard."""
     if total_jobs < 1:
         raise ValueError(f"total_jobs must be >= 1, got {total_jobs}")
     if job_index < 0 or job_index >= total_jobs:
@@ -792,10 +624,18 @@ def shard_tif_dict(tif_dict, job_index, total_jobs, seed):
     return {country: tif_dict[country] for country in shard_countries}
 
 def main():
-    """Entry point: load configuration, prepare inputs, and run country batch processing."""
+    """Load configuration, prepare inputs, and run country batch processing.
+
+    Returns
+    -------
+    None
+        The function writes signed rasters, summary CSV rows, and non-served
+        polygon outputs for the configured shard.
+    """
     args = parse_args()
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(args=args)
+    cfg = load_config(**overrides)
     max_workers = cfg['annotations']['max_workers']
     seed = int(cfg['annotations']['random_seed'])
     min_pixels = int(cfg['min_pixels'])
@@ -830,7 +670,7 @@ def main():
         if not os.path.exists(cfg['paths']['overture']):
             download_overture_maps(cfg['paths']['overture_s3_url'], cfg['paths']['overture'])
         watershed_gdf = duckdb_intersect(watershed_gdf, cfg['paths']['overture'])
-        watesrhed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
+        watershed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
     
     logger.info("Starting country intersection workflow with max_workers=%s", max_workers)
     orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_tif_dir, csv_output_filepath, non_served_outpath, max_workers, min_pixels=min_pixels, zoom_level=zoom_level)

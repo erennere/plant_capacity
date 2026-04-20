@@ -1,19 +1,19 @@
-"""
-This script identifies watersheds suitable for verification based on the percentage of valid points within each watershed.
-It processes geospatial data, categorizing watersheds into three groups: 
-those chosen for verification, those not chosen for verification, and single-point watersheds. 
-The results are saved as separate GeoPackage files for further analysis.
+"""Split Voronoi outputs into verification, non-verification, and single-site groups.
+
+Watersheds are selected for verification when the share of valid WWTP shapes in a
+basin exceeds the configured `percent_verification` threshold.
 """
 import os
 import pandas as pd
 import numpy as np
 import geopandas as gpd
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS_ID'):
+    """Mark each row with verification flags derived from basin-level validity rates."""
     gdf = gdf.copy()
     gdf['is_single_points'] = (
         gdf.groupby(watershed_col)[watershed_col].transform('size') == 1
@@ -31,16 +31,17 @@ def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS
 
 
 def main():
+    """Split each population output into verification, non-verification, and single-site files."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
-    globals().update(cfg)
-
-    verification_dir = paths['verification_dir']
-    pop_dir = paths['pop_output_dir']
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
+    verification_dir = cfg['paths']['verification_dir']
+    pop_dir = cfg['paths']['pop_output_dir']
+    percent_verification = cfg['percent_verification']
 
     if not os.path.exists(verification_dir):
         os.makedirs(verification_dir, exist_ok=True)
-    filenames = [f for f in os.listdir(pop_dir)]# if particle in f]
+    filenames = [f for f in os.listdir(pop_dir)]
     
     for filename in filenames:
         if '_add_' in filename:

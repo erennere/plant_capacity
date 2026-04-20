@@ -37,6 +37,13 @@ log "Project root directory: ${PROJECT_ROOT}"
 log "Python command: ${PYTHON_CMD}"
 log "Processing with 8 parallel workers"
 
+# Parse optional config override arguments
+LEVEL="${1:-}"
+VERSION="${2:-}"
+BUFFER="${3:-}"
+WEIGHT_METHOD="${4:-}"
+IS_MULTIPLICATIVE="${5:-}"
+
 # Install package in editable mode before running modules
 log "Installing research_code module (editable)"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}"
@@ -59,7 +66,7 @@ log "Python version: $(${PYTHON_CMD} --version 2>&1)"
 log "Starting population data download and processing..."
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

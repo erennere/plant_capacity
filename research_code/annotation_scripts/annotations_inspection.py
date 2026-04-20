@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from research_code.annotation_scripts.merge_annotations import decode_gen_text
-from research_code.starter import load_config
+from research_code.starter import load_config, parse_config_overrides
 
 def plot_category_distribution(df, column='category_name', save_path=None, show=False):
     """Plot category frequency (including missing values) as a bar chart."""
@@ -109,7 +109,8 @@ def organize_files_by_category(df, source_col, category_col, base_dir):
 def main():
     """Run full inspection flow: parse, plot, sample, export, and copy images."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
 
     image_input_dir = cfg['paths']['annotated_images_output_dir']
     image_output_dir = cfg['paths']['annotations_verf_image_outpath_dir']

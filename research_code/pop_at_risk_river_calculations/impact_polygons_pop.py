@@ -17,9 +17,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from shapely.geometry import Polygon
 try:
-    from ..starter import load_config  # Configuration loader from starter module
+    from ..starter import load_config, parse_config_overrides  # Configuration loader from starter module
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -34,8 +34,25 @@ discharge_dict = {}
 def create_dicts(river_gdf, next_col, id_col, main_riv_col, discharge_col, weight_col='weight'):
     """Build global lookup dictionaries used by worker processes.
 
-    Creates dictionaries for downstream topology, projected segment geometries,
-    segment latitudes, and per-basin hierarchical traversal levels.
+    Parameters
+    ----------
+    river_gdf : geopandas.GeoDataFrame
+        River network with topology, geometry, and discharge attributes.
+    next_col : str
+        Column containing downstream segment IDs.
+    id_col : str
+        Column containing current segment IDs.
+    main_riv_col : str
+        Column identifying the basin main stem.
+    discharge_col : str
+        Column containing discharge values.
+    weight_col : str, default='weight'
+        Column containing propagated branch weights.
+
+    Notes
+    -----
+    Missing weights are converted to ``0.0`` before topology dictionaries are
+    built so downstream propagation never receives ``NaN`` branch weights.
     """
     global next_dict, geom_dict, lat_dict, level_dict, discharge_dict
     logger.info("Building topology and hierarchical levels")
@@ -48,7 +65,6 @@ def create_dicts(river_gdf, next_col, id_col, main_riv_col, discharge_col, weigh
     river_gdf[next_col] = river_gdf[next_col].astype(int)
     river_gdf[main_riv_col] = river_gdf[main_riv_col].astype(int)
     
-    # CRITICAL: Replace NaN weights with 0.0 before dictionary conversion
     river_gdf[weight_col] = river_gdf[weight_col].fillna(0.0).astype(float)
 
     # 2. next_dict: {id: (next_id, weight)}
@@ -156,6 +172,36 @@ def calculate_load_ratio(
     least_discharge_cms=0.269,
     load=None
 ):
+    """Convert population or load inputs into a normalized concentration ratio.
+
+    Parameters
+    ----------
+    pop : float | pandas.Series | numpy.ndarray | None
+        Population-equivalent load source used when ``load`` is not provided.
+    dis_av_cms : float | pandas.Series | numpy.ndarray | None
+        River discharge in cubic meters per second.
+    org_per_pop : float, default=60.0
+        Organic load per population equivalent in grams per day.
+    c_limit : float, default=5.0
+        Concentration limit used to normalize the resulting load.
+    least_discharge_cms : float, default=0.269
+        Minimum discharge substituted when the supplied discharge is zero or
+        missing.
+    load : float | pandas.Series | numpy.ndarray | None, default=None
+        Optional precomputed load value. When omitted, load is derived from
+        ``pop`` and ``org_per_pop``.
+
+    Returns
+    -------
+    float | pandas.Series | numpy.ndarray
+        Load ratio normalized by ``c_limit``.
+
+    Notes
+    -----
+    The function supports both vectorized array-like inputs and scalar inputs.
+    Discharge is converted from cubic meters per second to liters per second
+    before the concentration ratio is computed.
+    """
     # convert g/day → mg/s
     org_per_pop = org_per_pop / 86.4
 
@@ -182,9 +228,11 @@ def calculate_load_ratio(
         return load / c_limit
 
 def invert_calculate_load(load_ratio, c_limit=5.0):
+    """Convert a normalized load ratio back into an absolute concentration load."""
     return load_ratio * c_limit
 
 def calculate_radius(load_ratio, impact_radius=1000):
+    """Return the configured plume radius only when the load ratio exceeds one."""
     return impact_radius if load_ratio >=1 else 0.0
 
 def calculate_kt(lat, base_k=0.23, theta=1.047):
@@ -193,9 +241,32 @@ def calculate_kt(lat, base_k=0.23, theta=1.047):
     return base_k * (theta**(temp - 20))
 
 def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0, c_limit=5.0, base_k=0.23, theta=1.047, impact_radii=[1000, 2000]):
-    """
-    Generate one segment plume polygon and exit load for downstream handover.
-    Fixed AxisError by forcing 2D arrays for geometry interpolation.
+    """Generate plume polygons for one river segment and return the exit load.
+
+    Parameters
+    ----------
+    rid : int
+        River segment identifier.
+    lat : float
+        Segment latitude used for decay-rate estimation.
+    start_load_ratio : float | None, default=None
+        Incoming normalized load ratio for the segment.
+    step_m : float, default=100.0
+        Interpolation step in meters.
+    c_limit : float, default=5.0
+        Concentration limit used for normalization.
+    base_k : float, default=0.23
+        Base decay coefficient.
+    theta : float, default=1.047
+        Temperature adjustment factor.
+    impact_radii : list[float], default=[1000, 2000]
+        Plume half-widths to materialize around the segment.
+
+    Returns
+    -------
+    tuple
+        Tuple ``(polygons, exit_load)`` where ``polygons`` is a list of plume
+        polygons or ``None`` when no plume survives the concentration threshold.
     """
     if rid not in next_dict or rid not in geom_dict or rid not in discharge_dict:
         return None, 0.0
@@ -270,9 +341,24 @@ def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0,
     return (polygons, exit_load) if polygons else (None, 0.0)
     
 def create_impact_polygons(pop_chunk, main_riv, nxt_dis_col, model_params=None):
-    """
-    Worker task: Processes EVERY segment in a basin hierarchy from upstream to 
-    downstream to ensure cumulative environmental loads are handed over.
+    """Generate impact polygons for one basin chunk.
+
+    Parameters
+    ----------
+    pop_chunk : geopandas.GeoDataFrame
+        Population features belonging to one basin main stem.
+    main_riv : int
+        Main-river identifier for the basin chunk.
+    nxt_dis_col : str
+        Column containing the downstream segment IDs used as plume targets.
+    model_params : dict | None, default=None
+        Runtime model parameters controlling decay and plume geometry.
+
+    Returns
+    -------
+    dict
+        Mapping from impact radius to a GeoDataFrame-like subset of plume
+        geometries for the chunk.
     """
     global next_dict, discharge_dict
     model_params = model_params or {}
@@ -370,10 +456,26 @@ def parallel_dissolve(subset_df, crs_code):
     return dissolved.to_crs(4326)
 
 def orchestrate_logic(pop_gdf, nxt_dis_col, main_riv_col, max_workers, model_params=None):
-    """
-    1. Parallel Plume Generation (Generator-based)
-    2. Parallel Regional Dissolve (UTM-based)
-    3. Final Global Cleanup (Dissolve overlaps between regions)
+    """Run plume generation, dissolve regional outputs, and assemble final layers.
+
+    Parameters
+    ----------
+    pop_gdf : geopandas.GeoDataFrame
+        Input population features with basin and downstream segment metadata.
+    nxt_dis_col : str
+        Column containing downstream segment IDs.
+    main_riv_col : str
+        Column containing main-river identifiers used for chunking.
+    max_workers : int
+        Maximum number of worker processes.
+    model_params : dict | None, default=None
+        Runtime model parameters controlling decay and plume geometry.
+
+    Returns
+    -------
+    dict | None
+        Mapping from impact radius to final GeoDataFrames, or ``None`` when no
+        polygons are generated.
     """
     total_chunks = pop_gdf[main_riv_col].unique()
     results_list = {}
@@ -474,7 +576,8 @@ def orchestrate_logic(pop_gdf, nxt_dis_col, main_riv_col, max_workers, model_par
 def main():
     """Load inputs, generate impact polygons, and write final output."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=2)
+    cfg = load_config(**overrides)
     model_params = get_runtime_params(cfg)
     logger.info("Using runtime model params: %s", model_params)
     

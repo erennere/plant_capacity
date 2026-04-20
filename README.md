@@ -18,6 +18,7 @@ Top-level files:
 - `pipelines.py`: Shared orchestration helpers used by pipeline stages.
 - `download_pop.py`, `create_voronoi.py`, `add_pop.py`: Main stage scripts.
 - `download_pop.sh`, `create_voronoi.sh`, `add_pop.sh`: Main shell entrypoints.
+- `combine_watersheds.py`, `combine_watersheds.sh`: Watershed archive merge utility.
 
 Subfolders:
 
@@ -36,7 +37,7 @@ Subfolders:
 
 The codebase is packaged as a Python package (`research-code`).
 
-Run commands from the `research_code/` directory.
+Run shell wrappers from the `research_code/` directory.
 
 ```bash
 cd research_code
@@ -80,10 +81,11 @@ Run everything from `research_code/`.
 In practice, the order that matches the current codebase is:
 
 1. Run data merge (`data_merge/combine_locations.sh`)
-2. Run annotation scripts (after data merge, before population download)
-3. Download population and create Voronoi layers, then add population
-4. Run pop-at-risk pipeline (`create_rasters`, then impact stages, then danger-pop stage)
-5. Run figures and validation scripts as needed
+2. Merge watershed archives if you need a refreshed HydroSHEDS basin layer (`combine_watersheds.sh`)
+3. Run annotation scripts (after data merge, before population download)
+4. Download population and create Voronoi layers, then add population
+5. Run pop-at-risk pipeline (`create_rasters`, then impact stages, then danger-pop stage)
+6. Run figures and validation scripts as needed
 
 ### 1) Data merge first (`data_merge/`)
 
@@ -105,7 +107,17 @@ Why there are two merge variants:
 
 If you fully re-run segmentation and do not need backward-compatibility merges, set `booleans.legacy_merge: false` in `research_code/config.yaml`. In that mode the pipeline skips the legacy segmentation merge and `final_data_merge.py` reads from `corrected_south` instead of `seg_corrected_south`.
 
-### 2) Annotation scripts (after data_merge, before population download)
+### 2) Optional watershed merge utility
+
+If you need to rebuild the combined watershed layer consumed by the Voronoi and river workflows:
+
+```bash
+bash combine_watersheds.sh
+```
+
+This scans `paths.watersheds_zip_dir`, extracts one readable geospatial layer from each zip archive, and writes `hydrobase_lvl{level}_combined.gpkg` into `paths.data_dir`.
+
+### 3) Annotation scripts (after data_merge, before population download)
 
 Run grid creation and OSM extraction:
 
@@ -150,7 +162,7 @@ New scripts added under `annotation_scripts/`:
   - Purpose: create a category histogram, write a stratified review sample CSV, and copy sampled images into per-category folders for manual QA.
   - Outputs are written to `paths.annotations_verf_image_outpath_dir`.
 
-### 3) Population + Voronoi + population attachment
+### 4) Population + Voronoi + population attachment
 
 First download/process population rasters:
 
@@ -174,13 +186,19 @@ Local example (single index):
 bash add_pop.sh 0
 ```
 
+Optional overrides can be appended after the index:
+
+```bash
+bash add_pop.sh 0 8 2 15000
+```
+
 SLURM array mode:
 
 ```bash
 sbatch add_pop.sh
 ```
 
-### 4) Pop-at-risk pipeline (`pop_at_risk_river_calculations/`)
+### 5) Pop-at-risk pipeline (`pop_at_risk_river_calculations/`)
 
 Run these in order.
 

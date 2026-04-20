@@ -5,7 +5,7 @@
 # Can run locally by specifying file index, or in SLURM job array mode
 #
 # Usage:
-#   ./add_pop.sh <index>           (local mode - processes file at index)
+#   ./add_pop.sh <index> [level] [version] [buffer] [weight_method] [is_multiplicative]
 #   sbatch add_pop.sh              (SLURM array job - uses SLURM_ARRAY_TASK_ID)
 #
 # SLURM Configuration
@@ -23,10 +23,16 @@ set -euo pipefail  # Exit on error, undefined vars, pipe failures
 # Configuration
 PROJECT_ROOT="$(pwd)"
 
-# ADD THIS LINE:
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_SCRIPT="research_code.add_pop"
 PYTHON_CMD="python"
+
+# Parse optional config override arguments
+LEVEL="${2:-}"
+VERSION="${3:-}"
+BUFFER="${4:-}"
+WEIGHT_METHOD="${5:-}"
+IS_MULTIPLICATIVE="${6:-}"
 
 # Create log directory
 mkdir -p "${LOG_DIR}"
@@ -56,7 +62,7 @@ elif [[ $# -ge 1 ]]; then
 else
     # No task ID provided
     log "ERROR: Task ID not provided"
-    log "Usage: $0 <file_index> (local mode)"
+    log "Usage: $0 <file_index> [level] [version] [buffer] [weight_method] [is_multiplicative]"
     log "   or: sbatch $0 (SLURM mode)"
     exit 1
 fi
@@ -91,7 +97,7 @@ log "Processing Voronoi file index: ${TASK_ID}"
 # Run the population data integration
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

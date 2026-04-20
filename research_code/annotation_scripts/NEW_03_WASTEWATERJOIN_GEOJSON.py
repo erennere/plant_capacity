@@ -1,3 +1,10 @@
+"""Merge per-grid OSM extraction outputs into consolidated annotation layers.
+
+The script converts per-tile GeoJSON outputs to Parquet, builds unified schemas
+for polygon and line layers, merges them with DuckDB, and then clusters merged
+polygon features into bounding boxes used by downstream annotation steps.
+"""
+
 import os, sys
 import random
 import glob
@@ -13,9 +20,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 # Configure logging to flush output immediately (important for HPC batch jobs)
 logging.basicConfig(
@@ -34,6 +41,7 @@ for handler in logging.root.handlers:
 # I/O
 # ============================================================
 def from_wkb_modified(x): 
+    """Convert WKB bytes to a geometry and return None on malformed rows."""
     try:
         x = from_wkb(x)
         return x
@@ -41,6 +49,7 @@ def from_wkb_modified(x):
         return None
     
 def load_geodata(path):
+    """Load a parquet layer and coerce its geometry column into a GeoDataFrame."""
     # Read the Parquet file
     df = pd.read_parquet(path)
 
@@ -58,6 +67,7 @@ def load_geodata(path):
 
 
 def write_geodata(gdf: gpd.GeoDataFrame, path: str, driver: str = "GeoJSON") -> None:
+    """Write a GeoDataFrame to disk using the requested GDAL driver."""
     gdf.to_file(path, driver=driver)
 
 # ============================================================
@@ -65,6 +75,7 @@ def write_geodata(gdf: gpd.GeoDataFrame, path: str, driver: str = "GeoJSON") -> 
 # ============================================================
 
 def compute_centroids(gdf):
+    """Compute centroids for valid geometries and store them in a new column."""
     gdf = gdf.copy()
     gdf['centroid'] = None
     mask = gdf.geometry.is_valid & ~gdf.geometry.is_empty
@@ -72,6 +83,7 @@ def compute_centroids(gdf):
     return gdf
 
 def build_spatial_index(points):
+    """Build an STRtree over centroid points while preserving input indexing."""
     # We replace None with an empty Point to preserve the list index
     # STRtree will accept empty geometries but they won't match any spatial query
     placeholder = geom.Point() 
@@ -84,6 +96,7 @@ def build_spatial_index(points):
 # ============================================================
 
 def cluster_points(points,tree, distance_threshold):
+    """Cluster nearby points by breadth-first expansion over STRtree neighbors."""
     visited: Set[int] = set()
     clusters: List[Set[int]] = []
 
@@ -127,6 +140,7 @@ def clusters_to_bboxes(
     clusters: List[Set[int]],
     label: str,
 ) -> gpd.GeoDataFrame:
+    """Convert each point cluster into one bounding-box feature."""
     records = []
     for cid, cluster in enumerate(clusters):
         geoms = gdf.iloc[list(cluster)].geometry
@@ -140,6 +154,7 @@ def clusters_to_bboxes(
     return gpd.GeoDataFrame(records, crs=gdf.crs)
 
 def sanitize_gdf_columns(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Lowercase GeoDataFrame column names and drop duplicate labels."""
     # Force lowercase column names and remove duplicates
     gdf.columns = [c.lower() for c in gdf.columns]
     gdf = gdf.loc[:, ~gdf.columns.duplicated()]
@@ -149,12 +164,22 @@ def convert_geojson_to_parquet(
     geojson_file: str,
     temp_parquet_dir: str,
     overwrite: bool = False
-) -> str:
-    """
-    Convert a single GeoJSON file to Parquet format using DuckDB.
-    Returns the path to the created Parquet file.
-    
-    This function is designed to run in parallel via ThreadPoolExecutor.
+) -> str | None:
+    """Convert a single GeoJSON file to parquet using DuckDB.
+
+    Parameters
+    ----------
+    geojson_file : str
+        Input GeoJSON file.
+    temp_parquet_dir : str
+        Directory where intermediate parquet files are written.
+    overwrite : bool, default=False
+        Whether to overwrite an existing parquet conversion.
+
+    Returns
+    -------
+    str | None
+        Path to the created parquet file, or ``None`` when conversion fails.
     """
     basename = os.path.splitext(os.path.basename(geojson_file))[0]
     temp_parquet = os.path.join(temp_parquet_dir, f"{basename}.parquet")
@@ -186,16 +211,23 @@ def parallel_convert_geojsons(
     max_workers: int = 4,
     overwrite = False
 ) -> List[str]:
-    """
-    Parallelize the conversion of GeoJSON files to Parquet format.
-    
-    Args:
-        geojson_files: List of GeoJSON file paths
-        temp_parquet_dir: Directory to store Parquet files
-        max_workers: Number of parallel workers (default 4, adjust based on system)
-    
-    Returns:
-        List of Parquet file paths created
+    """Convert many GeoJSON files to parquet in parallel.
+
+    Parameters
+    ----------
+    geojson_files : list[str]
+        GeoJSON files to convert.
+    temp_parquet_dir : str
+        Directory where intermediate parquet files are written.
+    max_workers : int, default=4
+        Maximum number of worker processes.
+    overwrite : bool, default=False
+        Whether to overwrite existing parquet conversions.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of successfully created parquet file paths.
     """
     parquet_files = []
     
@@ -219,12 +251,7 @@ def get_parquet_schema_info(
     conn: duckdb.DuckDBPyConnection,
     tmp_table: str,
 ) -> Tuple[List[str], Dict[str, str]]:
-    """
-    Get column names and their types from a temporary table.
-    Returns:
-        Tuple of (column_names, column_type_dict)
-    Note: Caller is responsible for dropping the table after use.
-    """
+    """Return ordered column names and SQL types for a temporary DuckDB table."""
     cols_info = conn.execute(f"PRAGMA table_info('{tmp_table}');").df()
     column_names = list(cols_info['name'])
     column_types = dict(zip(cols_info['name'], cols_info['type']))
@@ -232,23 +259,14 @@ def get_parquet_schema_info(
 
 
 def build_cast_expr(col: str, dtype: str) -> str:
-    """Helper to build type casting expressions."""
+    """Build a DuckDB select expression that normalizes text-like columns."""
     if dtype.upper() in ("BLOB", "STRING", "TEXT"):
         return f'CAST("{col}" AS VARCHAR) AS "{col}"'
     return f'"{col}"'
 
 
 def discover_parquet_schema(parquet_file: str) -> Tuple[str, str, List[str], Dict[str, str]]:
-    """
-    Discover schema of a single parquet file in parallel.
-    Uses a separate connection to avoid lock contention.
-    
-    Args:
-        parquet_file: Path to parquet file
-        
-    Returns:
-        Tuple of (parquet_file, grid, column_names, column_types_dict)
-    """
+    """Inspect one parquet file and return its grid ID plus schema metadata."""
     temp_conn = duckdb.connect(":memory:")
     try:
         basename = os.path.splitext(os.path.basename(parquet_file))[0]
@@ -272,17 +290,23 @@ def merge_parquets_sql(
     max_workers: int = 4,
     insert_batch_size: int = 8,
 ) -> Dict[str, str]:
-    """
-    Merge multiple Parquet files with parallel schema discovery and data loading.
-    Eliminates lock contention by creating unified schema upfront instead of incremental ALTERs.
-    
-    Args:
-        conn: Main DuckDB connection
-        parquet_files: List of parquet file paths
-        max_workers: Number of parallel workers for schema discovery (default 4)
-    
-    Returns:
-        Dictionary mapping original parquet paths to grid names
+    """Merge many parquet files into one DuckDB dataset table.
+
+    Parameters
+    ----------
+    conn : duckdb.DuckDBPyConnection
+        Open DuckDB connection that receives the merged dataset table.
+    parquet_files : list[str]
+        Parquet files to merge.
+    max_workers : int, default=4
+        Number of workers used for parallel schema discovery.
+    insert_batch_size : int, default=8
+        Number of parquet files inserted per UNION ALL batch.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from original parquet file paths to their grid identifiers.
     """
     grid_mapping = {}
     schema_results = {}
@@ -381,16 +405,26 @@ def merge_bboxes_sql(
     duckdb_threads: int = 4,
     overwrite: bool = False
 ) -> None:
-    """
-    Main orchestration function for merging GeoJSON files into a single Parquet.
-    
-    Args:
-        polygons_dir: Directory containing GeoJSON files
-        prototype: Glob pattern for GeoJSON files (e.g., '*_polygons.geojson')
-        output_filepath: Output path for merged Parquet
-        temp_parquet_dir: Temporary directory for intermediate Parquet files
-        max_workers: Number of parallel workers for GeoJSON conversion and parquet merge (default 4)
-        overwrite: Whether to overwrite existing files (default False)
+    """Merge all matching GeoJSON files into one parquet dataset via DuckDB.
+
+    Parameters
+    ----------
+    polygons_dir : str
+        Directory containing per-grid GeoJSON files.
+    prototype : str
+        Glob pattern selecting the files to merge.
+    output_filepath : str
+        Output parquet path.
+    temp_parquet_dir : str, default='temp_parquets'
+        Directory for intermediate parquet conversions.
+    max_workers : int, default=4
+        Number of workers used during conversion and schema discovery.
+    insert_batch_size : int, default=8
+        Number of parquet files inserted per batch.
+    duckdb_threads : int, default=4
+        Number of DuckDB execution threads.
+    overwrite : bool, default=False
+        Whether to overwrite existing outputs.
     """
     files = glob.glob(os.path.join(polygons_dir, prototype))
     if not files:
@@ -447,6 +481,19 @@ def main(
     distance_threshold: float,
     label: str = "wastewater_plant",
 ) -> None:
+    """Cluster merged polygon features and export bbox labels for annotation.
+
+    Parameters
+    ----------
+    input_path : str
+        Input merged polygon parquet file.
+    output_path : str
+        Output GeoJSON path for the bbox labels.
+    distance_threshold : float
+        Distance threshold used for centroid clustering.
+    label : str, default='wastewater_plant'
+        Label stored in the output ``man_name`` column.
+    """
     gdf = load_geodata(input_path)
     print(f"✅ Loaded {len(gdf)} polygons", flush=True)
 
@@ -473,12 +520,11 @@ CRS_OUT = "EPSG:4326"
 
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     overwrite = cfg["annotations"]["overwrite"]
 
     points_path = cfg["paths"]["corrected_all_filepath"]
-    #points_path = './annotation_scripts/ref.geojson'
-    
     grid_filedir = cfg["paths"]["annotations_grid_dir"]
     grid_filepath = os.path.join(grid_filedir, f'grids_{os.path.basename(points_path)}')
     polygons_dir = cfg["paths"]["annotations_by_osm_dir"]

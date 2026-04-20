@@ -10,9 +10,9 @@ import logging
 import geopandas as gpd
 from shapely import from_wkt
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -65,7 +65,8 @@ def create_unserved_pop(filepath, threshold, output_filepath):
 def main():
     """Load config and run threshold-based non-served population extraction."""
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
 
     figures_cfg = cfg.get("figures") or {}
     if "pop_threshold" not in figures_cfg:

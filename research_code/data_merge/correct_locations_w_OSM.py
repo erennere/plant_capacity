@@ -13,23 +13,29 @@ from shapely.geometry.base import BaseGeometry
 import duckdb
 try:
     from ..create_voronoi import estimate_utm_epsg, download_overture_maps, buffer_geometry
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..download_pop import country_isos
 except ImportError:
     from research_code.create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.download_pop import country_isos
 
 def corr_locations_wOSM(rad, pdf, df):
     """Match each input geometry to the nearest OSM geometry within a radius.
 
-    Args:
-        rad: Search radius in units of the active CRS.
-        pdf: GeoDataFrame with candidate OSM geometries.
-        df: GeoDataFrame with input WWTP geometries to be corrected.
+    Parameters
+    ----------
+    rad : float
+        Search radius in units of the active CRS.
+    pdf : geopandas.GeoDataFrame
+        Candidate OSM geometries.
+    df : geopandas.GeoDataFrame
+        WWTP geometries to correct.
 
-    Returns:
-        A copy of df with matched_osm_geometry added.
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Copy of ``df`` with a ``matched_osm_geometry`` column.
     """
     # Build spatial index once for fast bounding-box candidate lookups.
     sindex = pdf.sindex
@@ -72,13 +78,19 @@ def corr_locations_wOSM(rad, pdf, df):
 def coordinate_corr_locations_wOSM(rad, pdf, df):
     """Run OSM matching by EPSG group and merge results.
 
-    Args:
-        rad: Search radius in units of each group's projected CRS.
-        pdf: GeoDataFrame of OSM candidate geometries with an epsg column.
-        df: GeoDataFrame of WWTP geometries with an epsg column.
+    Parameters
+    ----------
+    rad : float
+        Search radius in units of each projected CRS group.
+    pdf : geopandas.GeoDataFrame
+        OSM candidate geometries with an ``epsg`` column.
+    df : geopandas.GeoDataFrame
+        WWTP geometries with an ``epsg`` column.
 
-    Returns:
-        A concatenated DataFrame with matched OSM geometries in EPSG:4326.
+    Returns
+    -------
+    pandas.DataFrame
+        Concatenated result with matched OSM geometries in EPSG:4326.
     """
     all_epsgs = set(pdf['epsg']).union(set(df['epsg']))
     results = []
@@ -102,12 +114,17 @@ def coordinate_corr_locations_wOSM(rad, pdf, df):
 def enrich_country_with_duckdb(df, filepath):
     """Spatially intersect features with country polygons using DuckDB.
 
-    Args:
-        df: GeoDataFrame of input features.
-        filepath: Parquet path containing country polygons.
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input features to enrich.
+    filepath : str
+        Parquet path containing country polygons.
 
-    Returns:
-        GeoDataFrame in EPSG:4326 with ISO_2 assigned where intersections exist.
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Input features in EPSG:4326 with ``ISO_2`` assigned where possible.
     """
     query = "INSTALL SPATIAL; LOAD SPATIAL;"
     query2 = f"""
@@ -172,11 +189,15 @@ def create_corrected_geom(row):
 def main():
     """Run the full WWTP location correction and export pipeline.
 
-    Loads corrected inputs, applies OSM-based matching for unresolved HydroWASTE
-    facilities, enriches missing country codes, and writes output GeoJSON files.
+    Notes
+    -----
+    The workflow loads corrected inputs, applies OSM-based matching for
+    unresolved HydroWASTE facilities, enriches missing country codes, and writes
+    the final GeoJSON outputs.
     """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(**overrides)
     paths = cfg['paths']
     rad = cfg['rad']
     old_filename =  os.path.abspath(os.path.join(paths['data_dir'], 'corrected_WWTP_enhanced.geojson'))

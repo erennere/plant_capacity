@@ -15,11 +15,11 @@ import geopandas as gpd
 from shapely import from_wkt, to_wkt
 from concurrent.futures import ProcessPoolExecutor, as_completed
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
     from ..create_voronoi import estimate_utm_epsg
     from ..add_pop import intersect_all_files
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
     from research_code.create_voronoi import estimate_utm_epsg
     from research_code.add_pop import intersect_all_files
 
@@ -145,6 +145,11 @@ def parse_args():
         default="true",
         help="Whether to process EPSG groups in parallel (true/false)",
     )
+    parser.add_argument("level", nargs="?", default=None)
+    parser.add_argument("version", nargs="?", default=None)
+    parser.add_argument("buffer", nargs="?", default=None)
+    parser.add_argument("weight_method", nargs="?", default=None)
+    parser.add_argument("is_multiplicative", nargs="?", default=None)
     args = parser.parse_args()
     args.is_parallel = parse_bool(args.is_parallel)
     return args
@@ -153,7 +158,8 @@ def main():
     """Load config, select one population file, compute differences, and save output."""
     args = parse_args()
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    overrides = parse_config_overrides(args=args)
+    cfg = load_config(**overrides)
 
     watershed_filepath = cfg['paths']['hydrowaste']
     max_workers = cfg['params']['max_workers']

@@ -72,7 +72,7 @@ from pyproj import CRS, Transformer
 from rasterio.features import shapes
 
 from scipy.spatial.distance import pdist, squareform
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 from skimage.measure import find_contours
 import cv2
 
@@ -96,22 +96,21 @@ logger = logging.getLogger(__name__)
 ################################################################################
 
 def normalize_plane(a, b):
-    """
-    Normalize 2D coordinates to [0, 1] range based on min/max bounds.
-    
-    Normalizes both input arrays to a common [0, 1] bounding box for
-    distance calculations in normalized space.
-    
-    Args:
-        a (np.ndarray): Array of shape (n, 2) with x,y coordinates
-        b (tuple or list): Single (x, y) coordinate pair
-        
-    Returns:
-        tuple: (a_normalized, b_normalized) - Both normalized to [0, 1]
-        
-    Notes:
-        Handles degenerate cases where max == min by using denominator of 1.
-        This prevents division by zero in distance calculations.
+    """Normalize 2-D coordinate arrays to a shared [0, 1] bounding box.
+
+    Parameters
+    ----------
+    a : numpy.ndarray
+        Array of shape ``(n, 2)`` with ``(x, y)`` coordinates.
+    b : tuple or array-like
+        Single ``(x, y)`` coordinate pair.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        ``(a_normalized, b_normalized)`` scaled to ``[0, 1]``.
+        When ``max == min`` on an axis the denominator is clamped to 1 to
+        avoid division by zero.
     """
     b = np.array(b)  # Convert tuple to array
     all_points = np.vstack([a, b.reshape(1, 2)])
@@ -124,18 +123,17 @@ def normalize_plane(a, b):
     return a_norm, b_norm
 
 def is_valid_geom(geom):
-    """
-    Validate geometry for valid topology and finite coordinates.
-    
-    Checks that geometry is valid, non-empty, and has finite coordinates.
-    Silently catches exceptions during validation.
-    
-    Args:
-        geom: Shapely geometry object (or None)
-        
-    Returns:
-        bool: True if geometry is valid with all finite coordinates, False otherwise
-        
+    """Return ``True`` if a geometry is non-``None``, topologically valid, and has finite coordinates.
+
+    Parameters
+    ----------
+    geom : shapely.geometry.base.BaseGeometry or None
+        Geometry to validate.
+
+    Returns
+    -------
+    bool
+        ``True`` when all checks pass, ``False`` otherwise.
     """
     try:
         if geom is None:
@@ -155,21 +153,20 @@ def is_valid_geom(geom):
         return False
     
 def drop_duplicates(df, col):
-    """
-    Remove duplicate entries in a DataFrame column while preserving NaN rows.
-    
-    Drops duplicate rows based on specified column while keeping all
-    NaN/None entries intact.
-    
-    Args:
-        df (pd.DataFrame or None): Input dataframe
-        col (str): Column name to check for duplicates
-        
-    Returns:
-        pd.DataFrame: DataFrame with duplicates removed (or original if empty/None)
-        
-    Notes:
-        NaN values are always kept and not considered duplicates.
+    """Remove duplicate rows by column while keeping all ``NaN`` rows.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame or None
+        Input dataframe.
+    col : str
+        Column to deduplicate on.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        DataFrame with non-``NaN`` duplicates removed; ``NaN`` rows are
+        always preserved.
     """
     if df is not None and not df.empty:
         nans = df[df[col].isna()]
@@ -178,26 +175,20 @@ def drop_duplicates(df, col):
     return df
 
 def buffer_geometry(geom):
-    """
-    Apply topology-fixing zero-buffer to polygon geometries only.
-    
-    Zero-buffer (geom.buffer(0)) is a standard technique to fix invalid
-    polygon topology (self-intersections, wrong ring orientation).
-    Point and LineString geometries are returned unchanged.
-    
-    Args:
-        geom: Shapely geometry (Point, Polygon, MultiPolygon, etc.)
-        
-    Returns:
-        Shapely geometry: Same geometry type, with topology fixed (if polygon)
-        
-    Logs:
-        DEBUG: When topology fix is applied to polygon
-        WARNING: When geometry type is unknown
-        
-    Notes:
-        POTENTIAL ERROR: geom.buffer(0) on invalid geometry can return
-        GEOMETRYCOLLECTION or empty geometry. Should validate output.
+    """Apply a zero-buffer topology fix to polygon geometries.
+
+    Point and line geometries are returned unchanged.
+
+    Parameters
+    ----------
+    geom : shapely.geometry.base.BaseGeometry
+        Geometry to process.
+
+    Returns
+    -------
+    shapely.geometry.base.BaseGeometry
+        Original geometry with topology artefacts repaired for polygonal
+        types; other geometry types are returned as-is.
     """
     if isinstance(geom, Point):
         return geom
@@ -215,27 +206,20 @@ def buffer_geometry(geom):
         return geom
     
 def create_centroid_points(row):
-    """
-    Extract centroid from geometry in a DataFrame row with validation.
-    
-    Handles different geometry types:
-      - Points: return as-is
-      - Polygons/LineStrings: return .centroid (if valid)
-      - Other types: return None
-    
-    Args:
-        row (pd.Series): DataFrame row with 'geometry' column
-        
-    Returns:
-        shapely.Point or None: Valid centroid point, original point, or None
-        
-    Logs:
-        WARNING: When computed centroid is invalid
-        DEBUG: When unsupported geometry type encountered
-        
-    Notes:
-        VALIDATION: Checks that centroid is valid and non-empty.
-        MultiPolygon centroids that are invalid are rejected.
+    """Extract a representative point from a DataFrame row's geometry.
+
+    Returns ``Point`` geometries as-is; returns ``centroid`` for polygons and
+    lines; returns ``None`` for unsupported or invalid geometries.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        DataFrame row containing a ``geometry`` column.
+
+    Returns
+    -------
+    shapely.geometry.Point or None
+        Valid centroid or original point, or ``None`` when unavailable.
     """
     if 'geometry' not in row:
         logger.warning("Row missing 'geometry' column")
@@ -312,9 +296,9 @@ def cluster_point_indices(geoms, threshold):
     Notes:
         OPTIMIZED: Uses Union-Find with path compression for O(n log n) complexity
         vs O(n²) worst case with BFS. More efficient for large point sets.
-        
-        POTENTIAL ERROR: Assumes all geometries are Points with .x, .y attributes.
-        Will fail silently if geoms contain other geometry types.
+
+        Expected input is an iterable of Point geometries. Callers are
+        responsible for pre-filtering non-point geometries before clustering.
     """
     coords = np.array([(pt.x, pt.y) for pt in geoms])
     tree = cKDTree(coords)
@@ -765,19 +749,26 @@ def intersect_watershed_sindex(df, watershed, col, concurrency=False):
     Finds which watershed contains each point centroid using R-tree
     spatial index for efficiency. Optionally parallelizes via threads.
     
-    Args:
-        df (pd.GeoDataFrame): Points to intersect with 'geometry' column
-        watershed (pd.GeoDataFrame): Watershed polygons with column 'col'
-        col (str): Column name in watershed to return
-        concurrency (bool): Use ThreadPoolExecutor for parallel processing
-        
-    Returns:
-        pd.GeoDataFrame: Input with new column 'col' containing watershed values
-        
-    Notes:
-        INEFFICIENCY: Processes invalid geometries separately but still
-        iterates through them in concat.
-        DUPLICATE CONCAT: Uses pd.concat twice.
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input features to intersect.
+    watershed : geopandas.GeoDataFrame
+        Watershed polygons providing the output attribute.
+    col : str
+        Watershed column to transfer to ``df``.
+    concurrency : bool, default=False
+        Whether to use a thread pool for centroid lookup.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Input features with the transferred watershed column.
+
+    Notes
+    -----
+    Invalid geometries are separated before intersection and concatenated back
+    into the result after processing.
     """
     if df is None or df.empty:
         return df
@@ -819,17 +810,24 @@ def duckdb_intersect_watershed_single(df, watershed, col):
     Performs spatial intersection of points with watershed polygons
     within a single UTM projection zone using DuckDB for efficiency.
     
-    Args:
-        df (pd.GeoDataFrame): Points to intersect with 'geometry' column
-        watershed (pd.GeoDataFrame): Watershed polygons with 'geometry' and 'col' columns
-        col (str): Column name to extract from watershed
-        
-    Returns:
-        pd.GeoDataFrame: Input df with new column 'col' containing watershed values
-        
-    Notes:
-        ASSUMPTION: All input geometries already in same UTM zone
-        Uses DuckDB's SPATIAL extension for fast spatial joins
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input features to intersect.
+    watershed : geopandas.GeoDataFrame
+        Watershed polygons with the requested attribute column.
+    col : str
+        Watershed column to transfer to ``df``.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Input features with the transferred watershed column.
+
+    Notes
+    -----
+    This variant assumes all input geometries already belong to the same UTM
+    zone and uses DuckDB spatial SQL for the join.
     """
     query = "INSTALL SPATIAL; LOAD SPATIAL;"
     query2 = f"""
@@ -883,7 +881,7 @@ def duckdb_intersect_watershed_single(df, watershed, col):
         df = df.drop(labels=['centroid'], axis=1)
         df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
         df = pd.concat([df, nans], ignore_index=True) 
-        df['geometry'] = df['geometry'].apply(buffer_geometry)
+        df['geometry'] = df['geometry'].map(buffer_geometry)
         df = gpd.GeoDataFrame(df, geometry='geometry', crs=utm).to_crs(4326)
         return df
     except Exception as err:
@@ -903,20 +901,29 @@ def duckdb_intersect_watershed(df, watershed, col, use_duckdb=False, max_workers
     using either spatial indexing (default) or DuckDB spatial SQL, then
     concatenates results. Handles invalid geometries separately.
     
-    Args:
-        df (pd.GeoDataFrame): Points to intersect with 'geometry' column
-        watershed (pd.GeoDataFrame): Polygon features with 'geometry' and 'col' columns
-        col (str): Column name to extract from watershed (e.g., 'HYBAS_ID')
-        use_duckdb (bool): Use DuckDB for spatial queries (default False = use sindex)
-        max_workers (int): Number of parallel workers for zone processing
-        
-    Returns:
-        pd.GeoDataFrame: Input with new column 'col' from watershed
-        
-    Notes:
-        Automatically determines UTM zones via estimate_utm_epsg()
-        Separates invalid/missing geometries and restores them at end
-        Uses ProcessPoolExecutor for parallel zone processing
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input features to intersect.
+    watershed : geopandas.GeoDataFrame
+        Watershed polygons with the requested attribute column.
+    col : str
+        Watershed column to transfer to ``df``.
+    use_duckdb : bool, default=False
+        Whether to use the DuckDB per-zone implementation instead of the spatial
+        index implementation.
+    max_workers : int, default=16
+        Maximum number of worker processes for zone-based processing.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Input features with the transferred watershed column.
+
+    Notes
+    -----
+    The workflow partitions both inputs by estimated UTM zone, processes each
+    zone independently, and restores invalid or missing geometries at the end.
     """
     nans = df[df['geometry'].isna() | (~df['geometry'].is_valid) | (df['geometry'].is_empty)].copy().reset_index(drop=True) 
     df = df[df['geometry'].notna() & df['geometry'].is_valid & ~df['geometry'].is_empty].copy().reset_index(drop=True)  
@@ -959,19 +966,22 @@ def duckdb_intersect(df, filepath):
     Performs spatial join to find country ISO_2 codes for each point
     using bounding box filtering followed by precise intersection test.
     
-    Args:
-        df (pd.GeoDataFrame): Points with WKT geometry column
-        filepath (str): Path to country boundaries parquet file
-        
-    Returns:
-        pd.GeoDataFrame: Input with new 'ISO_2' column from boundaries
-        
-    Logs:
-        INFO: Operation start and result count
-        WARNING: Errors during spatial operations
-        
-    Notes:
-        INEFFICIENCY: Uses WKT (20x larger than WKB) for geometry transfer.
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input features to enrich with country codes.
+    filepath : str
+        Path to the country-boundary parquet file.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Input features with an ``ISO_2`` column.
+
+    Notes
+    -----
+    The current implementation serializes geometries as WKT before executing the
+    DuckDB spatial join.
     """
     logger.info(f"Starting DuckDB country boundary intersection for {len(df)} points")
     query = "LOAD SPATIAL;"
@@ -1026,7 +1036,7 @@ def duckdb_intersect(df, filepath):
     logger.info(f"DuckDB intersection complete: {iso_matched}/{len(df)} points matched to countries")
     df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
     df = gpd.GeoDataFrame(df, geometry='geometry', crs=4326)
-    df['geometry'] = df['geometry'].apply(buffer_geometry)
+    df['geometry'] = df['geometry'].map(buffer_geometry)
     return df
 
 ################################################################################
@@ -1040,24 +1050,28 @@ def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=5
     Groups overlapping geometries using spatial bounds matching (longitude/latitude)
     and connected components analysis, then merges overlapping regions.
     
-    Args:
-        subdf (pd.GeoDataFrame): Input geometries with 'geometry' column
-        radius (float): Buffer radius for convex hull or bounding box expansion
-        convex (bool): Use convex hull; else use centroid-based buffering
-        recursion_lim (int): Recursion depth limit for DFS (default 50000)
-        
-    Returns:
-        pd.GeoDataFrame: Dissolved geometries with merged overlapping regions
-        
-    Logs:
-        Progress bars via tqdm for longitude/latitude grouping phases
-        
-    Notes:
-        INEFFICIENCY: O(n²) nested loop (lines 953-982) comparing all geometries.
-        Creates bounding boxes and sorts multiple times.
-        
-        Requires 'centroid' computation from create_centroid_points.
-        Assumes row index has 'some_id' column (undocumented requirement).
+    Parameters
+    ----------
+    subdf : geopandas.GeoDataFrame
+        Input geometries with a ``some_id`` column.
+    radius : float
+        Buffer radius used for overlap grouping.
+    convex : bool, default=False
+        Whether to use bounding boxes of original geometries instead of centroid
+        buffers.
+    recursion_lim : int, default=50000
+        Recursion limit used by the depth-first traversal.
+
+    Returns
+    -------
+    tuple | None
+        Tuple ``(final_groups, subdf)`` containing connected overlap groups and
+        the prepared GeoDataFrame, or ``None`` when processing cannot proceed.
+
+    Notes
+    -----
+    This is the slower overlap-resolution variant and relies on repeated
+    latitude/longitude grouping before connected-component merging.
     """
     import sys
     sys.setrecursionlimit(recursion_lim)
@@ -1183,9 +1197,27 @@ def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=5
     return final_groups, subdf
 
 def dissolve_overlapping_geometries_fast(subdf, radius, convex=False):
-    """
-    Faster version of the original dissolution logic.
-    Uses an R-tree spatial index and Graph Theory instead of nested loops.
+    """Dissolve overlapping geometries with a spatial-index-based fast path.
+
+    Parameters
+    ----------
+    subdf : geopandas.GeoDataFrame
+        Input geometries with a ``some_id`` column.
+    radius : float
+        Buffer radius used for overlap grouping.
+    convex : bool, default=False
+        Whether to use bounding boxes of original geometries instead of centroid
+        buffers.
+
+    Returns
+    -------
+    tuple[list[set], geopandas.GeoDataFrame | None]
+        Connected overlap groups and the prepared GeoDataFrame.
+
+    Notes
+    -----
+    This variant replaces the original nested-loop dissolve logic with a spatial
+    index query plus connected-component extraction.
     """
     if subdf is None or subdf.empty:
         return [], None
@@ -1237,24 +1269,28 @@ def orchestrate_overlaps(df, max_workers, buffers_filepath, radius, convex=False
     dissolution to each country's geometries, and merges results.
     Caches results to file to avoid recomputation.
     
-    Args:
-        df (pd.GeoDataFrame): Input geometries with 'ISO_2' country column
-        max_workers (int): Number of parallel workers
-        buffers_filepath (str): Path to cache dissolved geometries (GPKG format)
-        radius (float): Buffer radius for overlap expansion
-        convex (bool): Use convex hull for dissolution
-        
-    Returns:
-        pd.GeoDataFrame: Dissolved and aggregated geometries by country
-        
-    Logs:
-        INFO: Operation start and cached file status
-        DEBUG: Parallel processing details
-        WARNING: Caching failures
-        
-    Notes:
-        Caches results to avoid recomputation on subsequent runs.
-        Uses ProcessPoolExecutor which requires picklable functions.
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input geometries with an ``ISO_2`` column.
+    max_workers : int
+        Maximum number of worker processes.
+    buffers_filepath : str
+        Cache path for dissolved geometries.
+    radius : float
+        Buffer radius used for overlap grouping.
+    convex : bool, default=False
+        Whether to use convex-style bounding boxes instead of centroid buffers.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Dissolved geometry groups aggregated across countries.
+
+    Notes
+    -----
+    Results are cached to ``buffers_filepath`` so subsequent runs can skip the
+    expensive dissolve step.
     """
     logger.info(f"Starting parallel dissolution orchestration for {len(df)} geometries")
     if os.path.exists(buffers_filepath):
@@ -1304,7 +1340,7 @@ def orchestrate_overlaps(df, max_workers, buffers_filepath, radius, convex=False
 
     dfs['some_id'] = dfs['some_id'].astype(int)
     dfs['group_id'] = dfs['some_id'].map(lambda x: final_dict[x])
-    dissolved_buffers = dfs.dissolve(by='group_id').reset_index(drop=True)
+    dissolved_buffers = dfs.dissolve(by='group_id').reset_index(drop=True)  # type: ignore[operator]
     logger.debug(f"Dissolved {len(dfs)} geometries into {len(dissolved_buffers)} groups")
     dissolved_buffers['geometry'] = dissolved_buffers['geometry'].buffer(0)
     if 'centroid' in dissolved_buffers:
@@ -1324,17 +1360,24 @@ def optimized_split_geometries_parallel(gdf1, gdf2, n_jobs=-1):
     polygons and splits resulting geometries. Uses joblib for parallelization
     with pre-computed spatial indexes per country.
     
-    Args:
-        gdf1 (pd.GeoDataFrame): Geometries to split
-        gdf2 (pd.GeoDataFrame): Country boundary geometries with 'ISO_2' column
-        n_jobs (int): Number of parallel jobs (-1 = use all cores)
-        
-    Returns:
-        pd.GeoDataFrame: Split geometries with country assignments
-        
-    Notes:
-        Pre-computes spatial indexes and country-filtered dataframes
-        to minimize redundant computation in parallel jobs.
+    Parameters
+    ----------
+    gdf1 : geopandas.GeoDataFrame
+        Geometries to split.
+    gdf2 : geopandas.GeoDataFrame
+        Country boundaries with an ``ISO_2`` column.
+    n_jobs : int, default=-1
+        Number of parallel jobs passed to joblib.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Split geometries with country assignments.
+
+    Notes
+    -----
+    Country-filtered layers and their spatial indexes are precomputed before the
+    parallel split phase begins.
     """
     # Precompute per-country filtered gdf2 and spatial indexes
     countries = gdf2['ISO_2'].unique()
@@ -1377,7 +1420,7 @@ def optimized_split_geometries_parallel(gdf1, gdf2, n_jobs=-1):
     tasks = [(row['geometry'], row['ISO_2']) for _, row in gdf1.iterrows()]
     results = Parallel(n_jobs=n_jobs, backend="loky")(
         delayed(split_geometry)(geom, country) for geom, country in tqdm(tasks, desc="Splitting geometries")
-    )
+    ) or []
     flat_geometries = [geom for sublist in results for geom in sublist]
     logger.info(f"Splitting complete: {len(gdf1)} input geometries -> {len(flat_geometries)} output geometries")
     return gpd.GeoDataFrame(flat_geometries, geometry='geometry', crs=gdf1.crs)
@@ -1394,25 +1437,20 @@ def resolve_polygon_overlaps(region_polygons):
     the smaller polygon and keeps it in the larger one. Operates on a copy of
     input geometries to avoid modifying the original GeoDataFrame.
     
-    Args:
-        region_polygons (pd.GeoDataFrame): GeoDataFrame with 'geometry' column
-        
-    Returns:
-        np.ndarray: Processed geometries with overlaps resolved, same length as input
-        
-    Logs:
-        DEBUG: Start of overlap resolution, completion count
-        
-    Notes:
-        COMPLEXITY: O(n²) nested loop comparing all geometry pairs.
-        Iterates through each geometry and removes overlaps with all others.
-        
-        Operation on geometries:
-        - For larger geometry: intersection area is removed via difference()
-        - For smaller geometry: intersection area is removed via difference()
-        - Preserves the separation to avoid duplicate areas
-        
-        Assumes valid (non-None) geometries are already filtered.
+    Parameters
+    ----------
+    region_polygons : geopandas.GeoDataFrame
+        Voronoi polygons to clean.
+
+    Returns
+    -------
+    numpy.ndarray
+        Geometry array with overlaps removed.
+
+    Notes
+    -----
+    The routine uses pairwise area comparisons and removes the shared portion
+    from the smaller polygon when overlaps are detected.
     """
     logger.debug(f"Starting polygon overlap resolution for {len(region_polygons)} geometries")
     
@@ -1450,29 +1488,25 @@ def extract_site_coordinates(df, centroid_points, points_col):
       1. Pre-computed points from specified column (converted from WKT, transformed to UTM)
       2. Computed centroids from site geometries (with fallback for complex types)
     
-    Args:
-        df (pd.GeoDataFrame): Input sites with geometry column
-        centroid_points (bool): If False and points_col provided, use pre-computed points
-        points_col (str or None): Column name containing pre-computed WKT geometries
-        
-    Returns:
-        list: List of (x, y) coordinate tuples for Voronoi sites
-        
-    Logs:
-        DEBUG: Coordinate extraction method used and result count
-        
-    Notes:
-        PRE-COMPUTED PATH (centroid_points=False, points_col specified):
-          - Converts WKT strings to geometries
-          - Transforms coordinates to UTM via utm_stuff()
-          - Returns list of transformed (x, y) tuples
-        
-        COMPUTED PATH (centroid_points=True or points_col=None):
-          - Extracts centroids from site geometries via create_centroid_points()
-          - Handles Point geometries directly (no centroid needed)
-          - Handles complex types (LineString, Polygon) by extracting their centroids
-          - Falls back to (None, None) placeholder for invalid/missing geometries
-          - Returns list of (x, y) tuples
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input sites with geometry information.
+    centroid_points : bool
+        Whether to derive coordinates from feature centroids.
+    points_col : str | None
+        Column containing pre-computed WKT points when ``centroid_points`` is
+        false.
+
+    Returns
+    -------
+    list[tuple[float | None, float | None]]
+        Site coordinates used by the Voronoi solver.
+
+    Notes
+    -----
+    Coordinates are either read from a pre-computed point column or derived from
+    feature centroids, depending on the active workflow.
     """
     if not centroid_points and points_col is not None:
         # Use pre-computed point geometries from specified column
@@ -1501,35 +1535,26 @@ def initialize_voronoi_weights(df, distance_fn, scale_weights, points):
     Handles weight setup differently depending on whether additive or multiplicative
     distance metrics are used. Optionally applies weight scaling based on nearest neighbors.
     
-    Args:
-        df (pd.GeoDataFrame): Input sites with 'weights' column
-        distance_fn (callable): Distance function (default_distance_additive or default_distance_multiplicative)
-        scale_weights (bool): Whether to apply nearest-neighbor weight scaling
-        points (list or np.ndarray): Site coordinates for scaling calculation
-        
-    Returns:
-        tuple: (weights, factor) where:
-          - weights (np.ndarray): Computed weight values for each site
-          - factor (float): Scaling factor (0 if no scaling applied, otherwise auto-computed)
-        
-    Logs:
-        DEBUG: Weight initialization method and parameters used
-        
-    Notes:
-        ADDITIVE DISTANCE BEHAVIOR:
-          - scale_weights=True: Factor computed via auto_weight_scale(points), weights scaled by factor
-          - scale_weights=False: Factor=0, weights set to zeros (standard Euclidean, no weight effect)
-          - Purpose: Direct weight influence on region size (larger weight = larger region)
-        
-        MULTIPLICATIVE DISTANCE BEHAVIOR:
-          - scale_weights=True: Weights kept as-is from df['weights'], factor=0 (provided weights used as-is)
-          - scale_weights=False: Factor=0, weights set to ones (standard Voronoi, equal influence)
-          - Purpose: Weights scale the distance metric (weight>1 = site dominates farther)
-        
-        DEFAULT/UNKNOWN DISTANCE FUNCTION:
-          - Assumes multiplicative behavior (same as multiplicative distance)
-        
-        Weight normalization occurs during Voronoi computation in assign_sites_streaming().
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input sites with a ``weights`` column.
+    distance_fn : callable
+        Distance function used by the Voronoi solver.
+    scale_weights : bool
+        Whether to scale weights using nearest-neighbor spacing.
+    points : list | numpy.ndarray
+        Site coordinates used for optional scaling.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, float]
+        Weight array and the applied scaling factor.
+
+    Notes
+    -----
+    Additive and multiplicative distance functions use different default weight
+    initializations, so the returned array depends on the selected metric.
     """
     weights = df['weights'].values.astype(float)
     factor = 0
@@ -1561,17 +1586,21 @@ def extract_contours_scipy(region_mask_2d, n_points, grid_minx, grid_miny):
     Uses scipy's marching squares algorithm to find contours in a 2D binary mask,
     then converts contours to polygon coordinates in the original coordinate system.
     
-    Args:
-        region_mask_2d (np.ndarray): 2D boolean array indicating region membership
-        n_points (int): Grid resolution (spacing multiplier)
-        grid_minx (float): Minimum x coordinate of grid origin
-        grid_miny (float): Minimum y coordinate of grid origin
-        
-    Returns:
-        list: List of valid Polygon objects with non-empty boundaries
-        
-    Logs:
-        DEBUG: Number of contours extracted and polygons created
+    Parameters
+    ----------
+    region_mask_2d : numpy.ndarray
+        Boolean mask indicating region membership.
+    n_points : int
+        Grid spacing multiplier.
+    grid_minx : float
+        Minimum x coordinate of the grid origin.
+    grid_miny : float
+        Minimum y coordinate of the grid origin.
+
+    Returns
+    -------
+    list[shapely.geometry.Polygon]
+        Valid polygons extracted from the mask.
     """
     polygons = []
     contours = find_contours(region_mask_2d, level=0.5, fully_connected='low', positive_orientation='low')
@@ -1603,17 +1632,21 @@ def extract_contours_cv2(region_mask_2d, n_points, grid_minx, grid_miny):
     Uses cv2.findContours with external contour retrieval to extract boundaries
     from a binary mask, then converts contours to polygon coordinates.
     
-    Args:
-        region_mask_2d (np.ndarray): 2D boolean array indicating region membership
-        n_points (int): Grid resolution (spacing multiplier)
-        grid_minx (float): Minimum x coordinate of grid origin
-        grid_miny (float): Minimum y coordinate of grid origin
-        
-    Returns:
-        list: List of valid Polygon objects with non-empty boundaries
-        
-    Logs:
-        DEBUG: Number of contours extracted and polygons created
+    Parameters
+    ----------
+    region_mask_2d : numpy.ndarray
+        Boolean mask indicating region membership.
+    n_points : int
+        Grid spacing multiplier.
+    grid_minx : float
+        Minimum x coordinate of the grid origin.
+    grid_miny : float
+        Minimum y coordinate of the grid origin.
+
+    Returns
+    -------
+    list[shapely.geometry.Polygon]
+        Valid polygons extracted from the mask.
     """
     polygons = []
     mask_uint8 = (region_mask_2d.astype(np.uint8) * 255)
@@ -1650,17 +1683,21 @@ def extract_contours_rasterio(region_mask_2d, n_points, grid_minx, grid_miny):
     Uses rasterio.features.shapes to convert a raster mask to vector polygons,
     then applies affine transformations to map grid coordinates to actual space.
     
-    Args:
-        region_mask_2d (np.ndarray): 2D boolean array indicating region membership
-        n_points (int): Grid resolution (spacing multiplier)
-        grid_minx (float): Minimum x coordinate of grid origin
-        grid_miny (float): Minimum y coordinate of grid origin
-        
-    Returns:
-        list: List of valid Polygon objects with non-empty boundaries
-        
-    Logs:
-        DEBUG: Number of polygons created from extracted features
+    Parameters
+    ----------
+    region_mask_2d : numpy.ndarray
+        Boolean mask indicating region membership.
+    n_points : int
+        Grid spacing multiplier.
+    grid_minx : float
+        Minimum x coordinate of the grid origin.
+    grid_miny : float
+        Minimum y coordinate of the grid origin.
+
+    Returns
+    -------
+    list[shapely.geometry.Polygon]
+        Valid polygons extracted from the mask.
     """
     polygons = []
     results = shapes(region_mask_2d.astype(np.uint8), mask=region_mask_2d > 0)
@@ -1684,17 +1721,17 @@ def finalize_gdf(df_list, cols):
     Concatenates multiple GeoDataFrames from parallel Voronoi workers,
     applies topology normalization, and returns single combined GeoDataFrame.
     
-    Args:
-        df_list (list): List of GeoDataFrames to concatenate
-        cols (pd.Index): Column names for empty fallback DataFrame
-        
-    Returns:
-        pd.GeoDataFrame: Concatenated GeoDataFrame with geometry column, WGS84 CRS
-        
-    Notes:
-        - If df_list is empty, returns empty GeoDataFrame with specified columns
-        - Applies buffer_geometry() to normalize topology of all geometries
-        - Sets CRS to EPSG:4326 (WGS84)
+    Parameters
+    ----------
+    df_list : list
+        GeoDataFrames to concatenate.
+    cols : pandas.Index
+        Column names for the empty fallback frame.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Concatenated GeoDataFrame in EPSG:4326.
     """
     if len(df_list) > 0:
         df = pd.concat(df_list, ignore_index=True)
@@ -1703,7 +1740,7 @@ def finalize_gdf(df_list, cols):
         df = pd.DataFrame(columns=cols)
     df = gpd.GeoDataFrame(df, geometry='geometry', crs='epsg:4326')
     if len(df) > 0:
-        df['geometry'] = df['geometry'].apply(buffer_geometry)
+        df['geometry'] = df['geometry'].map(buffer_geometry)
     return df
 
 def assign_sites_streaming(valid_points, points, weights, distance_fn, factor):
@@ -1714,21 +1751,28 @@ def assign_sites_streaming(valid_points, points, weights, distance_fn, factor):
     distance function, tracking minimum distance site for streaming computation.
     Supports multiplicative and additive weighting schemes.
     
-    Args:
-        valid_points (np.ndarray): Grid points shape (n, 2) to assign
-        points (np.ndarray): Site locations shape (m, 2)
-        weights (np.ndarray): Weight values for each site shape (m,)
-        distance_fn (callable): Distance function signature (points, site, weight, factor)
-        factor (float or None): Scale factor passed to distance_fn
-        
-    Returns:
-        tuple: (assignments, min_distances)
-            - assignments: np.ndarray shape (n,) with site indices (0 to m-1)
-            - min_distances: np.ndarray shape (n,) with minimum distances
-            
-    Notes:
-        Streaming: computes minimum distance on-the-fly without storing full distance matrix
-        Reduces memory overhead for large grids or many sites
+    Parameters
+    ----------
+    valid_points : numpy.ndarray
+        Candidate grid points to assign.
+    points : numpy.ndarray
+        Site locations.
+    weights : numpy.ndarray
+        Weight value for each site.
+    distance_fn : callable
+        Distance function used for assignment.
+    factor : float | None
+        Optional scaling factor passed into ``distance_fn``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Site assignment index for each valid grid point.
+
+    Notes
+    -----
+    The streaming implementation avoids materializing a full distance matrix for
+    large grids.
     """
 
     n_points = valid_points.shape[0]
@@ -1756,38 +1800,50 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     assigns each to nearest site, then extracts contours using scipy/cv2/rasterio helper
     functions (extract_contours_scipy, extract_contours_cv2, extract_contours_rasterio).
     
-    Args:
-        df (pd.GeoDataFrame): Point sites with 'geometry', 'weights', 'WASTE_ID' columns
-        col (str): Column to identify sites (for grouping if needed)
-        country_clip (pd.GeoDataFrame): Country boundary for clipping
-        scale_weights (bool): Scale weights by distance to nearest neighbor
-        clipping (pd.GeoDataFrame): Additional clipping boundary
-        n_points (int): Grid resolution (n_points x n_points grid)
-        distance_fn (callable): Distance function for weighting
-        scipy_true (bool): Use scipy.measure.find_contours for contour extraction
-        cv2_true (bool): Use cv2 for contour extraction
-        centroid_points (bool): Use pre-computed centroids instead of geometry
-        points_col (str or None): Column with point geometries to use
-        buffering (bool): Apply buffer intersection to regions
-        buffer (float): Buffer radius if buffering=True
-        threshold (float or int): Clustering distance threshold
-        
-    Returns:
-        tuple: (df_waste, region_polygons, point_df) GeoDataFrames
-        
-    Logs:
-        Progress tracking and region assignment details via DEBUG/INFO levels
-        
-    Notes:
-        REFACTORED: Contour extraction logic moved to separate helper functions
-        for improved testability and maintainability. See extract_contours_scipy(),
-        extract_contours_cv2(), and extract_contours_rasterio().
-        
-        POTENTIAL ERROR: Special case for single site (len(df)==1):
-        Returns region based on buffer or clipping geometry, not true Voronoi.
-        
-        MULTIPLE CONCAT: Uses pd.concat multiple times, potentially
-        duplicating NaN rows.
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input sites with geometry, weights, and identifier columns.
+    col : str
+        Column used to identify sites in the output.
+    country_clip : geopandas.GeoDataFrame | None
+        Country boundary used for final clipping.
+    scale_weights : bool, default=False
+        Whether to scale weights by local spacing.
+    clipping : geopandas.GeoDataFrame | None, default=None
+        Optional additional clipping boundary.
+    n_points : int, default=100
+        Grid resolution used for the rasterized Voronoi assignment.
+    distance_fn : callable, default=default_distance_multiplicative
+        Distance function used by the weighted Voronoi solver.
+    scipy_true : bool, default=False
+        Whether to extract contours with SciPy.
+    cv2_true : bool, default=False
+        Whether to extract contours with OpenCV.
+    centroid_points : bool, default=False
+        Whether to derive site coordinates from centroids.
+    points_col : str | None, default=None
+        Optional column containing pre-computed point geometries.
+    buffering : bool, default=False
+        Whether to intersect regions with local feature buffers.
+    buffer : float, default=10000
+        Buffer radius used for clipping and local intersection.
+    threshold : float | int, default=500
+        Clustering threshold applied before Voronoi generation.
+
+    Returns
+    -------
+    tuple
+        Tuple ``(df_waste, region_polygons, point_df)`` containing the cleaned
+        input sites, the generated Voronoi regions, and the subset of points
+        represented in the final output.
+
+    Notes
+    -----
+    For a single-site group, the function returns the clipped service area
+    derived from buffering and clipping inputs rather than a mathematically
+    meaningful Voronoi partition. ``clipping`` and ``country_clip`` refer to
+    geometric clipping boundaries, not an ML CLIP model.
     """
 
     if df is None or df.empty:
@@ -1864,19 +1920,19 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         
         geom = df.iloc[0]['geometry']
         if isinstance(geom, (Point, Polygon, MultiPolygon, LineString, MultiLineString)):
-            region_polygons.loc[0, 'geometry'] = buffer_geometry(region_polygons.loc[0, 'geometry'])
+            region_polygons.loc[0, 'geometry'] = buffer_geometry(region_polygons.loc[0, 'geometry'])  # type: ignore[index]
 
         # Optionally intersect region with buffer around site point
         if buffering:
             point_buffer = geom.centroid.buffer(buffer)
-            region_polygons.loc[0, 'geometry'] = region_polygons.loc[0, 'geometry'].intersection(point_buffer).buffer(0)
+            region_polygons.loc[0, 'geometry'] = region_polygons.loc[0, 'geometry'].intersection(point_buffer).buffer(0)  # type: ignore[union-attr, index]
 
         # Filter sites that appear in final regions
         point_df = df[df[col].isin(region_polygons[col])].reset_index(drop=True)
         df_waste = drop_duplicates(df, 'WKT_WWTP')
 
         # Clip region to actual clipping geometry to ensure it does not exceed bounds
-        region_polygons = gpd.clip(region_polygons, actual_clipping_object)
+        region_polygons = gpd.clip(region_polygons, actual_clipping_object)  # type: ignore[arg-type]
         region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
         
         # Apply country boundary clipping if provided
@@ -1885,7 +1941,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
 
         # Convert all outputs to WGS84 for standard output format
-        df_waste = df_waste.to_crs(4326)
+        df_waste = df_waste.to_crs(4326)  # type: ignore[union-attr]
         region_polygons = region_polygons.to_crs(4326)
         point_df = point_df.to_crs(4326)
         return df_waste, region_polygons, point_df
@@ -1984,7 +2040,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     df_waste = drop_duplicates(df, 'WKT_WWTP')
     
     # Clip regions to computed bounding box
-    region_polygons = gpd.clip(region_polygons, actual_clipping_object)
+    region_polygons = gpd.clip(region_polygons, actual_clipping_object)  # type: ignore[arg-type]
     region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
 
     # Clip regions to country boundary if provided (second clipping operation)
@@ -1994,7 +2050,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     
     # === PHASE 13: CRS STANDARDIZATION & RETURN ===
     # Convert all outputs to WGS84 for standard geographic format
-    df_waste = df_waste.to_crs(4326)
+    df_waste = df_waste.to_crs(4326)  # type: ignore[union-attr]
     region_polygons = region_polygons.to_crs(4326)
     point_df = point_df.to_crs(4326)
     
@@ -2029,9 +2085,23 @@ def voronoi_worker(args):
     return weighted_voronoi(sub_df, col, country_clip, scale_weights, clipping, n_points, distance_fn, scipy_true, cv2_true, centroid_points, points_col, buffering, buffer, threshold)
 
 def create_weights(sub_df, sigma=3, percent_threshold=10, method='linear'):
-    """
-    Calculates weights based on 'total_area' using various scaling methods.
-    Options for method: 'linear', 'logarithmic', 'square_root', 'sigmoid'
+    """Calculate normalized site weights from ``total_area`` values.
+
+    Parameters
+    ----------
+    sub_df : pandas.DataFrame | geopandas.GeoDataFrame
+        Input records with a ``total_area`` column.
+    sigma : float, default=3
+        Standard-deviation multiplier used for upper clipping.
+    percent_threshold : float, default=10
+        Divisor used to derive the lower clipping threshold from the median.
+    method : {'linear', 'logarithmic', 'square_root', 'sigmoid'}, default='linear'
+        Transformation applied before normalization.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of ``sub_df`` with a normalized ``weights`` column.
     """
     df = sub_df.copy()
     
@@ -2085,34 +2155,57 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
     Groups dataframe by column, processes each group in parallel with
     weighted Voronoi generation, then concatenates results.
     
-    Args:
-        df (pd.GeoDataFrame): Input locations with geometry, weights, ISO_2
-        col (str): Column to group by for parallel processing
-        country_df (pd.GeoDataFrame): Country boundaries for clipping
-        workers (int): Number of parallel workers
-        scale_weights (bool): Apply weight scaling
-        clipping (pd.GeoDataFrame): Boundary clipping GeoDataFrame
-        (... and many other Voronoi parameters)
-        
-    Returns:
-        tuple: (df_waste_final, region_df_final, point_df_final)
-               All concatenated and merged from parallel workers
-               
-    Notes:
-        COMPLEXITY: Extremely complex orchestration function with many
-        nested conditions and edge cases.
-        
-        WEIGHT NORMALIZATION: Complex logic for standardizing weights:
-          1. Replaces 0/NaN weights with mean
-          2. Normalizes to sum=1
-          3. Clips outliers (< sigma*std or < median/percent_threshold)
-        
-        COLUMN CONVERSION: Normalizes col values to rounded strings for
-        grouping. May lose numeric precision.
-        
-        ASSUMPTION: Requires ISO_2, WKT_WWTP, WASTE_ID columns
-        
-        UNUSED VARIABLE: old_sub_df is created but never used.
+    Parameters
+    ----------
+    df : geopandas.GeoDataFrame
+        Input locations with geometry, weights, and country codes.
+    col : str
+        Column used to group features before parallel processing.
+    country_df : geopandas.GeoDataFrame
+        Country boundaries used for clipping.
+    workers : int, default=12
+        Number of worker processes.
+    scale_weights : bool, default=False
+        Whether to scale weights before region generation.
+    clipping : geopandas.GeoDataFrame | None, default=None
+        Optional clipping geometry layer.
+    n_points : int, default=100
+        Grid resolution used for Voronoi generation.
+    distance_fn : callable, default=default_distance_multiplicative
+        Distance function used by the weighted Voronoi solver.
+    scipy_true : bool, default=False
+        Whether to use the SciPy contour extractor.
+    cv2_true : bool, default=False
+        Whether to use the OpenCV contour extractor.
+    centroid_points : bool, default=False
+        Whether to derive site coordinates from centroids.
+    points_col : str | None, default=None
+        Optional column containing pre-computed point geometries.
+    buffering : bool, default=False
+        Whether to intersect generated regions with local buffers.
+    buffer : float, default=10000
+        Buffer radius used by the region generator.
+    threshold : float | int, default=500
+        Clustering threshold applied before region generation.
+    only_round : bool, default=False
+        Whether to use round-area weights only.
+    sigma : float, default=3
+        Standard-deviation multiplier used during weight clipping.
+    percent_threshold : float, default=10
+        Divisor used to derive the lower clipping threshold from the median.
+    method : str, default='linear'
+        Weight-transformation method passed to ``create_weights``.
+
+    Returns
+    -------
+    tuple
+        Tuple ``(df_waste_final, region_df_final, point_df_final)`` containing
+        the concatenated outputs from all workers.
+
+    Notes
+    -----
+    ``clipping`` is normalized to the same grouping key as ``df`` so each
+    worker receives only the geometry relevant to its current group.
     """
     # Group both df and clipping by the same column
     logger.info(f"Starting orchestrate_voronoi_weights for {len(df)} sites with {workers} workers")
@@ -2234,7 +2327,8 @@ When run as __main__, it executes all 6 approaches in sequence:
 4. Output: Saves results to GeoTIFF/GeoJSON per approach_id
 
 WORKFLOW:
-  cfg = load_config()                    # Load YAML configuration
+    overrides = parse_config_overrides(args=args)  # Parse optional level/version/buffer
+    cfg = load_config(**overrides)                 # Load YAML configuration
   → create_output_paths(cfg)              # Create output directory structure
   → prepare_data(cfg)                     # Load input spatial data
   → run_voronoi_approach() × 6            # Execute all 6 approach variants
@@ -2253,7 +2347,7 @@ APPROACH VARIANTS (Conditional Execution):
     - 1b: multiplicative, with rounding
     - 1c: additive, no rounding
     - 1d: additive, with rounding
-    - Only runs if cfg['weights_cond'] == True
+        - Weighted variants are currently enabled by default
   
   Approach 2: Watershed + Voronoi
     - Uses watershed boundaries to constrain regions
@@ -2263,7 +2357,7 @@ APPROACH VARIANTS (Conditional Execution):
   Approaches 3a-3d: Weighted Watershed Voronoi (4 variants)
     - Applies distance weighting to Approach 2
     - Same 4 weighting strategies as Approach 1
-    - Only runs if cfg['weights_cond'] == True
+        - Weighted variants are currently enabled by default
   
   Approaches 4-5: City Voronoi (conditional)
     - Uses major cities instead of WWTP facilities
@@ -2277,7 +2371,6 @@ See pipelines.run_voronoi_approach() for parameter documentation.
 ########################### Global Variables ####################################
 if __name__ == '__main__':
     import argparse
-    import sys
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
@@ -2304,6 +2397,11 @@ EXAMPLES:
     parser.add_argument('--approach', nargs='+', type=str, default=None,
                        help='Specific approach(es) to run (0, 1a-1d, 2, 3a-3d, 4, 5). Default: all')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('level', nargs='?', default=None, help='Optional config level override')
+    parser.add_argument('version', nargs='?', default=None, help='Optional config version override')
+    parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
+    parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
+    parser.add_argument('is_multiplicative', nargs='?', default=None, help='Optional config is_multiplicative override')
     
     args = parser.parse_args()
     
@@ -2321,16 +2419,21 @@ EXAMPLES:
     # Setup paths and logging
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     try:
-        from .starter import load_config
+        from .starter import load_config, parse_config_overrides
         from .pipelines import create_output_paths, prepare_data, run_voronoi_approach
     except ImportError:  # Support running as a top-level script
-        from starter import load_config
+        from starter import load_config, parse_config_overrides
         from pipelines import create_output_paths, prepare_data, run_voronoi_approach
     
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     
-    cfg = load_config()
+    try:
+        overrides = parse_config_overrides(args=args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    cfg = load_config(**overrides)
     paths_dict = create_output_paths(cfg)
     data = prepare_data(cfg)
     
@@ -2455,7 +2558,7 @@ EXAMPLES:
                                                geometry=gpd.GeoSeries([from_wkt(geom) if isinstance(geom, str) else geom 
                                                                         for geom in df_cities['geometry']]), 
                                                crs='epsg:4326')
-                    df_cities['geometry'] = df_cities['geometry'].apply(buffer_geometry)
+                    df_cities['geometry'] = df_cities['geometry'].map(buffer_geometry)
                     
                     if 'ISO_2' not in df_cities.columns:
                         if not os.path.exists(cfg['paths']['overture']):
@@ -2465,7 +2568,7 @@ EXAMPLES:
                     dissolved_buffers_cities = orchestrate_overlaps(df_cities, cfg['max_workers'], 
                                                                    paths_dict['buffers']['city'], cfg['buffer'])
                     dissolved_buffers_cities = drop_duplicates(dissolved_buffers_cities, 'geometry')
-                    dissolved_buffers_cities['geometry'] = dissolved_buffers_cities['geometry'].apply(buffer_geometry)
+                    dissolved_buffers_cities['geometry'] = dissolved_buffers_cities['geometry'].map(buffer_geometry)
                     dissolved_buffers_cities['buffer_id'] = np.arange(len(dissolved_buffers_cities))
                     
                     gdf_4 = gdf_bbox.copy()
@@ -2473,7 +2576,7 @@ EXAMPLES:
                                                       use_duckdb=cfg.get('duckdb_cond', False), 
                                                       max_workers=cfg['max_workers'])
                     gdf_4 = drop_duplicates(drop_duplicates(gdf_4, 'WASTE_ID'), 'geometry')
-                    gdf_4['geometry'] = gdf_4['geometry'].apply(buffer_geometry)
+                    gdf_4['geometry'] = gdf_4['geometry'].map(buffer_geometry)
                 
                 if approach_id == '4':
                     logger.info("Starting Approach 4: City Voronoi")

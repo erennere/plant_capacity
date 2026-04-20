@@ -1,3 +1,11 @@
+"""Render text annotations onto pre-generated imagery tiles.
+
+This script reads per-grid OSM-derived polygon and line features, projects them
+into image space, and writes annotated PNG or GeoTIFF outputs. References to
+"clip" in this file mean geometric intersection with a tile boundary, not use of
+an ML CLIP model.
+"""
+
 import os, sys
 import argparse
 import math
@@ -18,9 +26,9 @@ import logging
 import shapely.wkt
 
 try:
-    from ..starter import load_config
+    from ..starter import load_config, parse_config_overrides
 except ImportError:
-    from research_code.starter import load_config
+    from research_code.starter import load_config, parse_config_overrides
 
 
 logging.basicConfig(
@@ -28,15 +36,13 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-# ---------------- CONFIG ---------------- #
 def safe_wkt_load(wkt_wtr):
-    """Cleans hex string and converts to Shapely geometry."""
+    """Parse WKT text into a Shapely geometry, returning None on bad rows."""
     try:
         if not wkt_wtr or not isinstance(wkt_wtr, str):
             return None
         return shapely.wkt.loads(wkt_wtr)
     except Exception as e:
-        # If a specific row is broken, we skip it rather than crashing the script
         return None
     
 BING_API_KEY = "de60014913a0464f83eec298da249356"
@@ -66,7 +72,6 @@ RES_X = RESOLUTIONS[ZOOM_LEVEL]
 RES_Y = RESOLUTIONS[ZOOM_LEVEL]
 CELL_SIZE = 3072
 FACTOR = 1.194
-#IMAGE_SIZE = [int(CELL_SIZE*FACTOR/RES_X), int(CELL_SIZE*FACTOR/RES_Y)]
 IMAGE_SIZE = [3072, 3072]
 MAX_WORKERS = 64
 GEOREFERENCED = False
@@ -76,14 +81,12 @@ EARTH_RADIUS = 6378137
 WORLD_WIDTH = 2 * math.pi * EARTH_RADIUS  # ~40075016.685
 TARGET_SIZE = [1024, 1024]
 
-# -------------------------------------- #
 transformer = Transformer.from_crs(
     "EPSG:4326", "EPSG:3857", always_xy=True
 )
 
-# ---------- BING IMAGE DOWNLOAD ---------- #
-
 def download_bing_image(center_lon, center_lat):
+    """Download one imagery tile centered on the provided lon/lat coordinates."""
     url = (
         "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial"
         f"/{center_lat},{center_lon}"
@@ -96,21 +99,16 @@ def download_bing_image(center_lon, center_lat):
     return Image.open(BytesIO(r.content)).convert("RGB")
 
 def download_random_image(center_lon, center_lat):
-    """
-    Dummy image generator for testing.
-    Returns a solid black image with the same dimensions
-    as the Bing imagery would have.
-    """
+    """Return a dummy black image with the same dimensions as production tiles."""
     return Image.new("RGB", IMAGE_SIZE, (0, 0, 0))
 
 def get_image(idx, images_dir):
+    """Load a pre-generated source image for one annotation index."""
     filepath = os.path.join(images_dir, f'{idx}.png')
     if os.path.exists(filepath):
         return Image.open(filepath)
     else:
         return None
-
-# ---------- COORD TRANSFORM ---------- #
 
 def mercator_to_pixel(x, y, cx, cy, IMAGE_SIZE, wrap=True):
     """
@@ -150,6 +148,7 @@ def mercator_to_pixel(x, y, cx, cy, IMAGE_SIZE, wrap=True):
     return int(round(px)), int(round(py))
 
 def image_bounds_mercator(center_lon, center_lat):
+    """Return approximate Web-Mercator bounds for the configured output image."""
     cx, cy = transformer.transform(center_lon, center_lat)
     cx, cy = center_lon, center_lat
 
@@ -166,7 +165,6 @@ def image_bounds_mercator(center_lon, center_lat):
 
     return xmin, ymin, xmax, ymax, res
 
-# -------------------- TEXT HELPERS --------------------
 def draw_text_with_padding(draw, xy, text, font, fill, pad_fill, pad=2):
     """Draws centered text with a stroke/halo outline."""
     draw.text(
@@ -200,11 +198,13 @@ def draw_rotated_text_with_padding(image, xy, text, angle, font, fill, pad_fill,
     image.alpha_composite(rotated_txt, (paste_x, paste_y))
 
 def linestring_angle(line):
+    """Estimate a label rotation angle from the first and last line vertices."""
     x1, y1 = line.coords[0]
     x2, y2 = line.coords[-1]
     return math.degrees(math.atan2(y2 - y1, x2 - x1))
 
 def log_gdf_preview(name, gdf, columns, n=5):
+    """Log a small preview of selected GeoDataFrame columns for debugging."""
     available_cols = [c for c in columns if c in gdf.columns]
     if not available_cols:
         logging.info("%s columns not found. available=%s", name, list(gdf.columns))
@@ -231,21 +231,6 @@ def split_grids_for_instance(grids, instance_id, num_instances=10, split_seed=42
     random.Random(split_seed).shuffle(shuffled)
     return shuffled[instance_id::num_instances]
 
-# ---------- DRAWING ---------- #
-
-""" def draw_annotations(image, annotations):
-    draw = ImageDraw.Draw(image)
-
-    try:
-        font = ImageFont.truetype("DejaVuSans.ttf", FONTSIZE)
-    except:
-        font = ImageFont.load_default()
-
-    for x, y, label in annotations:
-        #draw.ellipse((x-4, y-4, x+4, y+4), fill="red")
-        draw.text((x+6, y-6), label, fill="yellow", font=font)
-
-    return image """
 def draw_annotations(image, annotations, fontsize=12):
     """Orchestrates drawing, ensuring lines are drawn before polygon labels."""
     image = image.convert("RGBA")
@@ -269,9 +254,8 @@ def draw_annotations(image, annotations, fontsize=12):
             draw_text_with_padding(draw, (ann["x"], ann["y"]), ann["text"], font, "black", "white", pad=3)
     return image
 
-# ---------- PROCESS SINGLE BBOX ---------- #
-
 def georef_write(image, center_lon, center_lat, out_path):
+    """Write an annotated image as a georeferenced GeoTIFF in EPSG:3857."""
     xmin, ymin, xmax, ymax, res = image_bounds_mercator(
         center_lon, center_lat
     )
@@ -293,8 +277,35 @@ def georef_write(image, center_lon, center_lat, out_path):
         for i in range(3):
             dst.write(img_arr[:, :, i], i + 1)
 
-# -------------------- MAIN PROCESS --------------------
 def process_bbox(idx, bbox_geom, img_idx, poly_gdf, cols, line_gdf, line_cols, output_dir, images_dir):
+    """Annotate a single bbox tile with polygon and line labels and write output.
+
+    Parameters
+    ----------
+    idx : int
+        Grid-cell identifier.
+    bbox_geom : shapely.geometry.base.BaseGeometry
+        Tile geometry in the working CRS.
+    img_idx : int
+        Source image identifier.
+    poly_gdf : geopandas.GeoDataFrame
+        Polygon features for the tile.
+    cols : list[str]
+        Columns to combine into polygon labels.
+    line_gdf : geopandas.GeoDataFrame
+        Line features for the tile.
+    line_cols : list[str]
+        Columns to combine into line labels.
+    output_dir : str
+        Directory where annotated images are written.
+    images_dir : str
+        Directory containing the source imagery.
+
+    Returns
+    -------
+    tuple[int, int, str | None]
+        Tuple of ``(idx, annotation_count, error_message)``.
+    """
     try:
         # 1. Tile Center & Bounds
         center = bbox_geom.centroid
@@ -319,6 +330,7 @@ def process_bbox(idx, bbox_geom, img_idx, poly_gdf, cols, line_gdf, line_cols, o
             # Skip if nothing was found
             if not tag: continue
 
+            # Geometrically clip the feature to the visible tile footprint.
             clipped_geom = row.geometry.intersection(bbox_geom)
             if clipped_geom.is_empty or not clipped_geom.is_valid:
                 continue
@@ -346,18 +358,18 @@ def process_bbox(idx, bbox_geom, img_idx, poly_gdf, cols, line_gdf, line_cols, o
             # Skip if nothing was found
             if not tag: continue
 
-            # CLIP: Line intersection can return MultiLineStrings if it enters/leaves the tile
+            # Geometric clipping can return MultiLineString fragments when a line
+            # enters and leaves the tile multiple times.
             clipped_line = row.geometry.intersection(bbox_geom)
             if clipped_line.is_empty:
                 continue
 
-            # For lines, interpolate(0.5) on the CLIPPED portion 
-            # so the label is in the center of the VISIBLE segment
+            # Label lines at the midpoint of the visible, geometrically clipped segment.
             pt = clipped_line.interpolate(0.5, normalized=True)
             px, py = mercator_to_pixel(pt.x, pt.y, cx, cy, IMAGE_SIZE)
             
-            # Use the original geometry for angle to maintain road directionality, 
-            # or clipped_line if you want the angle of the visible portion only.
+            # Use the original geometry for angle so label rotation follows the
+            # source feature direction rather than a short clipped fragment.
             angle = linestring_angle(row.geometry) 
             if 0 <= px < IMAGE_SIZE[0] and 0 <= py < IMAGE_SIZE[1]:
                 annotations.append({
@@ -379,13 +391,28 @@ def process_bbox(idx, bbox_geom, img_idx, poly_gdf, cols, line_gdf, line_cols, o
         logging.exception("bbox %s failed", idx)
         return idx, 0, str(e)
     
-# ---------- MAIN PARALLEL PIPELINE ---------- #
-
 def annotate_bboxes_parallel(bbox_gdf, poly_gdf, cols, line_gdf, line_cols, output_dir, images_dir, files):
-    #mask = [not f"bbox_{idx}.png" in files
-    #    for idx in bbox_gdf.data_idx
-    #]
-    #bbox_gdf = bbox_gdf[mask]
+    """Dispatch bbox annotation jobs across a thread pool.
+
+    Parameters
+    ----------
+    bbox_gdf : geopandas.GeoDataFrame
+        Grid-cell features to annotate.
+    poly_gdf : geopandas.GeoDataFrame
+        Polygon annotation features.
+    cols : list[str]
+        Polygon columns used for text labels.
+    line_gdf : geopandas.GeoDataFrame
+        Line annotation features.
+    line_cols : list[str]
+        Line columns used for text labels.
+    output_dir : str
+        Directory where annotated outputs are written.
+    images_dir : str
+        Directory containing source imagery.
+    files : Any
+        Unused compatibility parameter retained by the current call signature.
+    """
     logging.info("Queued %s bboxes for annotation", len(bbox_gdf))
     futures = []
 
@@ -413,8 +440,6 @@ def annotate_bboxes_parallel(bbox_gdf, poly_gdf, cols, line_gdf, line_cols, outp
             else:
                 logging.info("bbox %s done (%s tags)", idx, n)
 
-# ---------- USAGE ---------- #
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Annotate Bing images for a deterministic subset of grids."
@@ -436,14 +461,23 @@ if __name__ == "__main__":
         default=42,
         help="Seed used for deterministic random grid split (default: 42).",
     )
+    parser.add_argument("level", nargs="?", default=None, help="Optional config level override")
+    parser.add_argument("version", nargs="?", default=None, help="Optional config version override")
+    parser.add_argument("buffer", nargs="?", default=None, help="Optional config buffer override")
+    parser.add_argument("weight_method", nargs="?", default=None, help="Optional config weight_method override")
+    parser.add_argument("is_multiplicative", nargs="?", default=None, help="Optional config is_multiplicative override")
     args = parser.parse_args()
 
     logging.info("Starting Bing annotation pipeline")
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg = load_config()
+    try:
+        overrides = parse_config_overrides(args=args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    cfg = load_config(**overrides)
     logging.info("Configuration loaded")
 
-    #images_dir = "./annotation_scripts/images"
     images_dir = cfg["paths"]["annotations_images_dir"]
     grid_filedir = cfg["paths"]["annotations_grid_dir"]
     temp_parquet_dir = cfg["paths"]["annotations_temp_parquet_dir"]
@@ -453,15 +487,12 @@ if __name__ == "__main__":
     poly_filepath = os.path.join(file_location_dir, 'merged_polygons.parquet')
     line_filepath = os.path.join(file_location_dir, 'merged_lines.parquet')
 
-    #points_path = cfg["paths"]["corrected_all_filepath"]
     points_path = f'{images_dir}/ref.geojson'
     grids_filepath = os.path.join(grid_filedir, f'grids_{os.path.basename(cfg["paths"]["corrected_all_filepath"])}')
 
-    # 1. Load the grid and ensure the merge key is an integer
     bbox_gdf = gpd.read_file(grids_filepath).to_crs(3857)
     bbox_gdf['idx'] = bbox_gdf['idx'].astype(int)
 
-    # 2. Load the points and prepare the img_idx
     points_gdf = gpd.read_file(points_path).to_crs(3857)
     points_gdf['idx'] = points_gdf['idx'].astype(int)
     points_gdf['img_idx'] = points_gdf.index.astype(int)
@@ -473,10 +504,7 @@ if __name__ == "__main__":
     )
     bbox_gdf = bbox_gdf[bbox_gdf.geometry.is_valid & ~bbox_gdf.geometry.is_empty]
     logging.info("Prepared %s valid bounding boxes", len(bbox_gdf))
-    #log_gdf_preview("grid_bbox (bbox_gdf)", bbox_gdf, ["data_idx_grid", "geometry", "img_idx"])
-
-    #output_dir = './annotation_scripts/annotated_images'
-    output_dir = cfg["paths"]["annotations_output_dir"]
+    output_dir = cfg["paths"]["annotated_images_output_dir"]
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
@@ -633,7 +661,6 @@ if __name__ == "__main__":
         log_gdf_preview("lines_gdf", line_gdf, ["grid", "geometry"])
         batch_bbox_gdf = bbox_gdf[bbox_gdf['idx'].isin(sub_grids)].copy()
 
-        # Run your parallel annotation
         annotate_bboxes_parallel(batch_bbox_gdf, poly_gdf, ["man_made", "landuse", "industrial", "power", "resource", "water"], line_gdf, ["waterway", "man_made", "landuse", "industrial", "power", "resource", "water"], 
                         output_dir, images_dir, files)
     logging.info("Annotation pipeline finished")

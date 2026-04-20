@@ -10,6 +10,13 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Parse optional config override arguments (will be sys.argv[2+] in Python)
+LEVEL="${1:-}"
+VERSION="${2:-}"
+BUFFER="${3:-}"
+WEIGHT_METHOD="${4:-}"
+IS_MULTIPLICATIVE="${5:-}"
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
 }
@@ -18,5 +25,5 @@ log "Installing research_code module"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
 
 log "Running assign_rivers_to_basin with 2 workers"
-${PYTHON_CMD} -m research_code.pop_at_risk_river_calculations.assign_rivers_to_basin 2 2>&1 | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
+${PYTHON_CMD} -m research_code.pop_at_risk_river_calculations.assign_rivers_to_basin 2 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
 log "Completed assign_rivers_to_basin"

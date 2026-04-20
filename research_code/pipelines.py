@@ -18,47 +18,49 @@ logger = logging.getLogger(__name__)
 
 
 def create_output_paths(cfg):
-    """
-    Generate all output file paths based on configuration.
-    
-    Args:
-        cfg (dict): Configuration dictionary from load_config()
-        
-    Returns:
-        dict: Dictionary with all output paths organized by approach
+    """Generate canonical output paths for all Voronoi approaches.
+
+    Returns paths for the buffer products plus the full approach family used by
+    create_voronoi.py:
+    - `0`: WWTP buffer Voronoi baseline
+    - `1a`-`1d`: weighted WWTP-buffer variants
+    - `2`: watershed-constrained Voronoi baseline
+    - `3a`-`3d`: weighted watershed variants
+    - `4`: city-based Voronoi baseline
+    - `5`: weighted city-based Voronoi
     """
     version = cfg['version']
     level = cfg['level']
     buffer = cfg['buffer']
-    particle = cfg['particle']
     data_dir = cfg['paths']['data_dir']
     voronoi_dir = cfg['paths']['voronoi_dir']
     
     paths = {
         'buffers': {
-            'WWTP': os.path.join(data_dir, f'dissolved_wwtp_buffers_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            'city': os.path.join(data_dir, f'dissolved_city_buffers_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            'WWTP_convex': os.path.join(data_dir, f'dissolved_wwtp_convex_hull_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            'city_convex': os.path.join(data_dir, f'dissolved_city_convex_hull_v{version}_bf{int(buffer)}_{particle}.gpkg'),
+            'WWTP': os.path.join(data_dir, f'dissolved_wwtp_buffers_v{version}_bf{int(buffer)}.gpkg'),
+            'city': os.path.join(data_dir, f'dissolved_city_buffers_v{version}_bf{int(buffer)}.gpkg'),
+            'WWTP_convex': os.path.join(data_dir, f'dissolved_wwtp_convex_hull_v{version}_bf{int(buffer)}.gpkg'),
+            'city_convex': os.path.join(data_dir, f'dissolved_city_convex_hull_v{version}_bf{int(buffer)}.gpkg'),
         },
         'voronoi': {
-            '0': os.path.join(voronoi_dir, f'appr_0_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            '1a': os.path.join(voronoi_dir, f'appr_1_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            '1b': os.path.join(voronoi_dir, f'appr_1_v{version}_only_round_bf{int(buffer)}_{particle}.gpkg'),
-            '1c': os.path.join(voronoi_dir, f'appr_1_v{version}_add_bf{int(buffer)}_{particle}.gpkg'),
-            '1d': os.path.join(voronoi_dir, f'appr_1_v{version}_only_round_add_bf{int(buffer)}_{particle}.gpkg'),
-            '2': os.path.join(voronoi_dir, f'appr_2_lvl_{level}_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            '3a': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_bf{int(buffer)}_{particle}.gpkg'),
-            '3b': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_only_round_bf{int(buffer)}_{particle}.gpkg'),
-            '3c': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_add_bf{int(buffer)}_{particle}.gpkg'),
-            '3d': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_only_round_add_bf{int(buffer)}_{particle}.gpkg'),
-            '4': os.path.join(voronoi_dir, f'appr_4_v{level}_bf{int(buffer)}_{particle}.gpkg'),
-            '5': os.path.join(voronoi_dir, f'appr_5_v{version}_bf{int(buffer)}_{particle}.gpkg'),
+            '0': os.path.join(voronoi_dir, f'appr_0_v{version}_bf{int(buffer)}.gpkg'),
+            '1a': os.path.join(voronoi_dir, f'appr_1_v{version}_bf{int(buffer)}.gpkg'),
+            '1b': os.path.join(voronoi_dir, f'appr_1_v{version}_only_round_bf{int(buffer)}.gpkg'),
+            '1c': os.path.join(voronoi_dir, f'appr_1_v{version}_add_bf{int(buffer)}.gpkg'),
+            '1d': os.path.join(voronoi_dir, f'appr_1_v{version}_only_round_add_bf{int(buffer)}.gpkg'),
+            '2': os.path.join(voronoi_dir, f'appr_2_lvl_{level}_v{version}_bf{int(buffer)}.gpkg'),
+            '3a': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_bf{int(buffer)}.gpkg'),
+            '3b': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_only_round_bf{int(buffer)}.gpkg'),
+            '3c': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_add_bf{int(buffer)}.gpkg'),
+            '3d': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_only_round_add_bf{int(buffer)}.gpkg'),
+            '4': os.path.join(voronoi_dir, f'appr_4_v{level}_bf{int(buffer)}.gpkg'),
+            '5': os.path.join(voronoi_dir, f'appr_5_v{version}_bf{int(buffer)}.gpkg'),
         }
     }
     return paths
 
 def create_pop_output_paths(cfg):
+    """Return output paths for population-enriched copies of Voronoi outputs."""
     voronois = create_output_paths(cfg)['voronoi']
     return {
         'voronoi' : {
@@ -72,30 +74,47 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     """
     Run a single Voronoi generation approach.
     
-    Args:
-        approach_id (str): Approach identifier for logging
-        gdf (GeoDataFrame): Input sites
-        clipping_gdf (GeoDataFrame): Clipping boundary
-        country_df (GeoDataFrame): Country boundaries
-        cfg (dict): Configuration dictionary
-        distance_fn (callable): Distance function for Voronoi weighting
-        output_path (str): Output file path
-        buffer_id_col (str): Column name for buffer IDs in gdf
-        scale_weights (bool): Whether to scale weights
-        only_round (bool): Whether to round-only
-        buffering (bool): Whether to apply buffer intersection
-        
-    Returns:
-        tuple: (df_waste, region_df, point_df) or None if output exists
+    Parameters
+    ----------
+    approach_id : str
+        Approach identifier such as ``0``, ``1a``, or ``3d``.
+    gdf : geopandas.GeoDataFrame
+        Input sites for the selected approach.
+    clipping_gdf : geopandas.GeoDataFrame | None
+        Optional clipping geometries used to trim Voronoi regions.
+    country_df : geopandas.GeoDataFrame
+        Country boundaries used for final clipping.
+    cfg : dict
+        Runtime configuration dictionary.
+    distance_fn : callable
+        Distance function used by the weighted Voronoi solver.
+    output_path : str
+        Output file path.
+    buffer_id_col : str, default='buffer_id'
+        Column used to group features before region generation.
+    scale_weights : bool, default=False
+        Whether to scale feature weights before Voronoi generation.
+    only_round : bool, default=False
+        Whether to use round-area weights only.
+    buffering : bool, default=False
+        Whether to intersect the output with local feature buffers.
+    method : str, default='linear'
+        Weight-transformation method passed into the Voronoi workflow.
+
+    Returns
+    -------
+    tuple
+        Tuple ``(df_waste, region_df, point_df)`` returned by the Voronoi workflow.
+
+    Notes
+    -----
+    This function always overwrites ``output_path`` when called. Any skip-if-
+    output-exists behavior must be implemented by the caller.
     """
     try:
         from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates
     except ImportError:  # Support running as a top-level script
         from create_voronoi import orchestrate_voronoi_weights, drop_duplicates
-    
-    #if os.path.exists(output_path):
-    #    logger.info(f"Approach {approach_id}: Output exists at {output_path}, skipping")
-    #    return None
     
     logger.info(f"Approach {approach_id}: Running Voronoi generation (scale_weights={scale_weights}, only_round={only_round})")
     
@@ -127,11 +146,16 @@ def prepare_data(cfg):
     """
     Load and prepare all input data.
     
-    Args:
-        cfg (dict): Configuration dictionary
-        
-    Returns:
-        dict: Dictionary with loaded GeoDataFrames (gdf_bbox, watershed_gdf, country_df)
+    Parameters
+    ----------
+    cfg : dict
+        Runtime configuration dictionary.
+
+    Returns
+    -------
+    tuple
+        Tuple ``(gdf_bbox, watershed_gdf, country_df)`` containing the prepared
+        WWTP, watershed, and country layers.
     """
     try:
         from .create_voronoi import (
