@@ -23,7 +23,6 @@ import rasterio
 from rasterio import windows
 from rasterio.features import shapes, geometry_mask, rasterize
 from exactextract import exact_extract
-from scipy.ndimage import label
 from shapely.geometry import shape, box
 from shapely import to_wkt, make_valid
 from shapely.ops import unary_union
@@ -268,7 +267,10 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
 
             # exact_extract is faster and more memory-efficient than rasterstats
             chunk = final_gdf.iloc[start_idx:end_idx][["geometry"]].copy()
-            chunk["geometry"] = chunk["geometry"].apply(_sanitize_polygon_geom)
+            chunk["geometry"] = pd.Series(
+                [_sanitize_polygon_geom(geom) for geom in chunk["geometry"]],
+                index=chunk.index,
+            )
             invalid = chunk["geometry"].isna()
             if invalid.any():
                 logger.warning(
@@ -290,9 +292,19 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
                 output="pandas"
             )
 
+            if stats_df is None or len(stats_df) == 0:
+                continue
+            stats_df = pd.DataFrame(stats_df)
+
             row_index = chunk.index.to_numpy()
-            sums[row_index] = np.round(stats_df["sum"].fillna(0)).astype(np.int64).to_numpy()
-            counts[row_index] = stats_df["count"].fillna(0).astype(np.int64).to_numpy()
+            sum_values = np.asarray(
+                np.round(stats_df["sum"].fillna(0)).astype(np.int64)
+            )
+            count_values = np.asarray(
+                stats_df["count"].fillna(0).astype(np.int64)
+            )
+            sums[row_index] = sum_values
+            counts[row_index] = count_values
 
             del stats_df, chunk
             gc.collect()

@@ -4,8 +4,6 @@ Watersheds are selected for verification when the share of valid WWTP shapes in 
 basin exceeds the configured `percent_verification` threshold.
 """
 import os
-import pandas as pd
-import numpy as np
 import geopandas as gpd
 try:
     from ..starter import load_config, parse_config_overrides

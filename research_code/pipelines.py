@@ -11,7 +11,6 @@ import pandas as pd
 import geopandas as gpd
 from shapely import from_wkt, to_wkt, from_wkb
 import shapely
-from shapely.geometry import Point
 import logging
 
 logger = logging.getLogger(__name__)
@@ -174,7 +173,11 @@ def prepare_data(cfg):
         gdf_bbox = pd.read_csv(paths['bboxes'])
         hydrowaste_df = pd.read_csv(paths['hydrowaste'])
         gdf_bbox = pd.merge(gdf_bbox, hydrowaste_df.drop(['LON_WWTP', 'LAT_WWTP', 'geometry', 'POP_SERVED'], axis=1), on=['WASTE_ID'])
-        gdf_bbox = gpd.GeoDataFrame(gdf_bbox, geometry=shapely.wkt.loads(gdf_bbox['geometry']),  crs='epsg:4326')
+        gdf_bbox = gpd.GeoDataFrame(
+            gdf_bbox,
+            geometry=gdf_bbox['geometry'].map(from_wkt),
+            crs='epsg:4326',
+        )
     else:
         gdf_bbox = gpd.read_file(paths['corrected_all_filepath'])
         if 'final_geometry' in gdf_bbox.columns:
@@ -183,7 +186,10 @@ def prepare_data(cfg):
             gdf_bbox = gdf_bbox.drop(columns=['final_geometry'])
     
     gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, 'WASTE_ID'), 'geometry')
-    gdf_bbox['geometry'] = gdf_bbox['geometry'].apply(buffer_geometry)
+    gdf_bbox['geometry'] = pd.Series(
+        [buffer_geometry(geom) for geom in gdf_bbox['geometry']],
+        index=gdf_bbox.index,
+    )
     gdf_bbox['WKT_WWTP'] = gdf_bbox['geometry'].apply(lambda geom: to_wkt(geom))
     gdf_bbox['OLD_WASTE_ID'] = gdf_bbox['WASTE_ID']
     gdf_bbox['WASTE_ID'] = np.arange(len(gdf_bbox))
@@ -207,7 +213,10 @@ def prepare_data(cfg):
     # Load watersheds
     watershed_gdf = gpd.read_file(paths['watershed'], crs='epsg:4326')
     watershed_gdf = watershed_gdf.drop_duplicates(subset=['HYBAS_ID', 'geometry']).reset_index(drop=True)
-    watershed_gdf['geometry'] = watershed_gdf['geometry'].apply(buffer_geometry)
+    watershed_gdf['geometry'] = pd.Series(
+        [buffer_geometry(geom) for geom in watershed_gdf['geometry']],
+        index=watershed_gdf.index,
+    )
     
     #if 'ISO_2' not in watershed_gdf.columns:
     if True:
@@ -229,9 +238,11 @@ def prepare_data(cfg):
         if not os.path.exists(f"{filename}"):    
             ensure_output_dir_for_file(filename)
             gdf_bbox.to_csv(f"{filename}", index=False)
-        if not os.path.exists(f"{filename.replace('.csv', '.gpkg')}"):
-            ensure_output_dir_for_file(filename.replace('.csv', '.gpkg'))
-            gdf_bbox.to_file(f"{filename.replace('.csv', '.gpkg')}", index=False, driver='GPKG')
+        expanded_gpkg = filename.replace('.csv', '.gpkg')
+        if not os.path.exists(expanded_gpkg):
+            ensure_output_dir_for_file(expanded_gpkg)
+            gdf_bbox_export = gpd.GeoDataFrame(gdf_bbox, geometry='geometry', crs=gdf_bbox.crs)
+            gdf_bbox_export.to_file(expanded_gpkg, index=False, driver='GPKG')
         
     # Load country boundaries
     country_df = pd.read_parquet(paths['overture'])
