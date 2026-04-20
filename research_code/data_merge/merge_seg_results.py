@@ -12,8 +12,10 @@ import geopandas as gpd
 import zipfile
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 def assign_to_nearest(gdf_source, gdf_target):
     """Attach nearest target attributes to each source geometry.
@@ -90,8 +92,10 @@ def merge_old(cfg):
     not_valids = gdf[gdf['geometry'].isna()]
     main_data = assign_to_nearest(gdf[gdf['geometry'].notna()], data)
     main_data = pd.concat([main_data, not_valids], ignore_index=True)
+    output_path = os.path.join(paths["data_dir"], paths["seg_corrected_south"])
+    ensure_output_dir_for_file(output_path)
     main_data.to_file(
-        os.path.join(paths["data_dir"], paths["seg_corrected_south"]),
+        output_path,
         driver='GPKG',
         index=False,
     )
@@ -120,6 +124,7 @@ def merge_new(cfg):
         geometry='geometry',
         crs=points_df.crs,
     )
+    ensure_output_dir_for_file(paths['corrected_all_filepath'])
     merged_df.to_file(index=False, driver='GPKG', filename=paths['corrected_all_filepath'])
 
 def parse_args():

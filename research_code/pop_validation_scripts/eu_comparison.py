@@ -14,10 +14,12 @@ import numpy as np
 try:
     from .hw_comparison import ndvi, multiples, replace_inf, get_approach
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
     from ..data_merge.merge_seg_results import assign_to_nearest
 except ImportError:
     from research_code.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf, get_approach
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
     from research_code.data_merge.merge_seg_results import assign_to_nearest
 
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
@@ -76,6 +78,7 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
     fig.suptitle(title, fontsize=fontsize)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save and output_filepath:
+        ensure_output_dir_for_file(output_filepath)
         plt.savefig(output_filepath, dpi=dpi)
 
     plt.show()

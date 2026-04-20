@@ -12,13 +12,13 @@ from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, t
 from shapely.geometry.base import BaseGeometry
 import duckdb
 try:
-    from ..create_voronoi import estimate_utm_epsg, download_overture_maps, buffer_geometry
+    from ..create_voronoi import estimate_utm_epsg, download_overture_maps, buffer_geometry, ensure_output_dir_for_file
     from ..starter import load_config, parse_config_overrides
-    from ..download_pop import country_isos
+    from ..download_pop import get_iso_codes
 except ImportError:
-    from research_code.create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry
+    from research_code.create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry, ensure_output_dir_for_file
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.download_pop import country_isos
+    from research_code.download_pop import get_iso_codes
 
 def corr_locations_wOSM(rad, pdf, df):
     """Match each input geometry to the nearest OSM geometry within a radius.
@@ -258,20 +258,23 @@ def main():
         if not os.path.exists(paths["overture"]):
             download_overture_maps(paths['overture_s3_url'], paths["overture"])
         final_df = enrich_country_with_duckdb(final_df, paths["overture"])
-        alpha_2_to_names, alpha_3_to_names, alpha_2_to_3, alpha_3_to_2 = country_isos()
+        alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
         final_df['ISO_2'] = final_df['ISO_2'].where(
             final_df['ISO_2'].notna(),
             final_df['CNTRY_ISO'].map(alpha_3_to_2),
         )
 
     final_df = gpd.GeoDataFrame(final_df, geometry='geometry', crs=4326)
+    ensure_output_dir_for_file(paths['corrected_south'])
     final_df.to_file(paths['corrected_south'], driver='GeoJSON', index=False)
 
     old_file = gpd.read_file(old_filename)
     new_points = final_df[~final_df.geometry.isin(old_file.geometry)]
     new_points = gpd.GeoDataFrame(new_points, geometry='geometry', crs=4326)
 
-    new_points.to_file(os.path.abspath(os.path.join(paths['data_dir'], 'missing_WWTPs.geojson')), driver='GeoJSON', index=False)
+    missing_output = os.path.abspath(os.path.join(paths['data_dir'], 'missing_WWTPs.geojson'))
+    ensure_output_dir_for_file(missing_output)
+    new_points.to_file(missing_output, driver='GeoJSON', index=False)
     print(final_df.columns)
     print(len(final_df), len(pd.isna(final_df['geometry'])))
 

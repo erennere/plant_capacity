@@ -23,11 +23,14 @@ from tqdm import tqdm
 import rasterio
 import geopandas as gpd
 import pandas as pd
-import pycountry
 try:
     from .starter import load_config, parse_config_overrides
+    from .create_voronoi import ensure_output_dir_for_file
+    from .download_pop import get_iso_codes
 except ImportError:  # Support running as a top-level script
     from starter import load_config, parse_config_overrides
+    from create_voronoi import ensure_output_dir_for_file
+    from download_pop import get_iso_codes
 from exactextract import exact_extract
 
 # Configure logging
@@ -39,27 +42,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-def get_iso_codes():
-    """Build ISO country code lookup tables.
-    
-    Returns:
-        tuple: Four dictionaries mapping between ISO-2/ISO-3 codes and country names:
-            - alpha_3_to_2: ISO-3 -> ISO-2 codes
-            - alpha_2_to_3: ISO-2 -> ISO-3 codes  
-            - alpha_3_to_names: ISO-3 codes -> country names
-            - alpha_2_to_names: ISO-2 codes -> country names
-    """
-    alpha_3_to_2 = {}
-    alpha_2_to_3 = {}
-    alpha_3_to_names = {}
-    alpha_2_to_names = {}
-    for country in pycountry.countries:
-        alpha_3_to_2[country.alpha_3.upper()] = country.alpha_2.upper()
-        alpha_2_to_3[country.alpha_2.upper()] = country.alpha_3.upper()
-        alpha_3_to_names[country.alpha_3.upper()] = country.name
-        alpha_2_to_names[country.alpha_2.upper()] = country.name
-    return alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names
 
 def intersect_single_file(gdf, tif_paths, all_years=True):
     """Compute zonal statistics of population rasters within polygons using exactextract.
@@ -225,6 +207,7 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
         gdf = intersect_all_files(gdf, tif_dir, max_workers, all_years=True)
         
         output_path = os.path.join(output_dir, f'pop_added_{os.path.basename(voronoi_file)}')
+        ensure_output_dir_for_file(output_path)
         gdf.to_file(output_path, driver='GPKG', index=False)
         logging.info(f"Successfully saved population-enhanced file to {output_path}")
     except Exception as err:

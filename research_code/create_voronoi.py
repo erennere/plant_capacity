@@ -57,7 +57,8 @@ class UnionFind:
         if self.rank[px] == self.rank[py]:
             self.rank[px] += 1
             
-import os, re, logging, sys, yaml
+import os, re, logging, sys
+from pathlib import Path
 from multiprocessing import Pool
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from collections import defaultdict
@@ -76,7 +77,7 @@ from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 from skimage.measure import find_contours
 import cv2
 
-from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, box, from_wkt, to_wkb, from_wkb, to_wkt
+from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, box, from_wkt, to_wkt
 from shapely.ops import unary_union
 from shapely.geometry import shape
 import shapely.affinity
@@ -89,6 +90,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def ensure_output_dir_for_file(filepath):
+    """Create the parent directory for an output file path if needed."""
+    parent = Path(filepath).parent
+    if str(parent) and str(parent) != ".":
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 ################################################################################
@@ -1346,6 +1354,7 @@ def orchestrate_overlaps(df, max_workers, buffers_filepath, radius, convex=False
     if 'centroid' in dissolved_buffers:
         dissolved_buffers = dissolved_buffers.drop(labels='centroid', axis=1)
     try:
+        ensure_output_dir_for_file(buffers_filepath)
         dissolved_buffers.to_file(buffers_filepath, driver='GPKG', index=False)
         logger.info(f"Saved dissolved buffers to {buffers_filepath}")
     except Exception as err:

@@ -29,15 +29,15 @@ from shapely import to_wkt, make_valid
 from shapely.ops import unary_union
 
 try:
-    from ..add_pop import get_iso_codes
+    from ..download_pop import get_iso_codes
     from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import download_overture_maps, duckdb_intersect
+    from ..create_voronoi import download_overture_maps, duckdb_intersect, ensure_output_dir_for_file
     from ..pipelines import create_pop_output_paths
     from .find_pop_in_danger_pop import find_bbox, finding_tiles
 except ImportError:
-    from research_code.add_pop import get_iso_codes
+    from research_code.download_pop import get_iso_codes
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.create_voronoi import download_overture_maps, duckdb_intersect
+    from research_code.create_voronoi import download_overture_maps, duckdb_intersect, ensure_output_dir_for_file
     from research_code.pipelines import create_pop_output_paths
     from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import find_bbox, finding_tiles
 
@@ -359,6 +359,7 @@ def polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path):
             sum_positive = np.int64(0)
             sum_negative = np.int64(0)
 
+            ensure_output_dir_for_file(output_path)
             with rasterio.open(output_path, "w", **profile) as dst:
                 for _, window in src.block_windows(1):
                     # Get geographic bounds of the current window
@@ -580,14 +581,18 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
                 }
                 stats = pd.DataFrame(stats)
                 if os.path.exists(csv_output_filepath):
+                    ensure_output_dir_for_file(csv_output_filepath)
                     stats.to_csv(csv_output_filepath, index=False, mode='a', header=False)
                 else: 
+                    ensure_output_dir_for_file(csv_output_filepath)
                     stats.to_csv(csv_output_filepath, index=False, header=True)
 
                 if gdf is not None and not gdf.empty:
                     if os.path.exists(non_served_outpath.replace('.gpkg', '.csv')):
+                        ensure_output_dir_for_file(non_served_outpath.replace('.gpkg', '.csv'))
                         gdf.to_csv(non_served_outpath.replace('.gpkg', '.csv'), index=False, mode='a', header=False)
                     else:
+                        ensure_output_dir_for_file(non_served_outpath.replace('.gpkg', '.csv'))
                         gdf.to_csv(non_served_outpath.replace('.gpkg', '.csv'), index=False, header=True)
             
                 logger.warning("[OK] %s: processed successfully", country)
@@ -670,6 +675,7 @@ def main():
         if not os.path.exists(cfg['paths']['overture']):
             download_overture_maps(cfg['paths']['overture_s3_url'], cfg['paths']['overture'])
         watershed_gdf = duckdb_intersect(watershed_gdf, cfg['paths']['overture'])
+        ensure_output_dir_for_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'))
         watershed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
     
     logger.info("Starting country intersection workflow with max_workers=%s", max_workers)

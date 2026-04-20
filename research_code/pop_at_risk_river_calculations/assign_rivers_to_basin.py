@@ -15,8 +15,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -192,6 +194,7 @@ def main():
     )
 
     logger.info("Saving %s results to %s", len(final_rivers), output_path)
+    ensure_output_dir_for_file(output_path)
     final_rivers.to_file(output_path, driver='GPKG', index=False)
     logger.info("Process complete")
 

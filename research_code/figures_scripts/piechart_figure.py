@@ -16,14 +16,14 @@ from matplotlib.colors import LogNorm
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 
-from pipelines import create_pop_output_paths
-
 try:
     from ..starter import load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
     from research_code.pipelines import create_pop_output_paths
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
     """Aggregate facility-level attributes to country-level summary statistics."""
@@ -303,6 +303,7 @@ def main():
     ax.set_title("Worldwide Overview of WWTPs by Size and Technology",
                 fontsize=24, fontweight='bold')
     plt.tight_layout()
+    ensure_output_dir_for_file(cfg['paths']['static_piechart_filepath'])
     plt.savefig(cfg['paths']['static_piechart_filepath'], dpi=200)
 
 if __name__ == '__main__':

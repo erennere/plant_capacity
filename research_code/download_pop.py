@@ -25,34 +25,37 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import Point
 from rasterio.transform import from_origin
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 import rasterio.features
-from rasterio.merge import merge
 from rasterio.windows import from_bounds
-from pyproj import CRS
 import pycountry
 import logging
 try:
-    from .create_voronoi import estimate_utm_crs
+    from .create_voronoi import estimate_utm_crs, ensure_output_dir_for_file
     from .starter import load_config, parse_config_overrides
 except ImportError:  # Support running as a top-level script
-    from create_voronoi import estimate_utm_crs
+    from create_voronoi import estimate_utm_crs, ensure_output_dir_for_file
     from starter import load_config, parse_config_overrides
 
-def country_isos():
-    """Build ISO-code lookup dictionaries used by the download helpers."""
+def get_iso_codes():
+    """Build ISO-code lookup dictionaries used by population workflows.
+
+    Returns
+    -------
+    tuple[dict, dict, dict, dict]
+        ``(alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names)``.
+    """
     alpha_3_to_2 = {}
     alpha_2_to_3 = {}
     alpha_3_to_names = {}
     alpha_2_to_names = {}
     for country in pycountry.countries:
-        alpha_3_to_2[country.alpha_3] = country.alpha_2
-        alpha_2_to_3[country.alpha_2] = country.alpha_3
-        alpha_3_to_names[country.alpha_3] = country.name
-        alpha_2_to_names[country.alpha_2] = country.name
-    return alpha_2_to_names, alpha_3_to_names, alpha_2_to_3, alpha_3_to_2
+        alpha_3_to_2[country.alpha_3.upper()] = country.alpha_2.upper()
+        alpha_2_to_3[country.alpha_2.upper()] = country.alpha_3.upper()
+        alpha_3_to_names[country.alpha_3.upper()] = country.name
+        alpha_2_to_names[country.alpha_2.upper()] = country.name
+    return alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names
 
 def extract_first_wildcard(test_string, pattern):
     """Extract first capture group from regex pattern match.
@@ -191,7 +194,7 @@ def get_urls():
     Generate WorldPop population data URLs for all countries.
     Returns a dictionary mapping country codes to lists of download URLs.
     """
-    alpha_2_to_names, alpha_3_to_names, alpha_2_to_3, alpha_3_to_2 = country_isos()
+    alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
     all_countries = list(alpha_3_to_2.keys())
     country_urls = {k.lower(): [f'https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2014/{k.upper()}/{k.lower()}_ppp_2014_1km_Aggregated.tif'] for k in all_countries}
     for k in country_urls.keys():
@@ -215,6 +218,7 @@ def download_file(url, output_path):
             else:
                 chunk_size = 262144
             print(f"Downloading with chunk size: {chunk_size // 1024} KB")
+            ensure_output_dir_for_file(output_path)
             with open(output_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk: 
@@ -247,6 +251,7 @@ def download_save_and_unzip_pop(url, country, data_dir='../data/population'):
     if url.endswith('zip'):
         try:
             response = requests.get(url)
+            ensure_output_dir_for_file(zip_filename)
             with open(zip_filename, "wb") as f:
                 f.write(response.content)
         except Exception as err:
@@ -254,6 +259,7 @@ def download_save_and_unzip_pop(url, country, data_dir='../data/population'):
             try:
                 logging.info('Attempting fallback URL with maxar_v1')
                 response = requests.get(url.replace('BSGM', 'maxar_v1'))
+                ensure_output_dir_for_file(zip_filename)
                 with open(zip_filename, "wb") as f:
                     f.write(response.content)
             except Exception as err:
@@ -390,6 +396,7 @@ def rasterize_csv(df, output_path, res=30):
         'transform': transform_4326
     }
 
+    ensure_output_dir_for_file(output_path)
     with rasterio.open(output_path, "w", **kwargs) as dst:
         reproject(
             source=raster_utm,
@@ -448,6 +455,7 @@ def mosaic_large_rasters(raster_files, output_path):
         Destination path of the merged raster.
     """
     if len(raster_files) == 1:
+        ensure_output_dir_for_file(output_path)
         shutil.copy(raster_files[0], output_path)
         return
     bounds = []
@@ -486,6 +494,7 @@ def mosaic_large_rasters(raster_files, output_path):
         'transform': target_transform
     }
 
+    ensure_output_dir_for_file(output_path)
     with rasterio.open(output_path, 'w+', **profile) as mosaic:
         mosaic_data = np.zeros((count, height, width), dtype=dtype)
         for fp in raster_files:

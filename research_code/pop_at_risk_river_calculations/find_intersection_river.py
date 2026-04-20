@@ -20,10 +20,10 @@ from tqdm import tqdm
 
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import estimate_utm_epsg
+    from ..create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.create_voronoi import estimate_utm_epsg
+    from research_code.create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -301,6 +301,7 @@ def main():
     )
 
     logger.info("Writing output to %s", output_path)
+    ensure_output_dir_for_file(output_path)
     polygons_gdf.to_file(output_path, driver='GPKG', index=False)
     logger.info("Done")
 

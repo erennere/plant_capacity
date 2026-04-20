@@ -12,8 +12,10 @@ import seaborn as sns
 import numpy as np
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 
 def ndvi(df, col1, col2, new_col):
@@ -102,6 +104,7 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
     fig.suptitle(title, fontsize=fontsize)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save and output_filepath:
+        ensure_output_dir_for_file(output_filepath)
         plt.savefig(output_filepath, dpi=dpi)
 
     plt.show()

@@ -19,7 +19,6 @@ from rasterio.transform import from_origin
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from shapely import from_wkt
 from pyproj import Transformer
 import duckdb
 import logging
@@ -27,8 +26,10 @@ import shapely.wkt
 
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 
 logging.basicConfig(
@@ -263,6 +264,7 @@ def georef_write(image, center_lon, center_lat, out_path):
     transform = from_origin(xmin, ymax, res, res)
     img_arr = np.array(image)
 
+    ensure_output_dir_for_file(out_path)
     with rasterio.open(
         out_path,
         "w",
@@ -385,6 +387,7 @@ def process_bbox(idx, bbox_geom, img_idx, poly_gdf, cols, line_gdf, line_cols, o
         else:
             out_path = os.path.join(output_dir, f"bbox_{idx}.png")
             image = image.resize(TARGET_SIZE, resample=Image.LANCZOS)
+            ensure_output_dir_for_file(out_path)
             image.save(out_path, dpi=(DPI, DPI))
         return idx, len(annotations), None
     except Exception as e:

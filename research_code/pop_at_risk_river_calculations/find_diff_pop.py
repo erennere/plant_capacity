@@ -16,11 +16,11 @@ from shapely import from_wkt, to_wkt
 from concurrent.futures import ProcessPoolExecutor, as_completed
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import estimate_utm_epsg
+    from ..create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
     from ..add_pop import intersect_all_files
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.create_voronoi import estimate_utm_epsg
+    from research_code.create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
     from research_code.add_pop import intersect_all_files
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -191,6 +191,7 @@ def main():
         os.makedirs(pop_dif_output_dir, exist_ok=True)
 
     output_filepath = os.path.join(pop_dif_output_dir, f'diff_{filename}')
+    ensure_output_dir_for_file(output_filepath)
     diff_gdf.to_file(output_filepath, driver='GPKG', index=False)
     logger.info("Wrote output to %s", output_filepath)
 

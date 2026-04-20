@@ -11,6 +11,7 @@ import geopandas as gpd
 import pandas as pd
 
 from research_code.starter import load_config, parse_config_overrides
+from research_code.create_voronoi import ensure_output_dir_for_file
 
 def decode_gen_text(text):
     """Parse model output text into category number/name and justification.
@@ -94,6 +95,7 @@ def main():
 
     # Merge parsed annotations onto the geospatial points table.
     merged_df = gpd.GeoDataFrame(pd.merge(points_df, df, on='idx', how='left'), geometry='geometry', crs=points_df.crs)
+    ensure_output_dir_for_file(cfg['paths']['corrected_all_filepath'])
     merged_df.to_file(index=False, driver='GPKG', filename=cfg['paths']['corrected_all_filepath'])
 
 if __name__ == "__main__":

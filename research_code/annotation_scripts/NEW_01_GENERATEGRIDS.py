@@ -13,8 +13,10 @@ from shapely import Point
 
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 def point_to_square(geom, half):
     """Return a square polygon centered on a point geometry."""
@@ -49,6 +51,7 @@ def main(cell_size, half, points_path, output_path):
     gdf_3857["geometry"] = gdf_3857.geometry.apply(lambda geom: point_to_square(geom, half))
     gdf_3857.set_crs(epsg=3857, inplace=True)
 
+    ensure_output_dir_for_file(output_path)
     gdf_3857.to_file(
         output_path,
         driver="GPKG"

@@ -15,11 +15,11 @@ import mercantile
 
 try:
     from ..add_pop import intersect_all_files
-    from ..create_voronoi import duckdb_intersect
+    from ..create_voronoi import duckdb_intersect, ensure_output_dir_for_file
     from ..starter import load_config, parse_config_overrides
 except ImportError:
     from research_code.add_pop import intersect_all_files
-    from research_code.create_voronoi import duckdb_intersect
+    from research_code.create_voronoi import duckdb_intersect, ensure_output_dir_for_file
     from research_code.starter import load_config, parse_config_overrides
 
 # Configure logging
@@ -146,6 +146,7 @@ def main():
         impact_polygons = gpd.read_file(input_file)
         impact_polygons = assign_tile_to_df(impact_polygons, zoom_level, max_workers)
         impact_polygons = duckdb_intersect(impact_polygons, cfg['paths']['overture'])
+        ensure_output_dir_for_file('impact_polygons_tiled.gpkg')
         impact_polygons.to_file('impact_polygons_tiled.gpkg', index=False, driver='GPKG')
         impact_polygons = intersect_all_files(impact_polygons, tif_dir, int(max_workers/8), all_years=False)
         tile_groups = group_tile_population_sums(impact_polygons)
@@ -167,6 +168,7 @@ def main():
             results = pd.merge(results, tile_groups_gdf[[c for c in tile_groups_gdf.columns if c != 'geometry']], on='tile', how='outer')
 
     results = gpd.GeoDataFrame(results, geometry=results['geometry'], crs=4326)
+    ensure_output_dir_for_file(cfg['paths']['pop_at_risk_output_filepath'])
     results.to_parquet(cfg['paths']['pop_at_risk_output_filepath'], engine='pyarrow', index=False)
 
 if __name__ == '__main__':

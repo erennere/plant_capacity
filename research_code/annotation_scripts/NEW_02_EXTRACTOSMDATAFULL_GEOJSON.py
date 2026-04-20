@@ -4,7 +4,7 @@ For every grid feature, the script queries Overpass, converts the response into
 GeoDataFrames, and writes one GeoJSON per grid cell for lines and polygons.
 """
 
-import os, requests, json, time, re, sys
+import os, requests, json, time, re
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import LineString, Polygon
@@ -12,8 +12,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 queries = {
     "man_made": "wastewater_plant",
@@ -207,12 +209,14 @@ def row_operation(bbox, idx_val, url, output_folder):
     if not all_lines.empty:
         all_lines = clean_columns(all_lines)
 
+        ensure_output_dir_for_file(line_path)
         all_lines.to_file(line_path, driver="GeoJSON")
         print(f"✅ Saved {line_path}")
 
     if not all_polys.empty:
         all_polys = clean_columns(all_polys)
         poly_path = os.path.join(output_folder, f"idx_{idx_val}_polygons.geojson")
+        ensure_output_dir_for_file(poly_path)
         all_polys.to_file(poly_path, driver="GeoJSON")
         print(f"✅ Saved {poly_path}")
 

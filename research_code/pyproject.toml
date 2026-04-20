@@ -8,6 +8,33 @@ version = "0.1.0"
 description = "Utilities and pipelines for plant capacity spatial analysis"
 readme = "README.md"
 requires-python = ">=3.9"
+dependencies = [
+  "PyYAML",
+  "numpy",
+  "pandas",
+  "geopandas",
+  "shapely",
+  "pyproj",
+  "rasterio",
+  "exactextract",
+  "scipy",
+  "scikit-image",
+  "opencv-python",
+  "networkx",
+  "duckdb",
+  "joblib",
+  "tqdm",
+  "requests",
+  "pycountry",
+  "matplotlib",
+  "seaborn",
+  "Pillow",
+  "cartopy",
+  "folium",
+  "branca",
+  "mercantile",
+  "hdx-python-api",
+]
 
 [tool.setuptools]
 packages = [

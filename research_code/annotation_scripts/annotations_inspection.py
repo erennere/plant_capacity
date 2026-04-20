@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from research_code.annotation_scripts.merge_annotations import decode_gen_text
+from research_code.create_voronoi import ensure_output_dir_for_file
 from research_code.starter import load_config, parse_config_overrides
 
 def plot_category_distribution(df, column='category_name', save_path=None, show=False):
@@ -29,6 +30,7 @@ def plot_category_distribution(df, column='category_name', save_path=None, show=
     plt.tight_layout()
 
     if save_path:
+        ensure_output_dir_for_file(save_path)
         plt.savefig(save_path)
         print(f"Plot saved to {save_path}")
     if show:
@@ -136,6 +138,7 @@ def main():
     df_sampled = get_stratified_sample(df, 'category_name', total_n=sample_size, seed=random_seed)
 
     sample_csv_path = os.path.join(image_output_dir, 'annotation_stratified_sample.csv')
+    ensure_output_dir_for_file(sample_csv_path)
     df_sampled.to_csv(sample_csv_path, index=False)
     print(f"Saved sampled rows to {sample_csv_path}")
 

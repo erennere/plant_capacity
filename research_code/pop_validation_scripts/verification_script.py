@@ -9,8 +9,10 @@ import numpy as np
 import geopandas as gpd
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS_ID'):
     """Mark each row with verification flags derived from basin-level validity rates."""
@@ -60,10 +62,13 @@ def main():
         singles_df = gdf[gdf['is_single_points']].reset_index(drop=True)
 
         if not ver_gdf.empty:
+            ensure_output_dir_for_file(ver_output_filepath)
             ver_gdf.to_file(ver_output_filepath, driver='GPKG', index=False)
         if not un_ver_gdf.empty:
+            ensure_output_dir_for_file(unver_output_filepath)
             un_ver_gdf.to_file(unver_output_filepath, driver='GPKG', index=False)
         if not singles_df.empty:
+            ensure_output_dir_for_file(single_output_filepath)
             singles_df.to_file(single_output_filepath, driver='GPKG', index=False)
 
 

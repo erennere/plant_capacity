@@ -15,9 +15,11 @@ import math
 try:
     from ..starter import load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
     from research_code.pipelines import create_pop_output_paths
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
     """Aggregate per-facility metrics to country-level totals for mapping."""
@@ -248,6 +250,7 @@ def main():
     macro._template = Template(legend_html)
     m.get_root().add_child(macro)
     
+    ensure_output_dir_for_file(cfg['paths']['interactive_piechart_html_filepath'])
     m.save(cfg['paths']['interactive_piechart_html_filepath'])
 
 if __name__ == '__main__': main()

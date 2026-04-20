@@ -11,8 +11,10 @@ import geopandas as gpd
 from shapely import from_wkt
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ def create_unserved_pop(filepath, threshold, output_filepath):
 
     df['geometry'] = df.geometry.apply(from_wkt)
     df = gpd.GeoDataFrame(df, geometry='geometry', crs=4326)
-    os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
+    ensure_output_dir_for_file(output_filepath)
     df.to_file(output_filepath, driver='GPKG', index=False)
     logger.info("Wrote %s polygons to %s", len(df), output_filepath)
     return len(df)

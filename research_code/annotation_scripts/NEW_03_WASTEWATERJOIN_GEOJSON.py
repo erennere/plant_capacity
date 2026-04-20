@@ -5,10 +5,9 @@ for polygon and line layers, merges them with DuckDB, and then clusters merged
 polygon features into bounding boxes used by downstream annotation steps.
 """
 
-import os, sys
+import os
 import random
 import glob
-import shutil
 import geopandas as gpd
 import pandas as pd
 import shapely.geometry as geom
@@ -21,8 +20,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExec
 
 try:
     from ..starter import load_config, parse_config_overrides
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 # Configure logging to flush output immediately (important for HPC batch jobs)
 logging.basicConfig(
@@ -68,6 +69,7 @@ def load_geodata(path):
 
 def write_geodata(gdf: gpd.GeoDataFrame, path: str, driver: str = "GeoJSON") -> None:
     """Write a GeoDataFrame to disk using the requested GDAL driver."""
+    ensure_output_dir_for_file(path)
     gdf.to_file(path, driver=driver)
 
 # ============================================================
@@ -186,6 +188,7 @@ def convert_geojson_to_parquet(
     
     if not os.path.exists(temp_parquet) or overwrite:
         try:
+            ensure_output_dir_for_file(temp_parquet)
             temp_conn = duckdb.connect(":memory:")
             temp_conn.execute("INSTALL SPATIAL; LOAD SPATIAL;")
             temp_conn.execute(f"""
@@ -456,6 +459,7 @@ def merge_bboxes_sql(
             max_workers=max_workers,
             insert_batch_size=insert_batch_size,
         )
+        ensure_output_dir_for_file(output_filepath)
         conn.execute(f"""
             COPY (
                 SELECT * FROM dataset

@@ -1,9 +1,7 @@
 import os
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from shapely.geometry import box
-from PIL import Image
-import numpy as np
+from research_code.create_voronoi import ensure_output_dir_for_file
 
 # ==========================================================
 # PARAMETERS (adjust here)
@@ -47,6 +45,7 @@ for i, feature in grid.iterrows():
 
     # Save image
     file_path = os.path.join(output_folder, f"{feature_id}.{image_format}")
+    ensure_output_dir_for_file(file_path)
     fig.savefig(file_path, dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
@@ -55,6 +54,7 @@ for i, feature in grid.iterrows():
     pixel_size_y = -(extent[3] - extent[1]) / output_height_px
 
     world_file = file_path.replace(f".{image_format}", ".wld")
+    ensure_output_dir_for_file(world_file)
     with open(world_file, 'w') as wf:
         wf.write(f"{pixel_size_x}\n")
         wf.write("0.0\n")

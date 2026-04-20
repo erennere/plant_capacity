@@ -9,13 +9,15 @@ import re
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely import Point, from_wkt, to_wkt
+from shapely import Point, from_wkt
 from scipy.spatial import KDTree as cKDTree
 try:
     from .correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
+    from ..create_voronoi import ensure_output_dir_for_file
     from ..starter import load_config, parse_config_overrides
 except ImportError:
     from research_code.data_merge.correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
+    from research_code.create_voronoi import ensure_output_dir_for_file
     from research_code.starter import load_config, parse_config_overrides
 
 def cluster_point_indices(geoms, threshold):
@@ -203,7 +205,9 @@ def main():
         merged_df = merged_df.drop(columns=['fid'], errors='ignore')
 
     rest = merged_df[~merged_df['geometry'].isin(set(old_df['geometry'].tolist()))].reset_index(drop=True)
+    ensure_output_dir_for_file(paths["new_points_filepath"])
     rest.to_file(paths["new_points_filepath"], driver='GPKG', index=False)
+    ensure_output_dir_for_file(paths["corrected_all_filepath"])
     merged_df.to_file(paths["corrected_all_filepath"], driver='GPKG', index=False)
 
 if __name__ == '__main__':

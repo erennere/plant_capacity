@@ -18,8 +18,10 @@ from tqdm import tqdm
 from shapely.geometry import Polygon
 try:
     from ..starter import load_config, parse_config_overrides  # Configuration loader from starter module
+    from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
+    from research_code.create_voronoi import ensure_output_dir_for_file
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -644,7 +646,9 @@ def main():
     
     if results is not None:
         for radius, gdf in results.items():
-            gdf.to_file(cfg['paths']['impact_pop_polygons_outpath'].replace(".gpkg", f"_{str(int(radius))}.gpkg"), driver='GPKG')
+            output_path = cfg['paths']['impact_pop_polygons_outpath'].replace(".gpkg", f"_{str(int(radius))}.gpkg")
+            ensure_output_dir_for_file(output_path)
+            gdf.to_file(output_path, driver='GPKG')
             logger.info("Process complete. Wrote %s geometries for radius %s", len(gdf), radius)
     else:
         logger.warning("No output generated")

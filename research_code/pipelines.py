@@ -107,9 +107,9 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     output-exists behavior must be implemented by the caller.
     """
     try:
-        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates
+        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file
     except ImportError:  # Support running as a top-level script
-        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates
+        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file
     
     logger.info(f"Approach {approach_id}: Running Voronoi generation (scale_weights={scale_weights}, only_round={only_round})")
     
@@ -132,6 +132,7 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
         method=method
     )
     
+    ensure_output_dir_for_file(output_path)
     region_df.to_file(output_path, driver='GPKG', index=False)
     logger.info(f"Approach {approach_id}: Saved {len(region_df)} regions to {output_path}")
     return df_waste, region_df, point_df
@@ -156,13 +157,13 @@ def prepare_data(cfg):
         from .create_voronoi import (
             drop_duplicates, buffer_geometry, duckdb_intersect,
             download_overture_maps, intersect_watershed_sindex,
-            orchestrate_overlaps,
+            orchestrate_overlaps, ensure_output_dir_for_file,
         )
     except ImportError:  # Support running as a top-level script
         from create_voronoi import (
             drop_duplicates, buffer_geometry, duckdb_intersect,
             download_overture_maps, intersect_watershed_sindex,
-            orchestrate_overlaps,
+            orchestrate_overlaps, ensure_output_dir_for_file,
         )
     
     logger.info("Preparing input data...")
@@ -217,6 +218,7 @@ def prepare_data(cfg):
         watershed_gdf = duckdb_intersect(watershed_gdf, paths['overture'])
     watershed_gpkg_filepath = os.path.abspath(paths['watershed'].replace('.geojson', '.gpkg'))
     if not os.path.exists(watershed_gpkg_filepath):
+        ensure_output_dir_for_file(watershed_gpkg_filepath)
         watershed_gdf.to_file(watershed_gpkg_filepath, driver='GPKG', index=False)
 
     # Add watershed information to WWTP
@@ -225,8 +227,10 @@ def prepare_data(cfg):
         gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, 'WASTE_ID'), 'geometry')
         filename = os.path.join(os.path.dirname(paths['bboxes']), f"expanded_{os.path.basename(paths['bboxes'])}")
         if not os.path.exists(f"{filename}"):    
+            ensure_output_dir_for_file(filename)
             gdf_bbox.to_csv(f"{filename}", index=False)
         if not os.path.exists(f"{filename.replace('.csv', '.gpkg')}"):
+            ensure_output_dir_for_file(filename.replace('.csv', '.gpkg'))
             gdf_bbox.to_file(f"{filename.replace('.csv', '.gpkg')}", index=False, driver='GPKG')
         
     # Load country boundaries
