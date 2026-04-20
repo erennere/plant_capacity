@@ -11,6 +11,10 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/grid_generation_osm_extract.log"
+
+
 #
 # Usage:
 #   ./grid_generation_and_osm_extract.sh [level] [version] [buffer] [weight_method] [weight_func]

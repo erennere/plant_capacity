@@ -10,6 +10,10 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/assign_rivers_to_basin.log"
+
+
 #
 # Usage:
 #   ./assign_rivers_to_basin.sh [level] [version] [buffer] [weight_method] [weight_func]

@@ -28,6 +28,10 @@ PYTHON_CMD="python"
 # Create log directory
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/combine_locations.log" "${LOG_DIR}/merge_seg_results.log" "${LOG_DIR}/combine_locations.out" "${LOG_DIR}/combine_locations.err"
+
+
 # Logging function
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/combine_locations.log"

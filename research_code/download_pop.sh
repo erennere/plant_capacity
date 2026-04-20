@@ -25,6 +25,10 @@ PYTHON_CMD="python"  # or specify full path if needed
 # Create log directory
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/pop_run.log" "${LOG_DIR}"/pop_*.out "${LOG_DIR}"/pop_*.err
+
+
 # Logging function
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/pop_run.log"

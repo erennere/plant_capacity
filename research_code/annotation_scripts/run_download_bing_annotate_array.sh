@@ -39,6 +39,10 @@ WEIGHT_FUNC="${5:-}"
 LOG_DIR="${PROJECT_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/bing_annotate_${INSTANCE_ID}.log" "${LOG_DIR}"/bing_annotate_*_*.out "${LOG_DIR}"/bing_annotate_*_*.err
+
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/bing_annotate_${INSTANCE_ID}.log"
 }

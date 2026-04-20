@@ -21,6 +21,10 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/combine_watersheds.log" "${LOG_DIR}/combine_watersheds.out" "${LOG_DIR}/combine_watersheds.err"
+
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/combine_watersheds.log"
 }

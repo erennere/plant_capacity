@@ -28,6 +28,10 @@ WEIGHT_FUNC="${5:-}"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/annotations_inspection.log"
+
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/annotations_inspection.log"
 }

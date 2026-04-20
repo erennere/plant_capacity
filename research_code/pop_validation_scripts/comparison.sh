@@ -14,6 +14,10 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/pop_validation_comparison.log"
+
+
 #
 # Usage:
 #   ./comparison.sh [level] [version] [buffer] [weight_method] [weight_func]

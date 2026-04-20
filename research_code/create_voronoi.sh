@@ -33,6 +33,10 @@ PYTHON_SCRIPT="research_code.create_voronoi"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/create_voronoi.log"
+
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/create_voronoi.log"
 }

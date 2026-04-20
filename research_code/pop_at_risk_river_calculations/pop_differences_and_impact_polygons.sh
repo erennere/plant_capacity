@@ -12,6 +12,10 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+
+
 #
 # Usage:
 #   ./pop_differences_and_impact_polygons.sh [level] [version] [buffer] [weight_method] [weight_func]

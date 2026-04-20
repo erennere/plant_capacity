@@ -10,6 +10,10 @@ PYTHON_CMD="python"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/find_pop_in_danger_pop.log"
+
+
 #
 # Usage:
 #   ./find_pop_in_danger_pop.sh [level] [version] [buffer] [weight_method] [weight_func]

@@ -37,6 +37,10 @@ WEIGHT_FUNC="${6:-}"
 # Create log directory
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/add_pop_array.log" "${LOG_DIR}"/add_pop_*.out "${LOG_DIR}"/add_pop_*.err
+
+
 # Logging function
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/add_pop_array.log"

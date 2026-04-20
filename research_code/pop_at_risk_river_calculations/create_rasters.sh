@@ -33,6 +33,10 @@ PYTHON_SCRIPT="research_code.pop_at_risk_river_calculations.create_rasters"
 
 mkdir -p "${LOG_DIR}"
 
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/create_rasters.log"
+
+
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/create_rasters.log"
 }
