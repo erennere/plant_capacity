@@ -241,7 +241,7 @@ def prepare_data(cfg):
         expanded_gpkg = filename.replace('.csv', '.gpkg')
         if not os.path.exists(expanded_gpkg):
             ensure_output_dir_for_file(expanded_gpkg)
-            gdf_bbox_export = gpd.GeoDataFrame(gdf_bbox, geometry='geometry', crs=gdf_bbox.crs)
+            gdf_bbox_export = gpd.GeoDataFrame(gdf_bbox, geometry='geometry', crs='epsg:4326')
             gdf_bbox_export.to_file(expanded_gpkg, index=False, driver='GPKG')
         
     # Load country boundaries
