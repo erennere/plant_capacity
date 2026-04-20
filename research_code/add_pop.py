@@ -110,6 +110,77 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
     return gdf
 
 
+def find_country_tif_files(countries, tif_dir):
+    """Map ISO-2 codes to available country TIFF file lists.
+
+    Parameters
+    ----------
+    countries : iterable[str]
+        ISO-2 country codes to resolve.
+    tif_dir : str
+        Root directory containing per-country raster subdirectories named by ISO-3.
+
+    Returns
+    -------
+    dict[str, list[str] | None]
+        Mapping of ISO-2 code to TIFF paths or None when not found.
+    """
+    alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
+    tif_filepaths = {}
+    for iso_2 in countries:
+        if iso_2 in alpha_2_to_3:
+            iso_3 = alpha_2_to_3[iso_2].lower()
+            temp_dir = os.path.join(tif_dir, iso_3)
+            if os.path.exists(temp_dir):
+                tif_filepath = [
+                    os.path.join(temp_dir, f)
+                    for f in os.listdir(temp_dir)
+                    if f.endswith('.tif')
+                ]
+                tif_filepaths[iso_2] = tif_filepath if tif_filepath else None
+            else:
+                tif_filepaths[iso_2] = None
+        else:
+            tif_filepaths[iso_2] = None
+    return tif_filepaths
+
+
+def find_newest_country_tif_files(countries, tif_dir):
+    """Map ISO-2 codes to their newest available country TIFF file.
+
+    Parameters
+    ----------
+    countries : iterable[str]
+        ISO-2 country codes to resolve.
+    tif_dir : str
+        Root directory containing per-country raster subdirectories named by ISO-3.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of ISO-2 code to newest TIFF path.
+    """
+    tif_filepaths = find_country_tif_files(countries, tif_dir)
+    newest = {}
+    for country, files in tif_filepaths.items():
+        if files is None:
+            continue
+
+        year_file = {}
+        for file in files:
+            if os.path.exists(file):
+                tokens = os.path.basename(file).replace('.tif', '').split('_')
+                parts = [int(token) for token in tokens if token.startswith('20') and token.isdigit()]
+                if parts:
+                    year_file[parts[0]] = file
+                else:
+                    logging.warning("Could not parse year from filename: %s", file)
+
+        if year_file:
+            newest[country] = year_file[max(year_file.keys())]
+    return newest
+
+
 def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True):
     """Intersect population rasters with polygons across all countries.
 
@@ -129,21 +200,7 @@ def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True):
     geopandas.GeoDataFrame
         Concatenated result with population statistics attached.
     """
-    alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
-
-    tif_filepaths = {}
-    for iso_2 in gdf['ISO_2'].unique():
-        if iso_2 in alpha_2_to_3:
-            iso_3 = alpha_2_to_3[iso_2].lower()
-            temp_dir = os.path.join(tif_dir, iso_3)
-            if os.path.exists(temp_dir):
-                tif_filepath = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith('.tif')]
-                if tif_filepath:
-                    tif_filepaths[iso_2] = tif_filepath
-            else:
-                tif_filepaths[iso_2] = None
-        else:
-            tif_filepaths[iso_2] = None
+    tif_filepaths = find_country_tif_files(gdf['ISO_2'].unique(), tif_dir)
 
     data = []
     countries = gdf['ISO_2'].unique().tolist()

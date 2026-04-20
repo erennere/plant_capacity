@@ -28,13 +28,13 @@ from shapely import to_wkt, make_valid
 from shapely.ops import unary_union
 
 try:
-    from ..download_pop import get_iso_codes
+    from ..add_pop import find_newest_country_tif_files
     from ..starter import load_config, parse_config_overrides
     from ..create_voronoi import download_overture_maps, duckdb_intersect, ensure_output_dir_for_file
     from ..pipelines import create_pop_output_paths
     from .find_pop_in_danger_pop import find_bbox, finding_tiles
 except ImportError:
-    from research_code.download_pop import get_iso_codes
+    from research_code.add_pop import find_newest_country_tif_files
     from research_code.starter import load_config, parse_config_overrides
     from research_code.create_voronoi import download_overture_maps, duckdb_intersect, ensure_output_dir_for_file
     from research_code.pipelines import create_pop_output_paths
@@ -422,52 +422,6 @@ def polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path):
         logger.exception("Error processing raster %s: %s", raster_path, err)
         return output_path, None, None
 
-def find_the_newest_tif_files(countries, tif_dir):
-    """Map each ISO-2 code to its newest available population TIFF file."""
-    alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
-    tif_filepaths = {}
-    my_dict = {}
-    for iso_2 in countries:
-        if iso_2 in alpha_2_to_3:
-            iso_3 = alpha_2_to_3[iso_2].lower()
-            temp_dir = os.path.join(tif_dir, iso_3)
-            if os.path.exists(temp_dir):
-                tif_filepath = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith('.tif')]
-                if tif_filepath:
-                    tif_filepaths[iso_2] = tif_filepath
-            else:
-                tif_filepaths[iso_2] = None
-        else:
-            tif_filepaths[iso_2] = None
-
-    for country, files in tif_filepaths.items():
-        if files is None:
-            continue 
-        my_dict[country] = []
-        year_file = {}
-
-        for file in files:
-            if os.path.exists(file):
-                tokens = os.path.basename(file).replace('.tif', '').split('_')
-                parts = []
-                for token in tokens:
-                    if token.startswith('20') and token.isdigit():
-                        parts.append(int(token))
-                year = None
-                if parts:
-                    try:
-                        year = int(parts[0])
-                        my_dict[country].append(year)
-                        year_file[year] = file
-                    except ValueError:
-                        logger.warning("Could not parse year from filename: %s", file)
-        if my_dict[country]:
-            latest_year = max(my_dict[country])
-            my_dict[country] = year_file[latest_year]
-        else:
-            del my_dict[country]
-    return my_dict
-
 def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, output_path, min_pixels=9, zoom_level=8): 
     """Process one country raster and return signed-raster stats plus extracted islands.
 
@@ -670,7 +624,7 @@ def main():
     logger.info("Loading Voronoi polygons from %s", voronoi_3a_filepath)
 
     gdf = gpd.read_file(voronoi_3a_filepath)
-    tif_dict = find_the_newest_tif_files(gdf['ISO_2'].unique(), tif_dir)
+    tif_dict = find_newest_country_tif_files(gdf['ISO_2'].unique(), tif_dir)
     logger.info("Resolved %s newest country TIFF files", len(tif_dict))
 
     tif_dict = shard_tif_dict(tif_dict, args.job_index, args.total_jobs, seed)
