@@ -37,12 +37,22 @@ log "Project root directory: ${PROJECT_ROOT}"
 log "Python command: ${PYTHON_CMD}"
 log "Processing with 8 parallel workers"
 
-# Parse optional config override arguments
+#
+# Usage:
+#   ./download_pop.sh [level] [version] [buffer] [weight_method] [weight_func]
+#
+# Arguments (all optional config overrides):
+#   level        - Processing level (default: from config.yaml arguments.default_level)
+#   version      - Data version (default: from config.yaml arguments.default_version)
+#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
+#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
+#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
+## Parse optional config override arguments
 LEVEL="${1:-}"
 VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
-IS_MULTIPLICATIVE="${5:-}"
+WEIGHT_FUNC="${5:-}"
 
 # Install package in editable mode before running modules
 log "Installing research_code module (editable)"
@@ -66,7 +76,7 @@ log "Python version: $(${PYTHON_CMD} --version 2>&1)"
 log "Starting population data download and processing..."
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

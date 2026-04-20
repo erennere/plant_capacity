@@ -2319,51 +2319,36 @@ MAIN EXECUTION WORKFLOW
 =======================
 
 This section orchestrates the complete Voronoi spatial allocation pipeline.
-When run as __main__, it executes all 6 approaches in sequence:
 
 1. Configuration: Loads YAML config and initializes output paths
 2. Data Preparation: Loads WWTP, watershed, and country boundary data
-3. Approach Execution: Runs each of 6 Voronoi variants with configured parameters
-4. Output: Saves results to GeoTIFF/GeoJSON per approach_id
+3. Approach Execution: Runs the selected approach(es)
+4. Output: Saves results to GeoPackage per approach_id
 
 WORKFLOW:
-    overrides = parse_config_overrides(args=args)  # Parse optional level/version/buffer
+    overrides = parse_config_overrides(args=args)  # Parse optional level/version/buffer/weight_method/weight_func
     cfg = load_config(**overrides)                 # Load YAML configuration
   → create_output_paths(cfg)              # Create output directory structure
   → prepare_data(cfg)                     # Load input spatial data
-  → run_voronoi_approach() × 6            # Execute all 6 approach variants
+  → run_voronoi_approach()                # Execute requested approach(es)
   → Save results to cfg['paths']['voronoi_dir']
 
-APPROACH VARIANTS (Conditional Execution):
-  
-  Approach 0: Buffer WWTP + Voronoi
-    - Creates buffers around WWTP facilities
-    - Generates Voronoi from buffer centroids
-    - No weighting (equal allocation)
-  
-  Approaches 1a-1d: Weighted Buffer Voronoi (4 variants)
-    - Applies distance-based weighting to Approach 0
-    - 1a: multiplicative, no rounding
-    - 1b: multiplicative, with rounding
-    - 1c: additive, no rounding
-    - 1d: additive, with rounding
-        - Weighted variants are currently enabled by default
-  
-  Approach 2: Watershed + Voronoi
+APPROACH VARIANTS:
+
+  Approach 0: WWTP buffer Voronoi (no watersheds)
+    - Creates buffers around WWTP facilities and generates Voronoi regions
+    - Weighted/unweighted and mult/add distance are read from weight_func in config
+
+  Approach 1: Watershed-constrained Voronoi
     - Uses watershed boundaries to constrain regions
-    - Assigns to hydrological basins instead of WWTP buffers
-    - No weighting (equal allocation)
-  
-  Approaches 3a-3d: Weighted Watershed Voronoi (4 variants)
-    - Applies distance weighting to Approach 2
-    - Same 4 weighting strategies as Approach 1
-        - Weighted variants are currently enabled by default
-  
-  Approaches 4-5: City Voronoi (conditional)
+    - Weighted/unweighted and mult/add distance are read from weight_func in config
+
+  Approach 2: City Voronoi
     - Uses major cities instead of WWTP facilities
-    - Approach 4: unweighted
-    - Approach 5: distance-weighted (multiplicative)
-    - Only runs if cfg['city_voronoi'] == True
+    - Weighted/unweighted and mult/add distance are read from weight_func in config
+
+  --only_round flag (applies to approaches 0 and 1):
+    - When set, uses only round-area weights instead of all points
 
 See pipelines.run_voronoi_approach() for parameter documentation.
 """
@@ -2378,35 +2363,37 @@ if __name__ == '__main__':
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 EXAMPLES:
-  # Run approach 0 only
+  # Run approach 0 (WWTP, no watersheds)
   python -m research_code.create_voronoi --approach 0
-  
-  # Run multiple approaches
-  python -m research_code.create_voronoi --approach 0 1a 1b 2
-  
-  # Run all weighted variants
-  python -m research_code.create_voronoi --approach 1a 1b 1c 1d 3a 3b 3c 3d
-  
+
+  # Run approaches 0 and 1 with only-round weights
+  python -m research_code.create_voronoi --approach 0 1 --only_round
+
+  # Run all approaches with config overrides
+  python -m research_code.create_voronoi 8 2 15000 square_root mult
+
   # Run with verbose logging
-  python -m research_code.create_voronoi --approach 0 --verbose
-  
+  python -m research_code.create_voronoi --approach 1 --verbose
+
   # Run all approaches (default)
   python -m research_code.create_voronoi
         '''
     )
     parser.add_argument('--approach', nargs='+', type=str, default=None,
-                       help='Specific approach(es) to run (0, 1a-1d, 2, 3a-3d, 4, 5). Default: all')
+                       help='Approach(es) to run: 0 (WWTP no watersheds), 1 (WWTP with watersheds), 2 (cities). Default: all')
+    parser.add_argument('--only_round', action='store_true',
+                       help='Use only round-area weights (default: all points)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     parser.add_argument('level', nargs='?', default=None, help='Optional config level override')
     parser.add_argument('version', nargs='?', default=None, help='Optional config version override')
     parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
     parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
-    parser.add_argument('is_multiplicative', nargs='?', default=None, help='Optional config is_multiplicative override')
-    
+    parser.add_argument('weight_func', nargs='?', default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
+
     args = parser.parse_args()
     
     # Validate and normalize approach names
-    VALID_APPROACHES = ['0', '1a', '1b', '1c', '1d', '2', '3a', '3b', '3c', '3d', '4', '5']
+    VALID_APPROACHES = ['0', '1', '2']
     if args.approach:
         requested = [str(a).lower() for a in args.approach]
         invalid = [a for a in requested if a not in VALID_APPROACHES]
@@ -2444,47 +2431,36 @@ EXAMPLES:
     # Ensure output directory exists
     os.makedirs(cfg['paths']['voronoi_dir'], exist_ok=True)
     
+    # Derive execution parameters from config
+    only_round = args.only_round
+    scale_weights = cfg['weight_func'] in {'mult', 'add'}
+    
     logger.info(f"Running approaches: {', '.join(approaches_to_run)}")
+    logger.info(f"  weight_func={cfg['weight_func']!r}, weight_method={cfg['weight_method']!r}, only_round={only_round}, scale_weights={scale_weights}")
     print("=" * 80)
     print(f"VORONOI ALLOCATION - APPROACH EXECUTION")
     print(f"Requested: {', '.join(approaches_to_run)}")
+    print(f"weight_func={cfg['weight_func']!r}  weight_method={cfg['weight_method']!r}  only_round={only_round}")
     print("=" * 80)
     
-    # Pre-compute buffers needed for approaches 0, 1a-1d, 4, 5
+    # Lazily-computed shared data structures
     dissolved_buffers_WWTP = None
     dissolved_buffers_cities = None
     gdf_0 = None
     gdf_4 = None
-    
-    # Pre-compute watershed variants for approaches 2, 3a-3d
     gdf_2 = None
     watershed_gdf_2 = None
     
     # Execute requested approaches
     for approach_id in approaches_to_run:
         try:
-            # === APPROACH 0: Buffer WWTP + Voronoi ===
+            # Path key encodes the only_round variant
+            path_key = f"{approach_id}_only_round" if only_round and approach_id in {'0', '1'} else approach_id
+
+            # === APPROACH 0: WWTP buffer Voronoi (no watersheds) ===
             if approach_id == '0':
-                logger.info("Starting Approach 0: Buffer WWTP + Voronoi")
-                dissolved_buffers_WWTP = orchestrate_overlaps(gdf_bbox, cfg['max_workers'], 
-                                                             paths_dict['buffers']['WWTP'], cfg['buffer'])
-                dissolved_buffers_WWTP = drop_duplicates(drop_duplicates(dissolved_buffers_WWTP, 'WASTE_ID'), 'geometry')
-                dissolved_buffers_WWTP['buffer_id'] = np.arange(len(dissolved_buffers_WWTP))
-                
-                gdf_0 = gdf_bbox.copy()
-                gdf_0 = intersect_watershed_sindex(gdf_0, dissolved_buffers_WWTP, 'buffer_id', 
-                                                   concurrency=cfg['sindex_concurrency'])
-                gdf_0 = drop_duplicates(drop_duplicates(gdf_0, 'WASTE_ID'), 'geometry')
-                
-                run_voronoi_approach('0', gdf_0, dissolved_buffers_WWTP, country_df, cfg, cfg['distance_fn'], 
-                                    paths_dict['voronoi']['0'], buffer_id_col='buffer_id', scale_weights=False, buffering=False, method=cfg['weight_method'])
-                print("✓ Approach 0 completed")
-            
-            # === APPROACHES 1a-1d: Weighted Buffer Voronoi ===
-            elif approach_id in ['1a', '1b', '1c', '1d']:
-                # Setup approach 0 data if not already done
+                logger.info("Starting Approach 0: WWTP buffer Voronoi")
                 if dissolved_buffers_WWTP is None:
-                    logger.info("Pre-computing Approach 0 buffers for weighted variant")
                     dissolved_buffers_WWTP = orchestrate_overlaps(gdf_bbox, cfg['max_workers'], 
                                                                  paths_dict['buffers']['WWTP'], cfg['buffer'])
                     dissolved_buffers_WWTP = drop_duplicates(drop_duplicates(dissolved_buffers_WWTP, 'WASTE_ID'), 'geometry')
@@ -2496,63 +2472,31 @@ EXAMPLES:
                                                        concurrency=cfg['sindex_concurrency'])
                     gdf_0 = drop_duplicates(drop_duplicates(gdf_0, 'WASTE_ID'), 'geometry')
                 
-                # Map variant ID to parameters
-                variant_config = {
-                    '1a': (default_distance_multiplicative, False),
-                    '1b': (default_distance_multiplicative, True),
-                    '1c': (default_distance_additive, False),
-                    '1d': (default_distance_additive, True),
-                }
-                dist_fn, only_round = variant_config[approach_id]
-                
-                logger.info(f"Starting Approach {approach_id}: Weighted Voronoi variant")
-                run_voronoi_approach(approach_id, gdf_0, dissolved_buffers_WWTP, country_df, cfg, dist_fn,
-                                    paths_dict['voronoi'][approach_id], buffer_id_col='buffer_id', 
-                                    scale_weights=True, only_round=only_round, buffering=False, method=cfg['weight_method'])
-                print(f"✓ Approach {approach_id} completed")
+                run_voronoi_approach('0', gdf_0, dissolved_buffers_WWTP, country_df, cfg, cfg['distance_fn'],
+                                    paths_dict['voronoi'][path_key], buffer_id_col='buffer_id',
+                                    scale_weights=scale_weights, only_round=only_round, buffering=False,
+                                    method=cfg['weight_method'])
+                print("✓ Approach 0 completed")
             
-            # === APPROACH 2: Watershed + Voronoi ===
-            elif approach_id == '2':
-                logger.info("Starting Approach 2: Watershed + Voronoi")
-                gdf_2 = gdf_bbox.copy()
-                gdf_2['buffer_id'] = gdf_2['HYBAS_ID']
-                watershed_gdf_2 = watershed_gdf.copy()
-                watershed_gdf_2['buffer_id'] = watershed_gdf_2['HYBAS_ID']
-                run_voronoi_approach('2', gdf_2, watershed_gdf_2, country_df, cfg, cfg['distance_fn'],
-                                    paths_dict['voronoi']['2'], buffer_id_col='buffer_id', 
-                                    scale_weights=False, buffering=True, method=cfg['weight_method'])
-                print("✓ Approach 2 completed")
-            
-            # === APPROACHES 3a-3d: Weighted Watershed Voronoi ===
-            elif approach_id in ['3a', '3b', '3c', '3d']:
-                # Setup approach 2 data if not already done
+            # === APPROACH 1: Watershed-constrained Voronoi ===
+            elif approach_id == '1':
+                logger.info("Starting Approach 1: Watershed-constrained Voronoi")
                 if gdf_2 is None:
-                    logger.info("Pre-computing Approach 2 data for weighted variant")
                     gdf_2 = gdf_bbox.copy()
                     gdf_2['buffer_id'] = gdf_2['HYBAS_ID']
                     watershed_gdf_2 = watershed_gdf.copy()
                     watershed_gdf_2['buffer_id'] = watershed_gdf_2['HYBAS_ID']
                 
-                # Map variant ID to parameters
-                variant_config = {
-                    '3a': (default_distance_multiplicative, False),
-                    '3b': (default_distance_multiplicative, True),
-                    '3c': (default_distance_additive, False),
-                    '3d': (default_distance_additive, True),
-                }
-                dist_fn, only_round = variant_config[approach_id]
-                
-                logger.info(f"Starting Approach {approach_id}: Weighted watershed variant")
-                run_voronoi_approach(approach_id, gdf_2, watershed_gdf_2, country_df, cfg, dist_fn,
-                                    paths_dict['voronoi'][approach_id], buffer_id_col='buffer_id', 
-                                    scale_weights=True, only_round=only_round, buffering=True, method=cfg['weight_method'])
-                print(f"✓ Approach {approach_id} completed")
+                run_voronoi_approach('1', gdf_2, watershed_gdf_2, country_df, cfg, cfg['distance_fn'],
+                                    paths_dict['voronoi'][path_key], buffer_id_col='buffer_id',
+                                    scale_weights=scale_weights, only_round=only_round, buffering=True,
+                                    method=cfg['weight_method'])
+                print("✓ Approach 1 completed")
             
-            # === APPROACHES 4-5: City Voronoi ===
-            elif approach_id in ['4', '5']:
-                # Setup city data if not already done
+            # === APPROACH 2: City Voronoi ===
+            elif approach_id == '2':
+                logger.info("Starting Approach 2: City Voronoi")
                 if dissolved_buffers_cities is None:
-                    logger.info("Loading and processing city data for Approaches 4-5")
                     df_cities = pd.read_csv(cfg['paths']['cities'])
                     df_cities = gpd.GeoDataFrame(df_cities, 
                                                geometry=gpd.GeoSeries([from_wkt(geom) if isinstance(geom, str) else geom 
@@ -2578,18 +2522,11 @@ EXAMPLES:
                     gdf_4 = drop_duplicates(drop_duplicates(gdf_4, 'WASTE_ID'), 'geometry')
                     gdf_4['geometry'] = gdf_4['geometry'].map(buffer_geometry)
                 
-                if approach_id == '4':
-                    logger.info("Starting Approach 4: City Voronoi")
-                    run_voronoi_approach('4', gdf_4, dissolved_buffers_cities, country_df, cfg, cfg['distance_fn'],
-                                        paths_dict['voronoi']['4'], buffer_id_col='buffer_id', 
-                                        scale_weights=False, buffering=False, method=cfg['weight_method'])
-                    print("✓ Approach 4 completed")
-                elif approach_id == '5':
-                    logger.info("Starting Approach 5: Weighted City Voronoi")
-                    run_voronoi_approach('5', gdf_4, dissolved_buffers_cities, country_df, cfg, cfg['distance_fn'],
-                                        paths_dict['voronoi']['5'], buffer_id_col='buffer_id', 
-                                        scale_weights=True, buffering=False, method=cfg['weight_method'])
-                    print("✓ Approach 5 completed")
+                run_voronoi_approach('2', gdf_4, dissolved_buffers_cities, country_df, cfg, cfg['distance_fn'],
+                                    paths_dict['voronoi']['2'], buffer_id_col='buffer_id',
+                                    scale_weights=scale_weights, only_round=only_round, buffering=False,
+                                    method=cfg['weight_method'])
+                print("✓ Approach 2 completed")
         
         except Exception as e:
             logger.error(f"Error executing approach {approach_id}: {e}", exc_info=True)

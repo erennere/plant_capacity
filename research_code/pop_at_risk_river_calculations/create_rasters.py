@@ -608,7 +608,7 @@ def parse_args():
     parser.add_argument("version", nargs="?", default=None)
     parser.add_argument("buffer", nargs="?", default=None)
     parser.add_argument("weight_method", nargs="?", default=None)
-    parser.add_argument("is_multiplicative", nargs="?", default=None)
+    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
     return parser.parse_args()
 
 def shard_tif_dict(tif_dict, job_index, total_jobs, seed):

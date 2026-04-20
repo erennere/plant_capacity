@@ -17,7 +17,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem=192gb
 #SBATCH --cpus-per-task=16
-#SBATCH --array=0-11
+#SBATCH --array=0-2
 #
 ################################################################################
 
@@ -47,12 +47,25 @@ export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
 export MKL_NUM_THREADS=$OMP_NUM_THREADS
 export NUMEXPR_NUM_THREADS=$OMP_NUM_THREADS
 
-# Parse optional config override arguments
+#
+# Usage:
+#   ./create_voronoi.sh [level] [version] [buffer] [weight_method] [weight_func]
+#
+# Arguments (all optional config overrides):
+#   level         - Processing level (default: from config.yaml arguments.default_level)
+#   version       - Data version (default: from config.yaml arguments.default_version)
+#   buffer        - Buffer distance in metres (default: from config.yaml params.buffer)
+#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
+#   weight_func   - Distance mode: mult | add | "" (empty = default multiplicative)
+#
+# Approaches: 0 (WWTP no watersheds), 1 (WWTP with watersheds), 2 (cities)
+# Use --only_round flag to pass to Python for round-area weights.
+## Parse optional config override arguments
 LEVEL="${1:-}"
 VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
-IS_MULTIPLICATIVE="${5:-}"
+WEIGHT_FUNC="${5:-}"
 
 # Determine execution mode: environment default + config override
 # Defaults: array on HPC, sequential on local
@@ -79,10 +92,10 @@ log "Execution mode: ${MODE}"
 
 if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
     # Array job mode: one approach per SLURM task
-    APPROACHES=('0' '1a' '1b' '1c' '1d' '2' '3a' '3b' '3c' '3d' '4' '5')
+    APPROACHES=('0' '1' '2')
     APPROACH="${APPROACHES[$SLURM_ARRAY_TASK_ID]}"
     log "Running approach ${APPROACH} in array mode (task ${SLURM_ARRAY_TASK_ID})"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
     if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
@@ -90,17 +103,17 @@ elif [[ "$MODE" == "sequential" ]]; then
         exit 0
     fi
     log "Running all approaches in sequential mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run multiple approaches concurrently on different CPUs
     log "Running all approaches in parallel mode"
-    APPROACHES=('0' '1a' '1b' '1c' '1d' '2' '3a' '3b' '3c' '3d' '4' '5')
+    APPROACHES=('0' '1' '2')
     FAILED_APPROACHES=()
     
     for APPROACH in "${APPROACHES[@]}"; do
         log "Launching approach ${APPROACH} in background"
         # Launch approach in background
-        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log" &
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log" &
     done
     
     # Wait for all background jobs to complete

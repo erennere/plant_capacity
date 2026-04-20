@@ -31,12 +31,22 @@ log "=========================================="
 log "Project root directory: ${PROJECT_ROOT}"
 log "Python command: ${PYTHON_CMD}"
 
-# Parse optional config override arguments
+#
+# Usage:
+#   ./combine_watersheds.sh [level] [version] [buffer] [weight_method] [weight_func]
+#
+# Arguments (all optional config overrides):
+#   level        - Processing level (default: from config.yaml arguments.default_level)
+#   version      - Data version (default: from config.yaml arguments.default_version)
+#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
+#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
+#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
+## Parse optional config override arguments
 LEVEL="${1:-}"
 VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
-IS_MULTIPLICATIVE="${5:-}"
+WEIGHT_FUNC="${5:-}"
 
 log "Installing research_code module (editable)"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/combine_watersheds.log"
@@ -56,7 +66,7 @@ log "Starting watershed archive merge"
 
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/combine_watersheds.log"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/combine_watersheds.log"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

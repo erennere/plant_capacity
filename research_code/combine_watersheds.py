@@ -69,12 +69,15 @@ def main():
     cfg = load_config(**overrides)
     levels = [k for k in os.listdir(os.path.dirname(cfg["paths"]["watersheds_zip_dir"]))]
     for level in levels:
+        if not level.startswith('lvl'):
+            continue
+        level = level.replace('lvl', '')
         level_overrides = {
             "level": level,
             "version": overrides["version"],
             "buffer": overrides["buffer"],
             "weight_method": overrides["weight_method"],
-            "is_multiplicative": overrides["is_multiplicative"],
+            "weight_func": overrides["weight_func"],
         }
         cfg = load_config(**level_overrides)
         extract_and_merge_geodata(

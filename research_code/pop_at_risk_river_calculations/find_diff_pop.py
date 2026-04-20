@@ -149,7 +149,7 @@ def parse_args():
     parser.add_argument("version", nargs="?", default=None)
     parser.add_argument("buffer", nargs="?", default=None)
     parser.add_argument("weight_method", nargs="?", default=None)
-    parser.add_argument("is_multiplicative", nargs="?", default=None)
+    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
     args = parser.parse_args()
     args.is_parallel = parse_bool(args.is_parallel)
     return args

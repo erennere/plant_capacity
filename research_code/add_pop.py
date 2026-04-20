@@ -237,10 +237,12 @@ def main():
     Notes
     -----
     The first positional argument selects the Voronoi file index. Optional
-    trailing positionals override ``level``, ``version``, and ``buffer``.
+    trailing positionals override ``level``, ``version``, ``buffer``,
+    ``weight_method``, and ``weight_func`` (accepted values: ``mult``,
+    ``add``, or ``""`` for default).
     """
     if len(sys.argv) < 2:
-        logging.error("Usage: python -m research_code.add_pop <voronoi_file_index> [level] [version] [buffer] [weight_method] [is_multiplicative]")
+        logging.error("Usage: python -m research_code.add_pop <voronoi_file_index> [level] [version] [buffer] [weight_method] [weight_func]")
         sys.exit(1)
     
     try:

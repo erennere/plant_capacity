@@ -574,7 +574,15 @@ def orchestrate_logic(pop_gdf, nxt_dis_col, main_riv_col, max_workers, model_par
     return gdfs
 
 def main():
-    """Load inputs, generate impact polygons, and write final output."""
+    """Load inputs, generate impact polygons, and write final output.
+
+    CLI usage::
+
+        python -m ...impact_polygons_pop <max_workers> [level] [version]
+                                         [buffer] [weight_method] [weight_func]
+
+    ``weight_func`` accepts ``mult``, ``add``, or ``""`` for default.
+    """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     overrides = parse_config_overrides(start_index=2)
     cfg = load_config(**overrides)

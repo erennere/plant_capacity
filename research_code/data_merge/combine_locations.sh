@@ -5,7 +5,7 @@
 # Orchestrates multiple sequential data processing steps
 #
 # Usage:
-#   ./combine_locations.sh [level] [version] [buffer] [weight_method] [is_multiplicative]
+#   ./combine_locations.sh [level] [version] [buffer] [weight_method] [weight_func]
 #   sbatch combine_locations.sh (SLURM job)
 #
 # SLURM Configuration
@@ -43,7 +43,7 @@ LEVEL="${1:-}"
 VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
-IS_MULTIPLICATIVE="${5:-}"
+WEIGHT_FUNC="${5:-}"
 
 # Install package in editable mode only if import is unavailable.
 ensure_research_code_importable() {
@@ -64,22 +64,22 @@ log "Starting data merge pipeline..."
 
 # Step 1: Correct OSM locations
 log "Step 1: Correcting locations with OSM data..."
-${PYTHON_CMD} -m research_code.data_merge.correct_locations_w_OSM "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+${PYTHON_CMD} -m research_code.data_merge.correct_locations_w_OSM "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
 log "Step 1 completed"
 
 # Step 2: Optionally merge legacy segmentation outputs.
 # Whether this actually runs is controlled by booleans.legacy_merge in config.yaml.
 log "Step 2: Running legacy segmentation merge if enabled in config.yaml..."
-${PYTHON_CMD} -m research_code.data_merge.merge_seg_results "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" --variant old 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
+${PYTHON_CMD} -m research_code.data_merge.merge_seg_results "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" --variant old 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
 log "Step 2 completed"
 
 # Step 3: Combine locations
 log "Step 3: Combining location data..."
-${PYTHON_CMD} -m research_code.data_merge.final_data_merge "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+${PYTHON_CMD} -m research_code.data_merge.final_data_merge "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
 log "Step 3 completed"
 
 log "Running merge_seg_results (variant=new)"
-${PYTHON_CMD} -m research_code.data_merge.merge_seg_results "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" --variant new 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
+${PYTHON_CMD} -m research_code.data_merge.merge_seg_results "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" --variant new 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
 log "Completed merge_seg_results (variant=new)"
 
 log "=========================================="

@@ -253,7 +253,9 @@ def main():
     Notes
     -----
     CLI usage is ``python -m ...find_intersection_river <max_workers> [level]
-    [version] [buffer]``.
+    [version] [buffer] [weight_method] [weight_func]``.
+
+    ``weight_func`` accepts ``mult``, ``add``, or ``""`` for default.
     """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     overrides = parse_config_overrides(start_index=2)

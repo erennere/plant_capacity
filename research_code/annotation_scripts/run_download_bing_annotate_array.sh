@@ -19,12 +19,22 @@ NUM_INSTANCES=10
 SPLIT_SEED=42
 INSTANCE_ID="${SLURM_ARRAY_TASK_ID}"
 
-# Parse optional config override arguments
+#
+# Usage:
+#   ./run_download_bing_annotate_array.sh [level] [version] [buffer] [weight_method] [weight_func]
+#
+# Arguments (all optional config overrides):
+#   level        - Processing level (default: from config.yaml arguments.default_level)
+#   version      - Data version (default: from config.yaml arguments.default_version)
+#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
+#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
+#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
+## Parse optional config override arguments
 LEVEL="${1:-}"
 VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
-IS_MULTIPLICATIVE="${5:-}"
+WEIGHT_FUNC="${5:-}"
 
 LOG_DIR="${PROJECT_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
@@ -37,5 +47,5 @@ log "Installing research_code module"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/bing_annotate_${INSTANCE_ID}.log"
 
 log "Running download_bing_annotate instance $INSTANCE_ID of $NUM_INSTANCES"
-${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$INSTANCE_ID" --num-instances "$NUM_INSTANCES" --split-seed "$SPLIT_SEED" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${IS_MULTIPLICATIVE}" 2>&1 | tee -a "${LOG_DIR}/bing_annotate_${INSTANCE_ID}.log"
+${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$INSTANCE_ID" --num-instances "$NUM_INSTANCES" --split-seed "$SPLIT_SEED" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/bing_annotate_${INSTANCE_ID}.log"
 log "Completed download_bing_annotate instance $INSTANCE_ID"

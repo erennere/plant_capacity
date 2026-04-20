@@ -161,7 +161,7 @@ def main():
     """Load config, assign basin IDs to rivers, and write output GeoPackage.
 
     CLI usage:
-        python -m ...assign_rivers_to_basin <max_workers> [level] [version] [buffer] [weight_method] [is_multiplicative]
+        python -m ...assign_rivers_to_basin <max_workers> [level] [version] [buffer] [weight_method] [weight_func]
     """
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     

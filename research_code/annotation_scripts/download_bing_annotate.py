@@ -465,7 +465,7 @@ if __name__ == "__main__":
     parser.add_argument("version", nargs="?", default=None, help="Optional config version override")
     parser.add_argument("buffer", nargs="?", default=None, help="Optional config buffer override")
     parser.add_argument("weight_method", nargs="?", default=None, help="Optional config weight_method override")
-    parser.add_argument("is_multiplicative", nargs="?", default=None, help="Optional config is_multiplicative override")
+    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
     args = parser.parse_args()
 
     logging.info("Starting Bing annotation pipeline")

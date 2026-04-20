@@ -10,8 +10,74 @@ import sys
 import yaml
 
 
+def _parse_optional_weight_func(value, field_name="weight_func"):
+    """Parse optional weight function mode override.
+
+    Accepted values are ``"mult"``, ``"add"``, or ``""``.
+    """
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    if normalized in {"mult", "add", ""}:
+        return normalized
+    raise ValueError(f"Invalid {field_name} '{value}'. Must be one of: mult, add, ''.")
+
+
+def parse_config_overrides(args=None, argv=None, start_index=1):
+    """Parse optional config overrides for ``load_config``.
+
+    Parameters
+    ----------
+    args : argparse.Namespace or None, optional
+        Parsed argparse namespace with optional ``level``, ``version``,
+        ``buffer``, ``weight_method``, and ``weight_func`` attributes.
+        When provided, ``argv`` and ``start_index`` are ignored.
+    argv : list or None, optional
+        ``sys.argv``-style sequence.  Defaults to ``sys.argv``.
+    start_index : int, default=1
+        Index in ``argv`` where ``level`` begins (use ``2`` when a required
+        positional argument precedes the overrides).
+
+    Returns
+    -------
+    dict
+        Optional ``load_config`` overrides keyed by parameter name.
+    """
+    if args is not None:
+        level = getattr(args, "level", None) or None
+        version = getattr(args, "version", None) or None
+        raw_buffer = getattr(args, "buffer", None)
+        weight_method = getattr(args, "weight_method", None) or None
+        raw_weight_func = getattr(args, "weight_func", None)
+    else:
+        argv = sys.argv if argv is None else argv
+        level = argv[start_index] if len(argv) > start_index and argv[start_index] else None
+        version = argv[start_index + 1] if len(argv) > start_index + 1 and argv[start_index + 1] else None
+        raw_buffer = argv[start_index + 2] if len(argv) > start_index + 2 and argv[start_index + 2] else None
+        weight_method = argv[start_index + 3] if len(argv) > start_index + 3 and argv[start_index + 3] else None
+        raw_weight_func = argv[start_index + 4] if len(argv) > start_index + 4 and argv[start_index + 4] else None
+
+    buffer = None
+    if raw_buffer is not None:
+        try:
+            buffer = int(raw_buffer)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid buffer '{raw_buffer}'. Must be an integer.")
+
+    weight_func = _parse_optional_weight_func(raw_weight_func, "weight_func")
+
+    return {
+        "level": level,
+        "version": version,
+        "buffer": buffer,
+        "weight_method": weight_method,
+        "weight_func": weight_func,
+    }
+
+
 def _normalize_cfg_path(path_value, base_dir):
-    """Return absolute filesystem path for cfg path entries, keeping URLs unchanged."""
+    """Return an absolute filesystem path for a config entry, passing URLs through unchanged."""
     if not isinstance(path_value, str):
         return path_value
 
@@ -25,63 +91,55 @@ def _normalize_cfg_path(path_value, base_dir):
     return os.path.abspath(os.path.join(base_dir, expanded))
 
 
-def load_config(config="config.yaml"):
-    """
-    Load and parse YAML configuration file, construct paths with variable expansion.
-    
-    Builds complete configuration dictionary from config.yaml with CLI argument
-    overrides. Expands all path templates using data_dir, version, and other
-    configuration values.
-    
-    Args:
-        config (str): Path to YAML configuration file (default: config.yaml)
-        
-    Returns:
-        dict: Configuration dictionary containing:
-            - weights_cond (bool): False if "all_world" passed as CLI arg, else True
-            - particle (str): "all_world" or "global_south" based on weights_cond
-            - level (str): Processing level from CLI or config default
-            - version (str): Data version from CLI or config default
-            - paths (dict): 40+ expanded file/directory paths for processing
-            - buffer (int): Buffer distance in meters
-            - max_workers (int): Number of parallel workers to use
-            - n_points (int): Grid resolution for Voronoi generation
-            - threshold, sigma, percent_threshold: Voronoi parameters
-            - percent_verification: Verification split ratio
-            - osm_threshold, eu_utm, rad: Additional processing parameters
-            - scipy_true, cv2_true: Boolean flags for contour extraction methods
-            - city_voronoi, csv_files, duckdb_cond: Processing flags
-            - sindex_concurrency, eu_correction: Feature flags
-            - distance_fn: Distance function for Voronoi weighting
-            - annotations, figures_params, credentials: Metadata & auth
-            
-    Path Templates (variable expansion):
-        Uses string.format() to expand {data_dir}, {version}, {level}, {buffer},
-        {final_data_dir}, {extra_points_dir}, {annotations_dir}, {latest_url}
-        
-    CLI Arguments:
-        sys.argv[1]: "all_world" for global dataset (default: global_south)
-        sys.argv[2]: Processing level override (default: config default)
-        sys.argv[3]: Data version override (default: config default)
-        
-    Notes:
-        COMPLEX: 40+ paths constructed with format string expansion
-        
-        ASSUMPTIONS:
-        - config.yaml exists in current directory with required structure
-        - Expected sections: paths, params, booleans, s3, arguments, annotations, figures, credentials
-        
-        HARDCODED LOGIC: particle = "all_world" OR "global_south" based on
-        single boolean flag. Other geographic splits handled elsewhere.
-        
-        RETURNS OBJECT: All config values in single dict for convenient
-        unpacking: cfg = load_config(); paths = cfg['paths']; buffer = cfg['buffer']
+def load_config(
+    config="config.yaml",
+    level=None,
+    version=None,
+    buffer=None,
+    weight_method=None,
+    weight_func=None,
+):
+    """Load and parse YAML configuration with optional CLI overrides.
+
+    Constructs paths by expanding template strings in ``config.yaml`` using
+    ``{data_dir}``, ``{version}``, ``{level}``, ``{buffer}``, and related
+    variables.
+
+    Parameters
+    ----------
+    config : str, default="config.yaml"
+        Path to the YAML configuration file.
+    level : str or None, optional
+        Processing level override; falls back to ``arguments.default_level``.
+    version : str or None, optional
+        Data version override; falls back to ``arguments.default_version``.
+    buffer : int or None, optional
+        Buffer distance in metres override; falls back to ``params.buffer``.
+    weight_method : str or None, optional
+        Weight transformation override; falls back to ``params.weight_method``.
+    weight_func : str or None, optional
+        Weighted-distance mode override. Accepted values are ``"mult"``,
+        ``"add"``, or ``""``. Falls back to ``params.weight_func``.
+
+    Returns
+    -------
+    dict
+        Flat configuration dictionary with keys including ``level``,
+        ``version``, ``buffer``, ``weight_method``, ``weight_func``,
+        ``max_workers``, ``n_points``, numeric Voronoi parameters, processing
+        flags, ``distance_fn``, and a ``paths`` sub-dict of 40+ expanded
+        filesystem paths.
+
+    Notes
+    -----
+    For CLI-driven scripts use ``parse_config_overrides()`` to derive
+    runtime overrides from argparse or ``sys.argv`` before passing them here.
     """
     # Lazy import to avoid circular import issues
     try:
-        from .create_voronoi import default_distance_multiplicative
+        from .create_voronoi import default_distance_additive, default_distance_multiplicative
     except ImportError:  # Support running as a top-level script
-        from create_voronoi import default_distance_multiplicative
+        from create_voronoi import default_distance_additive, default_distance_multiplicative
     
     config_path = os.path.abspath(config)
     config_dir = os.path.dirname(config_path)
@@ -89,20 +147,39 @@ def load_config(config="config.yaml"):
     with open(config_path) as stream:
         cfg = yaml.safe_load(stream)
 
-    # CLI arguments
-    #weights_cond = False if len(sys.argv) > 1 and sys.argv[1] == "all_world" else True
+    # Runtime flags
     weights_cond = True
-    level = cfg["arguments"]["default_level"]
-    version = cfg["arguments"]["default_version"]
-    particle = "all_world" if weights_cond == False else "global_south"
+    level = cfg["arguments"]["default_level"] if level is None else level
+    version = cfg["arguments"]["default_version"] if version is None else version
 
     # paths
     data_dir = cfg["paths"]["data_dir"]
     extra_points_dir = cfg["paths"]["extra_points_dir"]
-    buffer = cfg['params']['buffer']
+    buffer = cfg['params']['buffer'] if buffer is None else buffer
+    weight_method = cfg['params']['weight_method'] if weight_method is None else weight_method
+    if weight_func is None:
+        weight_func = cfg['params']['weight_func']
+    weight_func = _parse_optional_weight_func(weight_func, "weight_func")
+    if weight_func is None:
+        weight_func = ""
     final_data_dir = cfg["paths"]["final_data_dir"]
     annotations_dir = cfg["paths"]["annotations_dir"]
     dl_dir = cfg["paths"]["dl_dir"]
+    
+    weight_type = {
+        'linear': 'li',
+        'square_root': 'sq',
+        'logarithmic': 'log',
+        'sigmoid': 'sig'
+    }[weight_method]
+    weight_func_suffix = {
+        "mult": "_mult",
+        "add": "_add",
+        "": "",
+    }[weight_func]
+
+    distance_fn = default_distance_multiplicative if weight_func in {"", "mult"} else default_distance_additive
+
     def f(path):
         return path.format(
             data_dir=data_dir,
@@ -113,7 +190,9 @@ def load_config(config="config.yaml"):
             buffer=buffer,
             final_data_dir=final_data_dir,
             annotations_dir=annotations_dir,
-            dl_dir=dl_dir
+            dl_dir=dl_dir,
+            weight_type=weight_type,
+            weight_func=weight_func_suffix,
         )
 
     paths = {
@@ -188,11 +267,12 @@ def load_config(config="config.yaml"):
     # Return everything in one object
     return {
         "weights_cond": weights_cond,
-        "particle": particle,
         "level": level,
         "version": version,
         "paths": paths,
-        "buffer": params["buffer"],
+        "buffer": buffer,
+        "weight_method": weight_method,
+        "weight_func": weight_func,
         "max_workers": params["max_workers"],
         "n_points": params["n_points"],
         "threshold": params["threshold"],
@@ -209,12 +289,13 @@ def load_config(config="config.yaml"):
         "duckdb_cond": flags["duckdb"],
         "sindex_concurrency": flags["sindex_concurrency"],
         "eu_correction": flags["eu_correction"],
-        "distance_fn": default_distance_multiplicative,
+        "distance_fn": distance_fn,
         "annotations": cfg["annotations"],
         "figures": cfg["figures"],
         "credentials": cfg["credentials"],
         "add_pop_max_workers": cfg["params"]["add_pop_max_workers"],
-        "weight_method": cfg["params"]["weight_method"],
+        "weight_method": weight_method,
+        "weight_func": weight_func,
         "zoom_level": cfg["params"]["zoom_level"],
         "remove_industrial": flags['remove_industrial'],
         "industrial_category_numbers": cfg['params']['industrial_category_numbers'],

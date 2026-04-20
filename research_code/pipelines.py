@@ -20,41 +20,36 @@ logger = logging.getLogger(__name__)
 def create_output_paths(cfg):
     """Generate canonical output paths for all Voronoi approaches.
 
-    Returns paths for the buffer products plus the full approach family used by
-    create_voronoi.py:
-    - `0`: WWTP buffer Voronoi baseline
-    - `1a`-`1d`: weighted WWTP-buffer variants
-    - `2`: watershed-constrained Voronoi baseline
-    - `3a`-`3d`: weighted watershed variants
-    - `4`: city-based Voronoi baseline
-    - `5`: weighted city-based Voronoi
+    Returns paths for the buffer products plus the approach family used by
+    create_voronoi.py. Weighted/unweighted and multiplicative/additive variants
+    are encoded in the output directory name via ``weight_type`` and
+    ``weight_func`` (resolved from config); the only per-run variant captured
+    here is the ``only_round`` flag:
+
+    - `0` / `0_only_round`: WWTP buffer Voronoi (all points / only-round)
+    - `1` / `1_only_round`: watershed-constrained Voronoi (all points / only-round)
+    - `2`: city-based Voronoi
     """
     version = cfg['version']
     level = cfg['level']
     buffer = cfg['buffer']
-    data_dir = cfg['paths']['data_dir']
+    weight_func = cfg['weight_func']
+    buffers_dir = cfg['paths']['buffers_dir']
     voronoi_dir = cfg['paths']['voronoi_dir']
     
     paths = {
         'buffers': {
-            'WWTP': os.path.join(data_dir, f'dissolved_wwtp_buffers_v{version}_bf{int(buffer)}.gpkg'),
-            'city': os.path.join(data_dir, f'dissolved_city_buffers_v{version}_bf{int(buffer)}.gpkg'),
-            'WWTP_convex': os.path.join(data_dir, f'dissolved_wwtp_convex_hull_v{version}_bf{int(buffer)}.gpkg'),
-            'city_convex': os.path.join(data_dir, f'dissolved_city_convex_hull_v{version}_bf{int(buffer)}.gpkg'),
+            'WWTP': os.path.join(buffers_dir, f'dissolved_wwtp_buffers_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
+            'city': os.path.join(buffers_dir, f'dissolved_city_buffers_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
+            'WWTP_convex': os.path.join(buffers_dir, f'dissolved_wwtp_convex_hull_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
+            'city_convex': os.path.join(buffers_dir, f'dissolved_city_convex_hull_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
         },
         'voronoi': {
-            '0': os.path.join(voronoi_dir, f'appr_0_v{version}_bf{int(buffer)}.gpkg'),
-            '1a': os.path.join(voronoi_dir, f'appr_1_v{version}_bf{int(buffer)}.gpkg'),
-            '1b': os.path.join(voronoi_dir, f'appr_1_v{version}_only_round_bf{int(buffer)}.gpkg'),
-            '1c': os.path.join(voronoi_dir, f'appr_1_v{version}_add_bf{int(buffer)}.gpkg'),
-            '1d': os.path.join(voronoi_dir, f'appr_1_v{version}_only_round_add_bf{int(buffer)}.gpkg'),
-            '2': os.path.join(voronoi_dir, f'appr_2_lvl_{level}_v{version}_bf{int(buffer)}.gpkg'),
-            '3a': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_bf{int(buffer)}.gpkg'),
-            '3b': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_only_round_bf{int(buffer)}.gpkg'),
-            '3c': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_add_bf{int(buffer)}.gpkg'),
-            '3d': os.path.join(voronoi_dir, f'appr_3_lvl_{level}_v{version}_only_round_add_bf{int(buffer)}.gpkg'),
-            '4': os.path.join(voronoi_dir, f'appr_4_v{level}_bf{int(buffer)}.gpkg'),
-            '5': os.path.join(voronoi_dir, f'appr_5_v{version}_bf{int(buffer)}.gpkg'),
+            '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+            '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+            '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+            '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+            '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
         }
     }
     return paths

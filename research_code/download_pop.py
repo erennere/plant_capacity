@@ -600,7 +600,7 @@ def main(res=30, max_workers=8):
     Notes
     -----
     The CLI entrypoint accepts optional config overrides in the form
-    ``[level] [version] [buffer] [weight_method] [is_multiplicative]``.
+    ``[level] [version] [buffer] [weight_method] [weight_func]``.
     Resolution and worker count remain direct Python-call parameters unless
     separate CLI support is added.
     """
