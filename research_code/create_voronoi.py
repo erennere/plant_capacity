@@ -85,8 +85,10 @@ import shapely
 import duckdb
 
 # Configure module-level logging
+_LOG_LEVEL_NAME = os.environ.get("PLANT_CAPACITY_LOG_LEVEL", "INFO").upper()
+_LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=_LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)

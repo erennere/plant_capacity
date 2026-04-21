@@ -25,27 +25,20 @@ from typing import List, Tuple
 
 # Setup logging
 def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
-    """Configure logging to file and stdout."""
+    """Configure stdout-only logging; the shell wrapper owns the log file."""
     os.makedirs(log_dir, exist_ok=True)
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
-    
-    # File handler
-    fh = logging.FileHandler(os.path.join(log_dir, f"voronoi_sweep_{task_id}.log"))
-    fh.setLevel(logging.INFO)
-    
-    # Console handler
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    
-    # Formatter
-    formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
-    fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
-    
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-    
+    logger.propagate = False
+
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s'))
+    logger.addHandler(handler)
+
     return logger
 
 
@@ -140,11 +133,13 @@ def run_voronoi_job(
                 str(level), version, str(buffer), weight_method, weight_func,
                 "--approach", approach
             ]
+            env = os.environ.copy()
+            env["PLANT_CAPACITY_LOG_LEVEL"] = "INFO"
 
             attempt = 0
             run_succeeded = False
             while attempt <= max_retries and not run_succeeded:
-                result = subprocess.run(cmd, capture_output=False, text=True)
+                result = subprocess.run(cmd, capture_output=False, text=True, env=env)
                 if result.returncode == 0:
                     run_succeeded = True
                     log_msg = f"Job {job_id}: Run {run_idx} completed successfully"
