@@ -17,6 +17,7 @@ PYTHON_CMD="python"
 PYTHON_SCRIPT="research_code.create_voronoi"
 APPROACH="1"
 VERSION="${1:-}"
+SHUFFLE_SEED="${SHUFFLE_SEED:-42}"
 
 # Parameter grids
 LEVELS=(7 8 9)
@@ -41,27 +42,50 @@ if (( TASK_ID < 0 || TASK_ID > 9 )); then
     exit 1
 fi
 
-log "Starting Voronoi parameter sweep task ${TASK_ID}/9 (approach=${APPROACH})"
+log "Starting Voronoi parameter sweep task ${TASK_ID}/9 (approach=${APPROACH}, shuffle_seed=${SHUFFLE_SEED})"
 
 log "Installing research_code module (editable)"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null
 
-combo_index=0
 run_count=0
-for level in "${LEVELS[@]}"; do
-    for weight_func in "${WEIGHT_FUNCS[@]}"; do
-        for weight_method in "${WEIGHT_METHODS[@]}"; do
-            for buffer in "${BUFFERS[@]}"; do
-                if (( combo_index % 10 == TASK_ID )); then
-                    run_count=$((run_count + 1))
-                    log "Run ${run_count}: level=${level} buffer=${buffer} weight_method=${weight_method} weight_func='${weight_func}'"
-                    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${level}" "${VERSION}" "${buffer}" "${weight_method}" "${weight_func}" --approach "${APPROACH}" \
-                        2>&1 | tee -a "${LOG_DIR}/voronoi_sweep_${TASK_ID}.log"
-                fi
-                combo_index=$((combo_index + 1))
-            done
-        done
-    done
+mapfile -t ASSIGNED_COMBOS < <(
+    "${PYTHON_CMD}" - "${TASK_ID}" "${SHUFFLE_SEED}" <<'PY'
+import random
+import sys
+
+task_id = int(sys.argv[1])
+seed = int(sys.argv[2])
+
+levels = [7, 8, 9]
+weight_funcs = ["mult", "add", ""]
+weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
+buffers = [9000, 11000, 13000, 15000]
+
+combos = []
+for level in levels:
+    for weight_func in weight_funcs:
+        for weight_method in weight_methods:
+            for buffer in buffers:
+                combos.append((level, buffer, weight_method, weight_func))
+
+random.Random(seed).shuffle(combos)
+
+for idx, (level, buffer, weight_method, weight_func) in enumerate(combos):
+    if idx % 10 == task_id:
+        wf = weight_func if weight_func != "" else "__EMPTY__"
+        print(f"{level}\t{buffer}\t{weight_method}\t{wf}")
+PY
+)
+
+for combo in "${ASSIGNED_COMBOS[@]}"; do
+    IFS=$'\t' read -r level buffer weight_method weight_func <<< "${combo}"
+    if [[ "${weight_func}" == "__EMPTY__" ]]; then
+        weight_func=""
+    fi
+    run_count=$((run_count + 1))
+    log "Run ${run_count}: level=${level} buffer=${buffer} weight_method=${weight_method} weight_func='${weight_func}'"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${level}" "${VERSION}" "${buffer}" "${weight_method}" "${weight_func}" --approach "${APPROACH}" \
+        2>&1 | tee -a "${LOG_DIR}/voronoi_sweep_${TASK_ID}.log"
 done
 
 log "Completed task ${TASK_ID}. Executed ${run_count} parameter combinations."

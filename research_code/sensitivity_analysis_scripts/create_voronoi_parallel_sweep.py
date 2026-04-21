@@ -18,8 +18,9 @@ import sys
 import os
 import logging
 import argparse
-import threading
-from multiprocessing import Process, Queue
+import time
+import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple
 
 # Setup logging
@@ -27,11 +28,11 @@ def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
     """Configure logging to file and stdout."""
     os.makedirs(log_dir, exist_ok=True)
     logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     
     # File handler
     fh = logging.FileHandler(os.path.join(log_dir, f"voronoi_sweep_{task_id}.log"))
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(logging.INFO)
     
     # Console handler
     ch = logging.StreamHandler(sys.stdout)
@@ -68,10 +69,13 @@ def generate_parameter_combinations() -> List[Tuple[int, str, int, str, str]]:
 def filter_combinations_by_task(
     combinations: List[Tuple[int, str, int, str, str]],
     task_id: int,
-    num_tasks: int = 10
+    num_tasks: int = 10,
+    shuffle_seed: int = 42,
 ) -> List[Tuple[int, str, int, str, str]]:
-    """Filter combinations to those assigned to this task ID."""
-    return [combo for idx, combo in enumerate(combinations) if idx % num_tasks == task_id]
+    """Deterministically shuffle then assign combinations to this task ID."""
+    shuffled = list(combinations)
+    random.Random(shuffle_seed).shuffle(shuffled)
+    return [combo for idx, combo in enumerate(shuffled) if idx % num_tasks == task_id]
 
 
 def split_combinations_into_jobs(
@@ -93,10 +97,11 @@ def run_voronoi_job(
     job_id: int,
     combinations: List[Tuple[int, str, int, str, str]],
     approach: str,
-    log_queue: Queue,
+    logger: logging.Logger,
     project_root: str,
-    version: str = ""
-) -> None:
+    version: str = "",
+    max_retries: int = 2,
+) -> List[Tuple[int, str, int, str, str]]:
     """
     Worker function: Run a subset of parameter combinations.
     
@@ -104,71 +109,130 @@ def run_voronoi_job(
         job_id: Identifier for this job (0-3)
         combinations: List of (level, version, buffer, weight_method, weight_func) tuples
         approach: Approach ID to run
-        log_queue: Queue for logging messages
+        logger: Logger instance
         project_root: Root project directory
         version: Optional version override
+        max_retries: Number of retries per failed run
+
+    Returns:
+        List of parameter combinations that failed after retries
     """
     os.chdir(project_root)
     sys.path.insert(0, project_root)
-    
-    try:
-        from research_code.create_voronoi import logger as base_logger
-    except ImportError:
-        from create_voronoi import logger as base_logger
-    
+
     log_msg = f"Job {job_id}: Starting with {len(combinations)} parameter combinations"
-    log_queue.put((job_id, "INFO", log_msg))
-    
+    logger.info(f"[Job {job_id}] {log_msg}")
+
+    failed_combinations: List[Tuple[int, str, int, str, str]] = []
+
     try:
         import subprocess
-        
+
         for run_idx, (level, _, buffer, weight_method, weight_func) in enumerate(combinations, 1):
             log_msg = f"Job {job_id}: Run {run_idx}/{len(combinations)}: " \
                      f"level={level} buffer={buffer} weight_method={weight_method} " \
                      f"weight_func='{weight_func}'"
-            log_queue.put((job_id, "INFO", log_msg))
-            
+            logger.debug(f"[Job {job_id}] {log_msg}")
+
             # Build command
             cmd = [
                 sys.executable, "-m", "research_code.create_voronoi",
                 str(level), version, str(buffer), weight_method, weight_func,
                 "--approach", approach
             ]
-            
-            # Run subprocess
-            result = subprocess.run(cmd, capture_output=False, text=True)
-            if result.returncode != 0:
-                log_msg = f"Job {job_id}: Run {run_idx} FAILED with return code {result.returncode}"
-                log_queue.put((job_id, "ERROR", log_msg))
-            else:
-                log_msg = f"Job {job_id}: Run {run_idx} completed successfully"
-                log_queue.put((job_id, "DEBUG", log_msg))
-        
+
+            attempt = 0
+            run_succeeded = False
+            while attempt <= max_retries and not run_succeeded:
+                result = subprocess.run(cmd, capture_output=False, text=True)
+                if result.returncode == 0:
+                    run_succeeded = True
+                    log_msg = f"Job {job_id}: Run {run_idx} completed successfully"
+                    logger.debug(f"[Job {job_id}] {log_msg}")
+                    break
+
+                attempt += 1
+                if attempt <= max_retries:
+                    backoff_seconds = min(60, 5 * (2 ** (attempt - 1)))
+                    logger.warning(
+                        "[Job %s] Run %s failed with return code %s; retrying in %ss "
+                        "(%s/%s)",
+                        job_id,
+                        run_idx,
+                        result.returncode,
+                        backoff_seconds,
+                        attempt,
+                        max_retries,
+                    )
+                    time.sleep(backoff_seconds)
+
+            if not run_succeeded:
+                failed_combinations.append((level, "", buffer, weight_method, weight_func))
+                log_msg = (
+                    f"Job {job_id}: Run {run_idx} FAILED after {max_retries + 1} attempts"
+                )
+                logger.error(f"[Job {job_id}] {log_msg}")
+
         log_msg = f"Job {job_id}: Completed all {len(combinations)} combinations"
-        log_queue.put((job_id, "INFO", log_msg))
-        
+        logger.info(f"[Job {job_id}] {log_msg}")
+
     except Exception as e:
         log_msg = f"Job {job_id}: EXCEPTION: {str(e)}"
-        log_queue.put((job_id, "ERROR", log_msg))
+        logger.error(f"[Job {job_id}] {log_msg}")
+        failed_combinations.extend(combinations)
+
+    return failed_combinations
 
 
-def log_queue_monitor(log_queue: Queue, logger: logging.Logger) -> None:
-    """Monitor and process log messages from worker jobs."""
-    level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-    }
-    
-    while True:
-        try:
-            job_id, level, msg = log_queue.get(timeout=1)
-            if msg is None:  # Sentinel value
-                break
-            logger.log(level_map.get(level, logging.INFO), f"[Job {job_id}] {msg}")
-        except Exception:
-            continue
+def execute_with_job_count(
+    combinations: List[Tuple[int, str, int, str, str]],
+    num_jobs: int,
+    approach: str,
+    logger: logging.Logger,
+    project_root: str,
+    version: str,
+    retry_failed_runs: int,
+) -> List[Tuple[int, str, int, str, str]]:
+    """Execute a batch with a fixed number of jobs and return failed combinations."""
+    job_combinations = split_combinations_into_jobs(combinations, num_jobs=num_jobs)
+    non_empty_jobs = [
+        (job_id, combos)
+        for job_id, combos in enumerate(job_combinations)
+        if combos
+    ]
+    for job_id, combos in enumerate(job_combinations):
+        logger.info(f"Job {job_id}: {len(combos)} combinations")
+
+    if not non_empty_jobs:
+        return []
+
+    failed_combinations: List[Tuple[int, str, int, str, str]] = []
+    with ThreadPoolExecutor(max_workers=num_jobs, thread_name_prefix="VoronoiJob") as executor:
+        futures = {
+            executor.submit(
+                run_voronoi_job,
+                job_id,
+                combos,
+                approach,
+                logger,
+                project_root,
+                version,
+                retry_failed_runs,
+            ): job_id
+            for job_id, combos in non_empty_jobs
+        }
+
+        for future in as_completed(futures):
+            job_id = futures[future]
+            try:
+                failed = future.result()
+                failed_combinations.extend(failed)
+                logger.info(f"Job {job_id} completed (failed runs: {len(failed)})")
+            except Exception as exc:
+                logger.error(f"Job {job_id} failed with exception: {exc}", exc_info=True)
+                failed_combinations.extend(job_combinations[job_id])
+
+    return failed_combinations
 
 
 def main():
@@ -184,6 +248,10 @@ def main():
                        help="Approach to run (default: 1)")
     parser.add_argument("--num-jobs", type=int, default=4,
                        help="Number of parallel jobs (default: 4)")
+    parser.add_argument("--retry-failed-runs", type=int, default=2,
+                       help="Retries per failed parameter run (default: 2)")
+    parser.add_argument("--shuffle-seed", type=int, default=42,
+                       help="Seed for deterministic random assignment across 10 tasks")
     
     args = parser.parse_args()
     
@@ -202,7 +270,8 @@ def main():
     logger = setup_logging(log_dir, task_id)
     
     logger.info(f"Starting parallel Voronoi sweep (task {task_id}/9, approach={args.approach})")
-    logger.info(f"Parallel jobs: {args.num_jobs} (each with ~16 CPUs available)")
+    logger.info(f"Initial parallel jobs: {args.num_jobs}")
+    logger.info(f"Shuffle seed: {args.shuffle_seed}")
     
     try:
         # Install editable package
@@ -216,53 +285,56 @@ def main():
         
         # Generate and filter combinations
         all_combinations = generate_parameter_combinations()
-        task_combinations = filter_combinations_by_task(all_combinations, task_id, num_tasks=10)
-        logger.info(f"Task {task_id}: {len(task_combinations)} combinations to process")
-        
-        # Split into jobs
-        job_combinations = split_combinations_into_jobs(task_combinations, num_jobs=args.num_jobs)
-        
-        for job_id, combos in enumerate(job_combinations):
-            logger.info(f"Job {job_id}: {len(combos)} combinations")
-        
-        # Create queue for logging
-        log_queue = Queue()
-        
-        # Start queue monitor so child-process logs are consumed and emitted.
-        monitor_thread = threading.Thread(
-            target=log_queue_monitor,
-            args=(log_queue, logger),
-            name="VoronoiLogMonitor",
-            daemon=True,
+        task_combinations = filter_combinations_by_task(
+            all_combinations,
+            task_id,
+            num_tasks=10,
+            shuffle_seed=args.shuffle_seed,
         )
-        monitor_thread.start()
+        logger.info(f"Task {task_id}: {len(task_combinations)} combinations to process")
 
-        # Start worker processes
-        processes = []
-        for job_id, combos in enumerate(job_combinations):
-            if not combos:
-                logger.debug(f"Job {job_id}: No combinations to process, skipping")
-                continue
-            
-            p = Process(
-                target=run_voronoi_job,
-                args=(job_id, combos, args.approach, log_queue, project_root, args.version),
-                name=f"VoronoiJob-{job_id}"
+        # Start from num-jobs=4 (default) and progressively reduce to 1 if failures persist.
+        current_jobs = max(1, args.num_jobs)
+        remaining = list(task_combinations)
+        while remaining and current_jobs >= 1:
+            logger.info(
+                "Executing %s combinations with num-jobs=%s",
+                len(remaining),
+                current_jobs,
             )
-            p.start()
-            processes.append(p)
-            logger.info(f"Started Job {job_id} (PID: {p.pid})")
-        
-        # Wait for all processes to complete
-        logger.info(f"Waiting for {len(processes)} parallel jobs to complete...")
-        for p in processes:
-            p.join()
-            logger.info(f"Job completed (PID: {p.pid})")
-        
-        # Sentinel to stop log monitor
-        log_queue.put((None, None, None))
-        monitor_thread.join(timeout=10)
-        
+            failed = execute_with_job_count(
+                combinations=remaining,
+                num_jobs=current_jobs,
+                approach=args.approach,
+                logger=logger,
+                project_root=project_root,
+                version=args.version,
+                retry_failed_runs=args.retry_failed_runs,
+            )
+
+            if not failed:
+                remaining = []
+                break
+
+            logger.warning(
+                "num-jobs=%s left %s failed combinations",
+                current_jobs,
+                len(failed),
+            )
+            remaining = failed
+            if current_jobs == 1:
+                break
+            current_jobs -= 1
+            logger.warning("Reducing num-jobs and retrying with num-jobs=%s", current_jobs)
+
+        if remaining:
+            logger.error(
+                "Task %s completed with %s failed parameter runs even at num-jobs=1",
+                task_id,
+                len(remaining),
+            )
+            sys.exit(2)
+
         logger.info(f"Task {task_id}: All parallel jobs completed successfully")
         
     except Exception as e:
