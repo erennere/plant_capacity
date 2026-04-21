@@ -153,7 +153,7 @@ def main():
             '2021_zonal_sum', '2020_zonal_sum', '2019_zonal_sum',
             '2018_zonal_sum', '2017_zonal_sum', '2016_zonal_sum',
             '2015_zonal_sum', '2014_zonal_sum'],
-        False: ['num_detection_circle', 'num_detection_square', 'total_area', tag1, tag2]}
+        False: ['num_detection_circle', 'num_detection_rect', 'total_area', tag1, tag2]}
     
     # Load boundaries
     boundaries = gpd.read_file(boundaries_filepath).to_crs("ESRI:54030")
@@ -164,7 +164,8 @@ def main():
     pop_gdf = gpd.read_file(pop_filepath)
     pop_gdf['country'] = pop_gdf['ISO_2']
     pop_gdf = pop_gdf.drop('geometry', axis=1)
-    pop_gdf[industrial_col] = np.random.randint(0, 2, len(pop_gdf)).astype(bool)
+    #pop_gdf[industrial_col] = np.random.randint(0, 2, len(pop_gdf)).astype(bool)
+    pop_gdf[industrial_col] = pop_gdf['category_number'].isin(cfg['industrial_category_numbers'])
 
     stats_df = pd.read_csv(stats_filepath)
     

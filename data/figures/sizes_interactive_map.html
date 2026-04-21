@@ -263,7 +263,7 @@
       document.getElementById("leg-toggle").onclick = () =>
         document.getElementById("leg-content").classList.toggle("open");
 
-      fetch("./leaflet_size.geojson")
+      fetch("./v2/lvl8/square_root/leaflet_size_v2_lvl8_bf15000_square_rootmult.geojson")
         .then((res) => res.json())
         .then((data) => {
           data.features.forEach((f) => {

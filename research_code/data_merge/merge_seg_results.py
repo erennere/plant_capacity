@@ -17,11 +17,21 @@ except ImportError:
     from research_code.starter import load_config, parse_config_overrides
     from research_code.create_voronoi import ensure_output_dir_for_file
 
-def assign_to_nearest(gdf_source, gdf_target):
+def assign_to_nearest(gdf_source, gdf_target, threshold=None):
     """Attach nearest target attributes to each source geometry.
 
     Source rows without valid geometry or without a successful nearest-neighbor
     lookup are preserved and returned without merged target attributes.
+
+    Parameters
+    ----------
+    gdf_source : geopandas.GeoDataFrame
+        Source layer whose rows will receive nearest attributes.
+    gdf_target : geopandas.GeoDataFrame
+        Target layer queried through its spatial index.
+    threshold : float | None, default=None
+        Optional maximum nearest-neighbor distance in target CRS units.
+        When ``None``, behavior is unchanged from the previous implementation.
     """
     gdf_source = gdf_source.copy()
     source_crs = gdf_source.crs
@@ -34,7 +44,14 @@ def assign_to_nearest(gdf_source, gdf_target):
             nearest_matches.append(None)
             continue
         try:
-            nearest_idx = list(sindex.nearest(geom))[1][0]
+            if threshold is None:
+                nearest_idx = list(sindex.nearest(geom))[1][0]
+            else:
+                nearest = sindex.nearest(geom, max_distance=threshold)
+                if len(nearest[1]) == 0:
+                    nearest_matches.append(None)
+                    continue
+                nearest_idx = nearest[1][0]
             nearest_matches.append(nearest_idx)
         except Exception:
             nearest_matches.append(None)

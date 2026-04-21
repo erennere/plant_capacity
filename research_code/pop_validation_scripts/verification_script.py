@@ -21,7 +21,7 @@ def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS
     gdf['use_verify'] = (
         (~gdf['is_single_points'])
         & (gdf['total_area'] != 0)
-        & (gdf['round_area'] != 0)
+        #& (gdf['round_area'] != 0)
     )
     gdf['watershed_fraction_valid'] = (
         gdf.groupby(watershed_col)['use_verify'].transform('mean')
@@ -44,9 +44,9 @@ def main():
     filenames = [f for f in os.listdir(pop_dir)]
     
     for filename in filenames:
-        if '_add_' in filename:
-            print(filename)
-            continue
+        #if '_add' in filename:
+        #    print(filename)
+        #    continue
         filepath = os.path.join(pop_dir, filename)
         ver_output_filepath = os.path.join(verification_dir, f'ver_{filename}')
         unver_output_filepath = os.path.join(verification_dir, f'unver_{filename}')

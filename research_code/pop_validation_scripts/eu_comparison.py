@@ -5,6 +5,7 @@ normalized difference and multiplicative comparison metrics, and exports yearly
 histogram panels for verification subsets.
 """
 import os
+import logging
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -12,15 +13,18 @@ import seaborn as sns
 import numpy as np
 
 try:
-    from .hw_comparison import ndvi, multiples, replace_inf, get_approach
+    from .hw_comparison import ndvi, multiples, replace_inf, extract_voronoi_parameters
     from ..starter import load_config, parse_config_overrides
     from ..create_voronoi import ensure_output_dir_for_file
     from ..data_merge.merge_seg_results import assign_to_nearest
 except ImportError:
-    from research_code.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf, get_approach
+    from research_code.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf, extract_voronoi_parameters
     from research_code.starter import load_config, parse_config_overrides
     from research_code.create_voronoi import ensure_output_dir_for_file
     from research_code.data_merge.merge_seg_results import assign_to_nearest
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
                         ylabel='N_WWTPs', xlabel=None, bins=100, lower_quantile=0.01, upper_quantile=0.95,
@@ -36,8 +40,9 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
 
         # CHECK IF COLUMN EXISTS AND HAS DATA
         if col_name not in data.columns or data[col_name].dropna().empty:
+            logger.warning(f"Column '{col_name}' is missing or empty in the data. Skipping plot for year {year}.")
             ax.set_title(f'{year} (No Data)')
-            ax.axis('off') # Hide empty plots
+            #ax.axis('off') # Hide empty plots
             continue
             
         color = pastel_colors[i]
@@ -47,11 +52,13 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
 
         # CHECK IF QUANTILES ARE FINITE
         if np.isnan(vmin) or np.isnan(vmax):
+            logger.warning(f"Column '{col_name}' has invalid quantile range for year {year}. Skipping plot.")
             ax.set_title(f'{year} (Invalid Range)')
             continue
         
         subset = data[(data[col_name] >= vmin) & (data[col_name] <= vmax)][col_name]
         if subset.empty:
+            logger.warning(f"Column '{col_name}' has no data within quantile range for year {year}. Skipping plot.")
             continue
         
         # Plot histogram
@@ -176,7 +183,7 @@ def main():
     'lower_quantile' : 0.01}
 
     factor = 1
-    threshold = 250
+    threshold = cfg['threshold']
     utm = 32634 
     pop_col = 'POP_SERVED_EU'
     ref_filepath = cfg['paths']['eu_ref_filepath']
@@ -188,7 +195,8 @@ def main():
 
     for filepath in pop_filepaths:
         filename = os.path.basename(filepath)
-        approach = get_approach(filename)
+        params = extract_voronoi_parameters(filepath)
+        approach = params['approach']
         gdf = gpd.read_file(filepath)
         gdf = assign_to_nearest(gdf, ref_file, threshold)
         gdf = gdf[gdf[organic_m_column].notna()].reset_index(drop=True)

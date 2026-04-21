@@ -98,9 +98,7 @@ def main():
     
     # Clean population for Voronoi tooltips
     pop_gdf[agg_col] = pop_gdf[agg_col].fillna(0).round(0)
-
-    if ind_col not in pop_gdf.columns:
-        pop_gdf[ind_col] = np.random.randint(0, 2, len(pop_gdf)).astype(bool)
+    pop_gdf[ind_col] = pop_gdf['category_number'].isin(cfg['industrial_category_numbers'])
 
     pop_df_no_geom = pop_gdf.drop('geometry', axis=1)
     agg_ds = []

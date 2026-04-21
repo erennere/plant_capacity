@@ -16,7 +16,7 @@ paths:
   pop_tif_dir: "{data_dir}/population/unzipped"
   WWTP_tif_dir: "{data_dir}/WWTP_tifs/v{version}/lvl{level}/bf{buffer}/{weight_type}"
   pop_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}"
-  pop_dif_output_dir: "{data_dir}/pop_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}/diff"
+  pop_dif_output_dir: "{data_dir}/pop_diff_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}"
   hw_plots_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/hw_plots"
   eu_plots_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/eu_plots"
   watersheds_zip_dir: "{data_dir}/hydroshed_river_levels/lvl{level}"
