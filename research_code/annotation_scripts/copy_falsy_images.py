@@ -12,8 +12,8 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
     gdf = gpd.read_file(cfg['paths']['corrected_all_filepath'])
-    gdf['category_number'] = gdf['category_number'].astype(int)
-    falsy_gdf = gdf[(gdf['category_number'].isna() & gdf['image'].notna()) | (gdf['category_number'].isin([8, 2, 3, 7, 1]))]
+    gdf['category_number'] = gdf['category_number'].fillna(-1).astype(int)
+    falsy_gdf = gdf[((gdf['category_number'] == -1) & gdf['image'].notna()) | (gdf['category_number'].isin([8, 2, 3, 7, 1]))]
     image_input_dir = cfg['paths']['annotated_images_output_dir']
     falsy_gdf['filepath'] = falsy_gdf['image'].apply(lambda x: os.path.join(image_input_dir, x))
     output_dir = os.path.join(os.path.dirname(cfg['paths']['annotations_verf_image_outpath_dir']), 'falsy_images')
