@@ -23,6 +23,13 @@ import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple
 
+try:
+    from ..starter import load_config
+    from ..pipelines import create_output_paths
+except ImportError:
+    from research_code.starter import load_config
+    from research_code.pipelines import create_output_paths
+
 # Setup logging
 def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
     """Configure stdout-only logging; the shell wrapper owns the log file."""
@@ -117,6 +124,26 @@ def run_voronoi_job(
     logger.info(f"[Job {job_id}] {log_msg}")
 
     failed_combinations: List[Tuple[int, str, int, str, str]] = []
+    output_exists_cache: dict[Tuple[int, str, int, str, str], bool] = {}
+
+    def output_exists_for_combo(combo: Tuple[int, str, int, str, str]) -> bool:
+        if combo in output_exists_cache:
+            return output_exists_cache[combo]
+
+        level, combo_version, buffer, weight_method, weight_func = combo
+        version_override = version or combo_version or None
+
+        cfg = load_config(
+            level=str(level),
+            version=version_override,
+            buffer=int(buffer),
+            weight_method=weight_method,
+            weight_func=weight_func,
+        )
+        output_path = create_output_paths(cfg)["voronoi"][approach]
+        exists = os.path.exists(output_path)
+        output_exists_cache[combo] = exists
+        return exists
 
     try:
         import subprocess
@@ -162,11 +189,19 @@ def run_voronoi_job(
                     time.sleep(backoff_seconds)
 
             if not run_succeeded:
-                failed_combinations.append((level, "", buffer, weight_method, weight_func))
-                log_msg = (
-                    f"Job {job_id}: Run {run_idx} FAILED after {max_retries + 1} attempts"
-                )
-                logger.error(f"[Job {job_id}] {log_msg}")
+                combo = (level, "", buffer, weight_method, weight_func)
+                if output_exists_for_combo(combo):
+                    logger.warning(
+                        "[Job %s] Run %s returned non-zero but output file exists; skipping retry mark",
+                        job_id,
+                        run_idx,
+                    )
+                else:
+                    failed_combinations.append(combo)
+                    log_msg = (
+                        f"Job {job_id}: Run {run_idx} FAILED after {max_retries + 1} attempts"
+                    )
+                    logger.error(f"[Job {job_id}] {log_msg}")
 
         log_msg = f"Job {job_id}: Completed all {len(combinations)} combinations"
         logger.info(f"[Job {job_id}] {log_msg}")
@@ -174,7 +209,15 @@ def run_voronoi_job(
     except Exception as e:
         log_msg = f"Job {job_id}: EXCEPTION: {str(e)}"
         logger.error(f"[Job {job_id}] {log_msg}")
-        failed_combinations.extend(combinations)
+        for combo in combinations:
+            if output_exists_for_combo(combo):
+                logger.warning(
+                    "[Job %s] Exception path: output exists for combo %s; skipping retry mark",
+                    job_id,
+                    combo,
+                )
+                continue
+            failed_combinations.append(combo)
 
     return failed_combinations
 
