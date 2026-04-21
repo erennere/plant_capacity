@@ -1,283 +1,219 @@
 # Plant Capacity Pipeline
 
-This repository contains geospatial workflows for wastewater treatment plant (WWTP) processing, population coverage estimation, and downstream impact analysis.
+This repository is a practical geospatial workflow for wastewater treatment plant (WWTP) analysis. The goal is not just to map plant points, but to build a usable chain from raw data to service-area estimates, population coverage, and downstream population-at-risk outputs. If you are opening this project for the first time, this README is meant to help you understand what to run, why it matters, and what you should change before a production run.
 
-The code has evolved, and this README now reflects the current scripts and folder layout.
+## What This Project Produces
 
-## Repository Layout
+At a high level, the pipeline produces:
 
-- `data/`: Input, intermediate, and output geospatial/tabular data.
-- `research_code/`: Python package and executable shell workflows.
+1. A cleaned and merged WWTP point layer.
+2. Weighted Voronoi service-area layers.
+3. Population-enriched Voronoi outputs.
+4. Non-served and river-linked impact outputs.
+5. Validation tables and visualization-ready files.
 
-## `research_code/` Folder Guide
+In plain language: it estimates who is likely served, who might be unserved, and where potential downstream burden may accumulate.
 
-Top-level files:
+## Repository Structure
 
-- `config.yaml`: Central configuration for paths, parameters, and execution modes.
-- `starter.py`: Config loader with path expansion.
-- `pipelines.py`: Shared orchestration helpers used by pipeline stages.
-- `download_pop.py`, `create_voronoi.py`, `add_pop.py`: Main stage scripts.
-- `download_pop.sh`, `create_voronoi.sh`, `add_pop.sh`: Main shell entrypoints.
-- `combine_watersheds.py`, `combine_watersheds.sh`: Watershed archive merge utility.
+- data/: inputs, intermediate products, and final outputs.
+- research_code/: executable scripts, orchestration wrappers, and package modules.
 
-Subfolders:
+## First-Time Setup
 
-- `data_merge/`: WWTP harmonization for heterogeneous sources, including correction, clustering, and segmentation merge integration.
-  - Includes `combine_locations.sh`, `correct_locations_w_OSM.py`, `merge_seg_results.py`, `final_data_merge.py`.
-- `annotation_scripts/`: Annotation-data processing for Maxar tiles.
-  - Uses Overpass/OSM metadata (WWTP-related, landuse, water, industrial tags) around WWTP-centered tiles.
-  - Tag overlays are created for downstream multimodal/LLM-assisted annotation workflows.
-- `pop_at_risk_river_calculations/`: Unserved-population and impact workflows.
-  - Finds unserved population areas, links them to nearest river network context, propagates downstream burden with decay, and creates impact polygons and population-at-risk outputs.
-- `figures_scripts/`: Export and plotting scripts for publication/communication outputs.
-- `pop_validation_scripts/`: Validation and comparison scripts.
-  - Current checks focus on HydroWaste and European WWTP reference comparisons.
-
-## Setup
-
-The codebase is packaged as a Python package (`research-code`).
-
-Run shell wrappers from the `research_code/` directory.
+From research_code/:
 
 ```bash
 cd research_code
 python -m pip install -e .
 ```
 
-Suggested environment:
+Recommended environment:
 
 - Python 3.9+
-- Bash shell
-- Optional SLURM for large runs
-- Geospatial stack compatible with geopandas/rasterio/shapely
+- Bash shell (local or SLURM cluster)
+- Geospatial dependencies compatible with geopandas, shapely, rasterio, duckdb spatial
 
-## Configuration
+## Before Running: Required Files Checklist
 
-Main config file: `research_code/config.yaml`
+The code can run with defaults only if key source files exist where config paths expect them.
 
-Important sections:
+Core files commonly required:
 
-- `paths`: Input/output locations and templates
-- `params`: Numeric runtime parameters (buffer, workers, thresholds, etc.)
-- `booleans`: Feature toggles
-- `execution.mode`: Voronoi run mode (`array`, `sequential`, `parallel`)
-- `annotations.default_mode`: Raster stage mode (`array`, `sequential`, `parallel`)
+- data/bboxes.csv
+- data/cities.csv
+- data/cleaned_hydrowaste.csv
+- data/wastewater_plant.geojson
+- data/boundaries/ne_110m_admin_0_countries.shp plus .dbf/.shx/.prj companions
+- data/extra_points/UWWTD_TreatmentPlants.gpkg
+- data/extra_points/Canada_14_03_2025.csv
+- data/extra_points/US_mapped_data_final.csv
+- data/extra_points/Germany_Hydra_waste_geospatial_corrected.geojson
 
-Before running full pipelines, verify at minimum:
+Environment-specific external inputs to verify:
 
-- `paths.data_dir`
-- `arguments.default_version`
-- `params.buffer`
-- `paths.seg_results_filepath` (segmentation CSV used by merge step)
-- `paths.annotations_images_dir` (source image tiles for annotation)
-- `paths.annotated_images_output_dir` (annotated image output directory)
-- `paths.annotations_results_filepath` (annotation CSV output path)
-- `paths.annotations_verf_image_outpath_dir` (verification image output directory)
+- paths.seg_results_filepath in research_code/config.yaml
+- paths.annotations_images_dir in research_code/config.yaml
+- paths.annotations_results_filepath in research_code/config.yaml
 
-## Current Main Workflow
+If these are missing or pointed to old mounts, the pipeline may start but fail in mid-run.
 
-Run everything from `research_code/`.
+## Configuration: What You Usually Need To Change
 
-In practice, the order that matches the current codebase is:
+Main config: research_code/config.yaml
 
-1. Run data merge (`data_merge/combine_locations.sh`)
-2. Merge watershed archives if you need a refreshed HydroSHEDS basin layer (`combine_watersheds.sh`)
-3. Run annotation scripts (after data merge, before population download)
-4. Download population and create Voronoi layers, then add population
-5. Run pop-at-risk pipeline (`create_rasters`, then impact stages, then danger-pop stage)
-6. Run figures and validation scripts as needed
+Most users should edit these keys first:
 
-### 1) Data merge first (`data_merge/`)
+1. arguments.default_version
+2. arguments.default_level
+3. params.buffer
+4. params.weight_method
+5. params.weight_func
+6. paths.data_dir
+7. paths.seg_results_filepath
+8. paths.annotations_images_dir
+9. paths.annotations_results_filepath
+10. booleans.legacy_merge
+11. execution.mode
+12. annotations.default_mode
 
-```bash
-bash data_merge/combine_locations.sh
-```
+Practical guidance:
 
-This wrapper should be run as-is first. It executes:
+- If you are doing a clean rerun and do not need legacy segmentation compatibility, set booleans.legacy_merge to false.
+- If you are testing locally, use a smaller buffer and fewer workers first.
+- Keep paths.data_dir stable and move version/level/buffer through arguments and params.
 
-1. `research_code.data_merge.correct_locations_w_OSM`
-2. `research_code.data_merge.merge_seg_results --variant old`
-3. `research_code.data_merge.final_data_merge`
-4. `research_code.data_merge.merge_seg_results --variant new`
+## Voronoi Configuration Guide (Important)
 
-Why there are two merge variants:
+The Voronoi stage is the most configurable part of the project.
 
-- `--variant old` is kept for legacy index compatibility with segmentation results which were already run before the cleaning of code.
-- `--variant new` applies the current segmentation merge path.
+### Approaches
 
-If you fully re-run segmentation and do not need backward-compatibility merges, set `booleans.legacy_merge: false` in `research_code/config.yaml`. In that mode the pipeline skips the legacy segmentation merge and `final_data_merge.py` reads from `corrected_south` instead of `seg_corrected_south`.
+create_voronoi supports three approaches:
 
-### 2) Optional watershed merge utility
+- Approach 0: WWTP buffer Voronoi (no watershed clipping)
+- Approach 1: watershed-constrained WWTP Voronoi
+- Approach 2: city-based Voronoi
 
-If you need to rebuild the combined watershed layer consumed by the Voronoi and river workflows:
-
-```bash
-bash combine_watersheds.sh
-```
-
-This scans `paths.watersheds_zip_dir`, extracts one readable geospatial layer from each zip archive, and writes `hydrobase_lvl{level}_combined.gpkg` into `paths.data_dir`.
-
-### 3) Annotation scripts (after data_merge, before population download)
-
-Run grid creation and OSM extraction:
+How to run a specific approach:
 
 ```bash
-bash annotation_scripts/grid_generation_and_osm_extract.sh
+python -m research_code.create_voronoi --approach 0
+python -m research_code.create_voronoi --approach 1
+python -m research_code.create_voronoi --approach 2
 ```
 
-What it runs now:
+### Buffer
 
-1. `NEW_01_GENERATEGRIDS.py` (builds annotation grids)
-2. `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py` (extracts OSM features per grid)
+- Controlled by params.buffer (or CLI positional override).
+- Larger buffer generally expands candidate influence area and can smooth boundaries.
+- Smaller buffer is faster and more local but may under-cover sparse regions.
 
-Run annotation image generation:
+### Weight Normalization Method
+
+Controlled by params.weight_method (or CLI override). This normalization is applied individually within each watershed basin. Allowed values:
+
+- linear
+- logarithmic
+- square_root
+- sigmoid
+
+Interpretation:
+- linear keeps original relative magnitude.
+- logarithmic compresses large values strongly.
+- square_root is a moderate compression.
+- sigmoid pushes values into a bounded curve and can dampen extremes.
+
+### Weighting Function
+
+Controlled by params.weight_func (or CLI override). Allowed values:
+
+- mult
+- add
+- empty string
+
+Interpretation:
+
+- mult uses multiplicative weighted distance behavior.
+- add uses additive weighted distance behavior.
+- empty string falls back to baseline multiplicative distance flow used by current code path.
+
+### only_round Option
+
+- CLI flag: --only_round
+- Applies to approaches 0 and 1.
+- Uses only round-area weights rather than all points.
+
+Example with full overrides:
 
 ```bash
-sbatch annotation_scripts/run_download_bing_annotate_array.sh
+python -m research_code.create_voronoi 8 2 15000 square_root mult --approach 1 --only_round
 ```
 
-What it runs:
+## End-to-End Run Order (Recommended)
 
-- `download_bing_annotate.py` in array mode.
+Run from research_code/:
 
-Current status notes:
+1. data_merge/combine_locations.sh
+2. combine_watersheds.sh 
+3. annotation_scripts/grid_generation_and_osm_extract.sh
+4. annotation_scripts/run_download_bing_annotate_array.sh 
+5. annotation_scripts/merge_annotations.sh (if annotation outputs exist, these values will be used as weights in voronoi tesselation)
+6. download_pop.sh
+7. create_voronoi.sh
+8. add_pop.sh
+9. pop_at_risk_river_calculations/create_rasters.sh
+10. pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
+11. pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
+12. pop_validation_scripts/comparison.sh and figures scripts
 
-- `NEW_03_WASTEWATERJOIN_GEOJSON.py` is not part of the default shell flow.
-- It can be enabled manually in `grid_generation_and_osm_extract.sh` if you want a merged OSM metadata stage.
-- In most current reruns, merged OSM metadata is not required because `download_bing_annotate.py` works directly with single bbox GeoJSON inputs.
-- `NEW_04_EXPORTGEOTIFF.py` is not needed in the current pipeline.
+Workflow relationship:
 
-When to enable `NEW_03_WASTEWATERJOIN_GEOJSON.py`:
+```text
+data merge -> annotation context -> voronoi -> population overlay
+         -> non-served + rivers -> impact -> final at-risk outputs
+         -> validation + figures
+```
 
-- Only if you explicitly need a merged metadata/parquet consolidation stage.
-- For normal annotation reruns, keep it disabled.
+## Sensitivity Analysis
 
-New scripts added under `annotation_scripts/`:
+Sensitivity scripts are in research_code/sensitivity_analysis_scripts/README.md.
 
-- `merge_annotations.py` + `merge_annotations.sh`
-  - Purpose: parse model annotation text fields and merge them into the main points dataset (`corrected_all_filepath`) by image-derived `idx`.
-  - Run timing: after annotation inference CSV is produced, before Voronoi/population stages.
+Use this when you want to test how outcomes change with combinations of:
 
-- `annotations_inspection.py` + `annotations_inspection.sh` (optional)
-  - Purpose: create a category histogram, write a stratified review sample CSV, and copy sampled images into per-category folders for manual QA.
-  - Outputs are written to `paths.annotations_verf_image_outpath_dir`.
+- level
+- buffer
+- weight_method
+- weight_func
+- approach
 
-### 4) Population + Voronoi + population attachment
-
-First download/process population rasters:
+Typical sweep commands:
 
 ```bash
-bash download_pop.sh
+sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep.sh or sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel.sh
+sbatch sensitivity_analysis_scripts/add_pop_param_sweep.sh
+
 ```
 
-Then create Voronoi outputs:
+## Folder Documentation
 
-```bash
-bash create_voronoi.sh
-```
+Detailed run docs per folder:
 
-Mode is read from `execution.mode` in `config.yaml`.
+- research_code/README.md
+- research_code/data_merge/README.md
+- research_code/annotation_scripts/README.md
+- research_code/pop_at_risk_river_calculations/README.md
+- research_code/figures_scripts/README.md
+- research_code/pop_validation_scripts/README.md
+- research_code/sensitivity_analysis_scripts/README.md
 
-Then attach population to Voronoi outputs:
+## Logs and Troubleshooting
 
-Local example (single index):
+Most wrappers write .out/.err and .log files. Start debugging there before changing code.
 
-```bash
-bash add_pop.sh 0
-```
+Common quick checks:
 
-Optional overrides can be appended after the index:
-
-```bash
-bash add_pop.sh 0 8 2 15000
-```
-
-SLURM array mode:
-
-```bash
-sbatch add_pop.sh
-```
-
-### 5) Pop-at-risk pipeline (`pop_at_risk_river_calculations/`)
-
-Run these in order.
-
-Step A: create rasters first.
-
-```bash
-bash pop_at_risk_river_calculations/create_rasters.sh
-```
-
-What it does:
-
-- Builds served/not-served raster products used by downstream steps.
-- Uses `annotations.default_mode` (`array`, `sequential`, `parallel`) for execution behavior.
-
-Step B: compute unserved/difference/river/impact products.
-
-```bash
-bash pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
-```
-
-What it does internally, in order:
-
-1. `find_unserved_pop`: extracts non-served areas from raster outputs.
-2. `find_diff_pop`: calculates population differences and writes diff outputs.
-3. `assign_rivers_to_basin`: links rivers to basin IDs.
-4. `find_intersection_river`: finds nearest river systems for non-served areas.
-5. `impact_polygons_pop`: propagates downstream impact and creates impact polygons.
-
-Step C: run danger-pop post-processing.
-
-```bash
-bash pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
-```
-
-What it does:
-
-- Aggregates/exports final population-at-risk outputs from impact products.
-
-## Figures and Validation
-
-Figures (`figures_scripts/`):
-
-- `piechart_figure.py`: static summary chart output.
-- `piechart_interactive.py`: interactive chart output.
-- `convert_voronoi_to_geojson_for_map.py`: prepares map-friendly GeoJSON for visualization.
-
-Validation (`pop_validation_scripts/`):
-
-- `verification_script.py`: core verification checks.
-- `hw_comparison.py`, `eu_comparison.py`: source-specific comparisons.
-- `comparison.sh`: shell wrapper for running comparisons.
-
-## SLURM Quick Reference
-
-Example submission sequence (from `research_code/`):
-
-```bash
-sbatch data_merge/combine_locations.sh
-sbatch annotation_scripts/grid_generation_and_osm_extract.sh
-sbatch annotation_scripts/run_download_bing_annotate_array.sh
-sbatch annotation_scripts/merge_annotations.sh
-sbatch annotation_scripts/annotations_inspection.sh  # optional QA sampling
-sbatch download_pop.sh
-sbatch create_voronoi.sh
-sbatch add_pop.sh
-sbatch pop_at_risk_river_calculations/create_rasters.sh
-sbatch pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
-sbatch pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
-```
-
-## Logs
-
-Most shell wrappers write logs under `research_code/logs/`.
-
-If a stage fails, inspect corresponding `.out`, `.err`, and stage-specific `.log` files first.
-
-## Imports
-
-```python
-from research_code.starter import load_config
-from research_code.pipelines import create_output_paths
-```
+- wrong path in config
+- missing boundary sidecar files (.dbf/.shx/.prj)
+- missing segmentation CSV mount
+- running high-parallel jobs without enough memory/CPU

@@ -33,6 +33,8 @@ def create_output_paths(cfg):
     level = cfg['level']
     buffer = cfg['buffer']
     weight_func = cfg['weight_func']
+    weight_func_suffix = cfg['weight_func_suffix']
+    weight_type = cfg['weight_type']
     buffers_dir = cfg['paths']['buffers_dir']
     voronoi_dir = cfg['paths']['voronoi_dir']
     
@@ -50,6 +52,13 @@ def create_output_paths(cfg):
             '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
             '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
         }
+        #'voronoi': {
+        #    '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
+        #    '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
+        #    '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
+        #    '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
+        #    '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
+        #}
     }
     return paths
 

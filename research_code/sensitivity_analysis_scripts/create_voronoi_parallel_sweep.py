@@ -18,9 +18,9 @@ import sys
 import os
 import logging
 import argparse
+import threading
 from multiprocessing import Process, Queue
 from typing import List, Tuple
-from datetime import datetime
 
 # Setup logging
 def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
@@ -161,15 +161,14 @@ def log_queue_monitor(log_queue: Queue, logger: logging.Logger) -> None:
         "ERROR": logging.ERROR,
     }
     
-    import time
     while True:
         try:
             job_id, level, msg = log_queue.get(timeout=1)
             if msg is None:  # Sentinel value
                 break
             logger.log(level_map.get(level, logging.INFO), f"[Job {job_id}] {msg}")
-        except:
-            pass
+        except Exception:
+            continue
 
 
 def main():
@@ -229,6 +228,15 @@ def main():
         # Create queue for logging
         log_queue = Queue()
         
+        # Start queue monitor so child-process logs are consumed and emitted.
+        monitor_thread = threading.Thread(
+            target=log_queue_monitor,
+            args=(log_queue, logger),
+            name="VoronoiLogMonitor",
+            daemon=True,
+        )
+        monitor_thread.start()
+
         # Start worker processes
         processes = []
         for job_id, combos in enumerate(job_combinations):
@@ -253,6 +261,7 @@ def main():
         
         # Sentinel to stop log monitor
         log_queue.put((None, None, None))
+        monitor_thread.join(timeout=10)
         
         logger.info(f"Task {task_id}: All parallel jobs completed successfully")
         

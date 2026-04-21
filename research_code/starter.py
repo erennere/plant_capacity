@@ -148,7 +148,6 @@ def load_config(
         cfg = yaml.safe_load(stream)
 
     # Runtime flags
-    weights_cond = True
     level = cfg["arguments"]["default_level"] if level is None else level
     version = cfg["arguments"]["default_version"] if version is None else version
 
@@ -157,11 +156,13 @@ def load_config(
     extra_points_dir = cfg["paths"]["extra_points_dir"]
     buffer = cfg['params']['buffer'] if buffer is None else buffer
     weight_method = cfg['params']['weight_method'] if weight_method is None else weight_method
+
     if weight_func is None:
         weight_func = cfg['params']['weight_func']
     weight_func = _parse_optional_weight_func(weight_func, "weight_func")
     if weight_func is None:
         weight_func = ""
+
     final_data_dir = cfg["paths"]["final_data_dir"]
     annotations_dir = cfg["paths"]["annotations_dir"]
     dl_dir = cfg["paths"]["dl_dir"]
@@ -209,16 +210,15 @@ def load_config(
         "rivershed_output_path": f(cfg["paths"]["rivershed_output_path"]),
         "overture": f(cfg["paths"]["overture"]),
         "hydrowaste": f(cfg["paths"]["hydrowaste"]),
-        "corrected": f(cfg["paths"]["corrected_all"])
-                    if not weights_cond
-                    else f(cfg["paths"]["seg_corrected_south"]),
         "overture_s3_url": cfg["s3"]["divisions"].format(latest_url=cfg["s3"]["latest_url"]),
         "dl_dir": f(cfg["paths"]["dl_dir"]),
         "dl_zipfile": f(cfg["paths"]["dl_zipfile"]),
         "dl_mapfile": f(cfg["paths"]["dl_mapfile"]),
+
         "seg_corrected_south": f(cfg["paths"]["seg_corrected_south"]),
         "corrected_south": f(cfg["paths"]["corrected_south"]),
         "corrected_all_filepath": f(cfg["paths"]["corrected_all"]),
+
         "new_points_filepath": f(cfg["paths"]["new_points_filepath"]),
         "eu_ref_filepath" : f(cfg["paths"]["eu_ref_filepath"]),
         "canada_filepath" : f(cfg["paths"]["canada_filepath"]),
@@ -267,13 +267,14 @@ def load_config(
 
     # Return everything in one object
     return {
-        "weights_cond": weights_cond,
         "level": level,
         "version": version,
         "paths": paths,
         "buffer": buffer,
-        "weight_method": weight_method,
+        "weight_method": weight_method, # linear, logarithmic, square_root, sigmoid
+        "weight_type": weight_type, # li, log, sq, sig
         "weight_func": weight_func,
+        "weight_func_suffix": weight_func_suffix, # _mult, _add, or ''
         "max_workers": params["max_workers"],
         "n_points": params["n_points"],
         "threshold": params["threshold"],

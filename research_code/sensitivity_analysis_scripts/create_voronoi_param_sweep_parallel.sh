@@ -14,7 +14,7 @@ set -euo pipefail
 PROJECT_ROOT="$(pwd)"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
-PYTHON_SCRIPT="research_code.create_voronoi_parallel_sweep"
+PYTHON_SCRIPT="research_code.sensitivity_analysis_scripts.create_voronoi_parallel_sweep"
 APPROACH="${1:-1}"
 VERSION="${2:-}"
 NUM_JOBS=4
