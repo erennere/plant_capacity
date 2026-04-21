@@ -26,6 +26,8 @@ def main():
 
         filename = os.path.basename(src_path)
         dest_path = os.path.join(output_dir, filename)
+        if os.path.exists(dest_path):
+            continue
 
         try:
             if os.path.exists(src_path):
