@@ -98,6 +98,7 @@ params:
   industrial_category_numbers: []
   min_pixels: 9
   overwrite: false
+  voronoi_overwrite: false
   
 annotations:
   # default_mode controls create_rasters.sh execution: array | sequential | parallel.

@@ -2498,26 +2498,48 @@ EXAMPLES:
 
     cfg = load_config(**overrides)
     paths_dict = create_output_paths(cfg)
-    data = prepare_data(cfg)
-    
-    gdf_bbox = data['gdf_bbox']
-    watershed_gdf = data['watershed_gdf']
-    country_df = data['country_df']
-    
+
     # Ensure output directory exists
     os.makedirs(cfg['paths']['voronoi_dir'], exist_ok=True)
-    
+
     # Derive execution parameters from config
     only_round = args.only_round
     scale_weights = cfg['weight_func'] in {'mult', 'add'}
-    
-    logger.info(f"Running approaches: {', '.join(approaches_to_run)}")
+
+    requested_approaches = approaches_to_run.copy()
+    logger.info(f"Running approaches: {', '.join(requested_approaches)}")
     logger.info(f"  weight_func={cfg['weight_func']!r}, weight_method={cfg['weight_method']!r}, only_round={only_round}, scale_weights={scale_weights}")
     print("=" * 80)
     print(f"VORONOI ALLOCATION - APPROACH EXECUTION")
-    print(f"Requested: {', '.join(approaches_to_run)}")
+    print(f"Requested: {', '.join(requested_approaches)}")
     print(f"weight_func={cfg['weight_func']!r}  weight_method={cfg['weight_method']!r}  only_round={only_round}")
     print("=" * 80)
+
+    # Skip approaches whose output already exists.
+    skipped_approaches = []
+    filtered_approaches = []
+    for approach_id in requested_approaches:
+        path_key = f"{approach_id}_only_round" if only_round and approach_id in {'0', '1'} else approach_id
+        output_path = paths_dict['voronoi'][path_key]
+        if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
+            skipped_approaches.append(approach_id)
+        else:
+            filtered_approaches.append(approach_id)
+
+    approaches_to_run = filtered_approaches
+    if skipped_approaches:
+        logger.info(f"Skipping completed approaches (output exists): {', '.join(skipped_approaches)}")
+
+    if not approaches_to_run:
+        logger.info("All requested approaches already have output files. Nothing to run.")
+        print("All requested approaches already have output files. Nothing to run.")
+        sys.exit(0)
+
+    data = prepare_data(cfg)
+
+    gdf_bbox = data['gdf_bbox']
+    watershed_gdf = data['watershed_gdf']
+    country_df = data['country_df']
     
     # Lazily-computed shared data structures
     dissolved_buffers_WWTP = None

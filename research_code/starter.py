@@ -304,5 +304,6 @@ def load_config(
         "min_pixels": cfg['params']['min_pixels'],
         "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],
         "legacy_merge": flags['legacy_merge'],
-        "overwrite": cfg['params']['overwrite']
+        "overwrite": cfg['params']['overwrite'],
+        "voronoi_overwrite": cfg['params']['voronoi_overwrite']
     }

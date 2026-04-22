@@ -114,7 +114,7 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     This function always overwrites ``output_path`` when called. Any skip-if-
     output-exists behavior must be implemented by the caller.
     """
-    if os.path.exists(output_path) and not cfg['overwrite']:
+    if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
         logger.info(f"Approach {approach_id}: Output already exists at {output_path} and overwrite is False. Skipping.")
         return None, None, None
     
