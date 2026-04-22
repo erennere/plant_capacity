@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from matplotlib.patches import Circle
 from matplotlib.colors import LogNorm
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
@@ -108,7 +109,17 @@ def get_pos(geometry):
 
 def calculate_size(value, min_value, max_value, min_size, max_size, scale='log'):
     """Map a value to a plotted pie size using log or linear scaling."""
+    if not np.isfinite(value):
+        return min_size
+    if not np.isfinite(min_value) or not np.isfinite(max_value):
+        return min_size
+
+    if max_value <= min_value:
+        return (min_size + max_size) / 2.0
+
     if scale == 'log':
+        if value <= 0 or min_value <= 0 or max_value <= 0:
+            return min_size
         return (np.log(value) - np.log(min_value)) / (np.log(max_value) - np.log(min_value)) * (max_size - min_size) + min_size
     elif scale == 'linear':
         return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
@@ -210,7 +221,7 @@ def main():
     # Disable seaborn/default style
     plt.style.use('default')
     fig = plt.figure(figsize=(20, 10), dpi=600)
-    ax = fig.add_axes([0.05, 0.15, 0.9, 0.8], projection=ccrs.Robinson())  # [left, bottom, width, height]
+    ax = fig.add_axes((0.05, 0.15, 0.9, 0.8), projection=ccrs.Robinson())  # [left, bottom, width, height]
         
     # Plot boundaries colored by population / WWTP metric
     boundaries = boundaries.drop_duplicates(subset=['country'])
@@ -257,7 +268,7 @@ def main():
     sm._A = []
 
     # Colorbar below the map
-    cbar_ax = fig.add_axes([0.3, 0.1, 0.5, 0.02])
+    cbar_ax = fig.add_axes((0.3, 0.1, 0.5, 0.02))
     cbar = fig.colorbar(sm, cax=cbar_ax, orientation='horizontal')
 
     #cbar.set_label("Number of People Served by a WWTP (in thousands)", fontsize=20)
@@ -271,9 +282,22 @@ def main():
     gl.xformatter = LONGITUDE_FORMATTER
     gl.yformatter = LATITUDE_FORMATTER
 
-    boundaries['total_size'] = boundaries[f'IND_{tag1}_{agg_type}'] + boundaries[f'IND_{tag2}_{agg_type}'] + boundaries[f'RES_{tag1}_{agg_type}'] + boundaries[f'RES_{tag2}_{agg_type}']
-    max_size = np.nanpercentile(boundaries['total_size'], 99)
-    min_size = np.nanpercentile(boundaries['total_size'], 1)
+    size_cols = [
+        f'IND_{tag1}_{agg_type}',
+        f'IND_{tag2}_{agg_type}',
+        f'RES_{tag1}_{agg_type}',
+        f'RES_{tag2}_{agg_type}',
+    ]
+    size_df = boundaries[size_cols].apply(pd.to_numeric, errors='coerce')
+    boundaries['total_size'] = size_df.T.sum(min_count=1).fillna(0)
+
+    valid_total_size = boundaries['total_size'][np.isfinite(boundaries['total_size']) & (boundaries['total_size'] > 0)]
+    if valid_total_size.empty:
+        min_size = 1.0
+        max_size = 1.0
+    else:
+        max_size = float(np.nanpercentile(valid_total_size, 99))
+        min_size = float(np.nanpercentile(valid_total_size, 1))
     min_pie_size = 0.1
     max_pie_size = 0.7
     breaks = [5, 15, 30, 45, 60, 75, 90]
@@ -302,6 +326,8 @@ def main():
         size_res = calculate_size(sum(dist_res), min_size, max_size, min_pie_size, max_pie_size, scale)
 
         size = size_ind + size_res
+        if not np.isfinite(size) or size <= 0:
+            continue
         if size_res < min_pie_size and size_ind < min_pie_size:
             continue
         ax_pie = inset_axes(ax, width=size, height=size, loc='center', bbox_to_anchor=(xpos, ypos, 1, 1), bbox_transform=ax.transData)
@@ -309,11 +335,15 @@ def main():
 
     # Create size legend directly in the figure
     largest_size = calculate_size(breaks[-1], min_size, max_size, min_pie_size, max_pie_size, scale)
+    if not np.isfinite(largest_size) or largest_size <= 0:
+        largest_size = max_pie_size
     legend_ax = inset_axes(ax, width=largest_size, height=largest_size, loc='lower left', bbox_to_anchor=(0.06, 0.02, 1, 1), bbox_transform=ax.transAxes)
     legend_ax.axis('off')
     for i, size in enumerate([5000000, 10000000, 20000000, 30000000, 40000000, 50000000]):
         relative_size = calculate_size(size, min_size, max_size, min_pie_size, max_pie_size, scale)/largest_size
-        circle = plt.Circle((0.5, 0.25 + relative_size / 2), relative_size / 2, color='black', fill=False)
+        if not np.isfinite(relative_size) or relative_size <= 0:
+            continue
+        circle = Circle((0.5, 0.25 + relative_size / 2), relative_size / 2, color='black', fill=False)
         legend_ax.add_patch(circle)
         legend_ax.annotate(str(round(size/10**6)) + r" $\text{km}^2$", xy=(0.5, 0.25 + relative_size), xytext=(1.05, 0.25 + relative_size), ha='left', va='center', arrowprops=dict(arrowstyle='-', color='black'),fontsize=8)
     legend_ax.set_title("Total WWTP Area", fontsize=14, weight="semibold")
@@ -334,7 +364,11 @@ def main():
     # create title 
     ax.set_title("Worldwide Overview of WWTPs by Size and Technology",
                 fontsize=24, fontweight='bold')
-    plt.tight_layout()
+    try:
+        plt.tight_layout()
+    except Exception:
+        # Inset/parasitic axes can occasionally fail tight layout on some backends.
+        pass
     ensure_output_dir_for_file(cfg['paths']['static_piechart_filepath'])
     plt.savefig(cfg['paths']['static_piechart_filepath'], dpi=200)
 
