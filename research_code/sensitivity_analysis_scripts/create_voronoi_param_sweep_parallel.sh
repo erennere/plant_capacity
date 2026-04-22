@@ -17,7 +17,7 @@ PYTHON_CMD="python"
 PYTHON_SCRIPT="research_code.sensitivity_analysis_scripts.create_voronoi_parallel_sweep"
 APPROACH="${1:-1}"
 VERSION="${2:-}"
-NUM_JOBS=4
+NUM_JOBS=3
 
 mkdir -p "${LOG_DIR}"
 rm -f "${LOG_DIR}/voronoi_parallel_sweep_${SLURM_ARRAY_TASK_ID:-0}.log" \
