@@ -2190,7 +2190,8 @@ def create_weights(sub_df, sigma=3, percent_threshold=10, method='linear'):
 
 def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=False, clipping=None, n_points=100, distance_fn=default_distance_multiplicative,
                                 scipy_true=False, cv2_true=False, centroid_points=False, points_col=None,
-                                buffering=False, buffer=10000, threshold=500, only_round=False, sigma=3, percent_threshold=10, method='linear'):
+                                buffering=False, buffer=10000, threshold=500, only_round=False, sigma=3, percent_threshold=10,
+                                method='linear', output_path=None, overwrite=False, flush_size=None):
     """
     Orchestrate parallel Voronoi generation across data groups.
     
@@ -2237,12 +2238,20 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
         Divisor used to derive the lower clipping threshold from the median.
     method : str, default='linear'
         Weight-transformation method passed to ``create_weights``.
+    output_path : str | None, default=None
+        Optional output file path used for logging/traceability of this run.
+    overwrite : bool, default=False
+        If ``True``, existing checkpoint/output files are replaced.
+    flush_size : int | None, default=None
+        Number of completed worker results to buffer before flushing to temp.
 
     Returns
     -------
-    tuple
-        Tuple ``(df_waste_final, region_df_final, point_df_final)`` containing
-        the concatenated outputs from all workers.
+    tuple | bool
+        When ``output_path`` is ``None``, returns
+        ``(df_waste_final, region_df_final, point_df_final)``.
+        When ``output_path`` is provided, returns ``True`` on success and
+        ``False`` on failure after checkpoint/rename handling.
 
     Notes
     -----
@@ -2250,10 +2259,40 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
     worker receives only the geometry relevant to its current group.
     """
     # Group both df and clipping by the same column
-    logger.info(f"Starting orchestrate_voronoi_weights for {len(df)} sites with {workers} workers")
+    if output_path:
+        logger.info(f"Starting orchestrate_voronoi_weights for {len(df)} sites with {workers} workers (target={output_path})")
+    else:
+        logger.info(f"Starting orchestrate_voronoi_weights for {len(df)} sites with {workers} workers")
+    if flush_size is None:
+        flush_size = max(1, workers)
+    temp_output_path = os.path.join(os.path.dirname(output_path), f"temp_{os.path.basename(output_path)}") if output_path else None
+    
     df = df[~df[col].isna()].reset_index(drop=True)
-    logger.debug(f"After NaN filtering: {len(df)} sites in {len(df[col].unique())} groups")
     df[col] = normalize_column_to_rounded_str(df[col])
+
+    if temp_output_path and os.path.exists(temp_output_path):
+        if not overwrite:
+            try:
+                processed = gpd.read_file(temp_output_path, columns=[col])
+                if col in processed.columns:
+                    processed_keys = set(normalize_column_to_rounded_str(processed[col]).astype(str))
+                    before = len(df)
+                    df = df[~df[col].isin(processed_keys)]
+                    logger.info(
+                        "Resuming from temp checkpoint %s: skipping %s already-processed groups",
+                        temp_output_path,
+                        before - len(df),
+                    )
+            except Exception as err:
+                logger.warning("Could not read temp checkpoint %s (%s). Continuing without resume.", temp_output_path, err)
+        else:
+            try:
+                os.remove(temp_output_path)
+                logger.info("overwrite=True: removed existing temp checkpoint %s", temp_output_path)
+            except Exception as err:
+                logger.warning("Failed to remove temp checkpoint %s: %s", temp_output_path, err)
+
+    logger.debug(f"After NaN filtering/resume: {len(df)} sites in {len(df[col].unique())} groups")
 
     if clipping is not None:
         clipping = clipping[~clipping[col].isna()].reset_index(drop=True)
@@ -2353,17 +2392,51 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
     region_df_all = []
     point_df_all = []
 
+    def flush_results(force=False):
+        nonlocal df_waste_all, region_df_all, point_df_all
+        if not df_waste_all:
+            return
+        if not force and len(df_waste_all) < flush_size:
+            return
+
+        waste_chunk = finalize_gdf(df_waste_all, df.columns)
+        region_chunk = finalize_gdf(region_df_all, df.columns)
+        point_chunk = finalize_gdf(point_df_all, df.columns)
+
+        # Persist region chunks to temp file (overwrite decision was already
+        # applied at startup — from here we always append if the file exists).
+        if temp_output_path is not None:
+            ensure_output_dir_for_file(temp_output_path)
+            if os.path.exists(temp_output_path):
+                region_chunk.to_file(temp_output_path, mode='a', driver='GPKG', index=False)
+            else:
+                region_chunk.to_file(temp_output_path, driver='GPKG', index=False)
+
+        df_waste_all = []
+        region_df_all = []
+        point_df_all = []
+
     processed_results = 0
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        for batch in iter_voronoi_args(batch_size=workers):
-            for result in executor.map(voronoi_worker, batch):
-                if result is None:
-                    continue
-                df_waste, region_df, point_df = result
-                df_waste_all.append(df_waste)
-                region_df_all.append(region_df)
-                point_df_all.append(point_df)
-                processed_results += 1
+    try:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for batch in iter_voronoi_args(batch_size=workers):
+                futures = [executor.submit(voronoi_worker, task) for task in batch]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is None:
+                        continue
+                    df_waste, region_df, point_df = result
+                    df_waste_all.append(df_waste)
+                    region_df_all.append(region_df)
+                    point_df_all.append(point_df)
+                    processed_results += 1
+                    if output_path:
+                        flush_results()
+        if output_path:
+            flush_results(force=True)
+    except Exception as err:
+        logger.error("Error during Voronoi orchestration: %s", err, exc_info=True)
+        return False if output_path else (finalize_gdf([], df.columns), finalize_gdf([], df.columns), finalize_gdf([], df.columns))
 
     if task_stats['generated'] == 0:
         logger.warning("No Voronoi tasks were generated")
@@ -2375,6 +2448,28 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
             task_stats['skipped_groups'],
         )
 
+    # Output-path mode: finalize temp checkpoint into final file and return bool.
+    if output_path:
+        if temp_output_path is not None and os.path.exists(temp_output_path):
+            try:
+                ensure_output_dir_for_file(output_path)
+                if os.path.exists(output_path):
+                    if overwrite:
+                        os.remove(output_path) 
+                    else:
+                        logger.warning("Output already exists and overwrite=False: %s", output_path)
+                        return True
+                os.replace(temp_output_path, output_path)
+                logger.info("Orchestrate Voronoi complete: processed=%s (generated=%s, skipped_groups=%s) -> %s",
+                            processed_results, task_stats['generated'], task_stats['skipped_groups'], output_path)
+                return True
+            except Exception as err:
+                logger.error("Failed to finalize temp checkpoint %s -> %s: %s", temp_output_path, output_path, err)
+                return False
+        logger.warning("No temp checkpoint produced for %s", output_path)
+        return False
+
+    # Legacy tuple-return mode when no output path is provided.
     df_waste_final = finalize_gdf(df_waste_all, df.columns)
     region_df_final = finalize_gdf(region_df_all, df.columns)
     point_df_final = finalize_gdf(point_df_all, df.columns)

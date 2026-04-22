@@ -9,7 +9,6 @@ import os
 import sys
 import yaml
 
-
 def _parse_optional_weight_func(value, field_name="weight_func"):
     """Parse optional weight function mode override.
 
@@ -311,4 +310,7 @@ def load_config(
         "overwrite": cfg['params']['overwrite'],
         "voronoi_overwrite": cfg['params']['voronoi_overwrite'],
         "pop_voronoi_overwrite": cfg['params']['pop_voronoi_overwrite'],
+        "temp_voronoi_overwrite": cfg['params']['temp_voronoi_overwrite'],
+        "return_boolean": flags['return_boolean'],
+        "flush_size": cfg['params']['flush_size']
     }

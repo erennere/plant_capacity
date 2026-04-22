@@ -123,6 +123,8 @@ params:
   overwrite: false  # Global overwrite flag for generic output writes.
   voronoi_overwrite: false  # Allow overwriting existing Voronoi output files.
   pop_voronoi_overwrite: false  # Allow overwriting existing pop-enriched Voronoi outputs.
+  temp_voronoi_overwrite: false  # Each orchestrate_voronoi call will overwrite intermediate Voronoi outputs if set to true.
+  flush_size: 1000  # Row count threshold for flushing Voronoi output to disk in batches.
   
 annotations:
   # default_mode controls create_rasters.sh execution: array | sequential | parallel.
@@ -146,6 +148,7 @@ booleans:
   eu_correction: true  # Apply EU-specific OSM coordinate correction pass.
   legacy_merge: true  # Include legacy segmentation merge step; disable on first run.
   remove_industrial: false  # Exclude facilities flagged as industrial from outputs.
+  return_boolean: true # Return boolean success status from Voronoi orchestration for shell wrapper control flow.
 
 figures:
   pop_threshold: 1000  # Minimum population served to include a plant in figure outputs.

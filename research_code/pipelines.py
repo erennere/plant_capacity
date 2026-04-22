@@ -72,8 +72,9 @@ def create_pop_output_paths(cfg):
         }
     
 
-def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distance_fn, output_path, 
-                        buffer_id_col='buffer_id', scale_weights=False, only_round=False, buffering=False, method='linear'):
+def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distance_fn, output_path,
+                        buffer_id_col='buffer_id', scale_weights=False, only_round=False, buffering=False,
+                        method='linear'):
     """
     Run a single Voronoi generation approach.
     
@@ -125,7 +126,7 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     
     logger.info(f"Approach {approach_id}: Running Voronoi generation (scale_weights={scale_weights}, only_round={only_round})")
     
-    df_waste, region_df, point_df = orchestrate_voronoi_weights(
+    orchestrate_result = orchestrate_voronoi_weights(
         gdf, buffer_id_col, country_df, cfg['max_workers'],
         scale_weights=scale_weights,
         clipping=clipping_gdf,
@@ -141,9 +142,20 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
         only_round=only_round,
         sigma=cfg['sigma'],
         percent_threshold=cfg['percent_threshold'],
-        method=method
+        method=method,
+        output_path=output_path if cfg['return_boolean'] else None,
+        overwrite=cfg['temp_voronoi_overwrite'],
+        flush_size=cfg['flush_size'],
     )
-    
+
+    if isinstance(orchestrate_result, bool):
+        if not orchestrate_result:
+            logger.error(f"Approach {approach_id}: Voronoi orchestration failed")
+            return None, None, None
+        logger.info(f"Approach {approach_id}: Saved regions to {output_path}")
+        return None, None, None
+
+    df_waste, region_df, point_df = orchestrate_result
     ensure_output_dir_for_file(output_path)
     region_df.to_file(output_path, driver='GPKG', index=False)
     logger.info(f"Approach {approach_id}: Saved {len(region_df)} regions to {output_path}")
