@@ -2,7 +2,7 @@
 # [level] [version] [buffer] [weight_method] [weight_func] overrides.
 arguments:
   default_version: "2"
-  default_level: "8" #default watershed level for main pipeline execution; this is the level used in all generated outputs unless overridden by shell wrapper args
+  default_level: "7" #default watershed level for main pipeline execution; this is the level used in all generated outputs unless overridden by shell wrapper args
 
 paths:
   # Template variables available below: {data_dir}, {version}, {level},
@@ -103,7 +103,7 @@ s3:
   divisions: "{latest_url}/theme=divisions/type=division_area/*"
 
 params:
-  buffer: 15000  # Buffer radius in meters for overlap grouping / clipping.
+  buffer: 9000  # Buffer radius in meters for overlap grouping / clipping.
   max_workers: 16  # Default process workers for heavy parallel geospatial jobs.
   n_points: 250  # Grid step size for Voronoi rasterization (higher = coarser) in meters
   threshold: 500  # Distance threshold (m) for clustering nearby WWTP points.
@@ -114,7 +114,7 @@ params:
   eu_utm: 32634  # UTM CRS used for EU reference processing.
   rad: 5000  # Radius parameter used in risk/impact polygon calculations.
   add_pop_max_workers: 8  # Worker count for population-enrichment scripts.
-  weight_method: square_root  # Weight transform: linear | square_root | logarithmic | sigmoid.
+  weight_method: logarithmic # Weight transform: linear | square_root | logarithmic | sigmoid.
   # weight_func controls weighted distance mode: mult | add | "".
   weight_func: mult  # Distance weighting mode passed to Voronoi solver.
   zoom_level: 8  # Tile zoom level for raster/tile-based annotation workflows.

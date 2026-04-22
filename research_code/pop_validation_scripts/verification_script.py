@@ -20,7 +20,7 @@ def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS
     )
     gdf['use_verify'] = (
         (~gdf['is_single_points'])
-        & (gdf['total_area'] != 0)
+        & (gdf['total_area'] != 0.0)
         #& (gdf['round_area'] != 0)
     )
     gdf['watershed_fraction_valid'] = (

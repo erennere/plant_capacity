@@ -189,9 +189,13 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
         HW_comp_col = f'{year}_HW_comp'
         ndi_dict[year] = ndi_col
         HW_comp_dict[year] = HW_comp_col
+        
+       # pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna())]#] & (gdf['QUAL_POP'] == '1.0')]
+        #logging.warning(pop_file[[pop_col, col, 'QUAL_POP']])
 
-        pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna())]
-        pop_file = gdf[(gdf['QUAL_POP'] == 1) & (gdf[col].notna())]
+        pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna()) & (gdf['QUAL_POP'] == '1.0')]
+        #logging.warning(pop_file[[pop_col, col]])
+
         pop_file = ndvi(pop_file, col, pop_col, ndi_col)
         pop_file = multiples(pop_file, col, pop_col, HW_comp_col)
         pop_file = replace_inf(pop_file, ndi_col)
@@ -208,7 +212,7 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
     xlabel_ndi = 'NDI'
     xlabel_hW_comp = r'$\alpha$'
     upper_quantile_ndi = 0.99
-    upper_quantile_hw_comp = 0.9
+    upper_quantile_hw_comp = 1
     ndi_output_filepath = os.path.join(output_dir, f"ndi_{filename.replace('.gpkg', '.png')}")
     hw_comp_output_filepath = os.path.join(output_dir, f"hw_comp_{filename.replace('.gpkg', '.png')}")
 

@@ -242,7 +242,7 @@ def _process_single_record(record):
 
     hw_subset = gdf.copy()
     if "QUAL_POP" in hw_subset.columns:
-        hw_subset = hw_subset[hw_subset["QUAL_POP"] == 1].copy()
+        hw_subset = hw_subset[hw_subset["QUAL_POP"] == '1.0'].copy()
     hw_metrics = compute_sensitivity_metrics(hw_subset, year_col, "POP_SERVED")
 
     eu_subset = assign_to_nearest(gdf.copy(), _REF_GDF, _THRESHOLD)

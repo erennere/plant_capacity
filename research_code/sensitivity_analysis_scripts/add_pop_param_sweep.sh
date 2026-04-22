@@ -19,7 +19,7 @@ VERSION="${1:-}"
 SHUFFLE_SEED="${SHUFFLE_SEED:-42}"
 
 # Parameter grids
-LEVELS=(7 8 9)
+LEVELS=(6 7 8)
 WEIGHT_FUNCS=("mult" "add" "")
 WEIGHT_METHODS=("linear" "logarithmic" "square_root" "sigmoid")
 BUFFERS=(9000 11000 13000 15000)
@@ -56,7 +56,7 @@ import sys
 task_id = int(sys.argv[1])
 seed = int(sys.argv[2])
 
-levels = [7, 8, 9]
+levels = [6, 7, 8]
 weight_funcs = ["mult", "add", ""]
 weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
 buffers = [9000, 11000, 13000, 15000]
