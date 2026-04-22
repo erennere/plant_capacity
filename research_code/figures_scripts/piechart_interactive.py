@@ -44,6 +44,32 @@ def calculate_size(value, min_value, max_value, min_size, max_size):
     if value <= 0: return min_size
     return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
 
+
+def ensure_population_percentage_column(df, preferred_col="population_served_index"):
+    """Ensure a population-served percentage column exists and return its name."""
+    if preferred_col in df.columns:
+        return preferred_col
+
+    # Common fallback: derive from absolute served/total population columns.
+    if {'population_served', 'population_total'}.issubset(df.columns):
+        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
+        num = pd.to_numeric(df['population_served'], errors='coerce')
+        df[preferred_col] = (num / denom).fillna(0)
+        return preferred_col
+
+    # Secondary fallback: use aggregated latest zonal sum as served estimate.
+    if {'2024_zonal_sum_sum', 'population_total'}.issubset(df.columns):
+        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
+        num = pd.to_numeric(df['2024_zonal_sum_sum'], errors='coerce')
+        df[preferred_col] = (num / denom).fillna(0)
+        return preferred_col
+
+    raise KeyError(
+        "Could not derive population-served percentage. Expected one of: "
+        "'population_served_index', ('population_served' + 'population_total'), "
+        "or ('2024_zonal_sum_sum' + 'population_total')."
+    )
+
 def get_pie_svg(res_vals, ind_vals, size_px):
     """Return an inline SVG donut chart for one country marker.
 
@@ -83,7 +109,8 @@ def main():
     approach = str(cfg['figures']['approach'])
     pop_fp = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     boundaries_fp = cfg['paths']['country_boundaries_filepath']
-    stats_fp = cfg['paths']['csv_output_filepath']
+    # stats_fp = cfg['paths']['raster_country_stats_filepath']
+    stats_fp = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/raster_country_stats.csv"
 
     pop_col, ind_col = 'population_served_index', 'IND/RES'
     tag1, tag2, agg_t = 'round_area', 'wwtp_area_rect_2', 'sum'
@@ -105,13 +132,19 @@ def main():
     for is_p, cols in {True: [agg_col], False: [tag1, tag2]}.items():
         for c in cols: agg_ds.append(aggregate_by_country(pop_df_no_geom, 'country', c, ind_col, is_p))
     
-    for d in agg_ds: boundaries = boundaries.merge(d, on='country', how='left')
-    if os.path.exists(stats_fp):
-        boundaries = boundaries.merge(pd.read_csv(stats_fp), on='country', how='left')
+    for d in agg_ds:
+        boundaries = boundaries.merge(d, on='country', how='left')
+
+    if not os.path.exists(stats_fp):
+        raise FileNotFoundError(f"Stats file not found: {stats_fp}")
+    stats_df = pd.read_csv(stats_fp)
+    stats_df.columns = [str(c).strip().lstrip('\ufeff') for c in stats_df.columns]
+    boundaries = boundaries.merge(stats_df, on='country', how='left')
     
     boundaries['total_size'] = boundaries[[f'IND_{tag1}_{agg_t}', f'IND_{tag2}_{agg_t}', 
                                          f'RES_{tag1}_{agg_t}', f'RES_{tag2}_{agg_t}']].sum(axis=1)
-    boundaries[pop_col] = boundaries[pop_col] * 100
+    pop_col = ensure_population_percentage_column(boundaries, pop_col)
+    boundaries[pop_col] = pd.to_numeric(boundaries[pop_col], errors='coerce').fillna(0) * 100
     
     m = folium.Map(location=[10, 0], zoom_start=3, tiles='CartoDB positron')
 

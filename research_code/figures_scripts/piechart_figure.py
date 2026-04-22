@@ -119,6 +119,8 @@ def round_numbers(arr, breaks):
     """Generate rounded legend break labels spanning the observed value range."""
     arr = np.asarray(arr)
     arr = arr[np.isfinite(arr) & (arr > 0)]
+    if arr.size == 0:
+        return breaks
     nums = np.linspace(arr.min(), arr.max(), len(breaks)).astype(int)
     rounded = []
     for n in nums:
@@ -127,6 +129,30 @@ def round_numbers(arr, breaks):
         coeff = round(10*(log_n - power))
         rounded.append((coeff+1)*10**power)
     return rounded
+
+
+def ensure_population_percentage_column(df, preferred_col="population_served_index"):
+    """Ensure a population-served percentage column exists and return its name."""
+    if preferred_col in df.columns:
+        return preferred_col
+
+    if {'population_served', 'population_total'}.issubset(df.columns):
+        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
+        num = pd.to_numeric(df['population_served'], errors='coerce')
+        df[preferred_col] = (num / denom).fillna(0)
+        return preferred_col
+
+    if {'2024_zonal_sum_sum', 'population_total'}.issubset(df.columns):
+        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
+        num = pd.to_numeric(df['2024_zonal_sum_sum'], errors='coerce')
+        df[preferred_col] = (num / denom).fillna(0)
+        return preferred_col
+
+    raise KeyError(
+        "Could not derive population-served percentage. Expected one of: "
+        "'population_served_index', ('population_served' + 'population_total'), "
+        "or ('2024_zonal_sum_sum' + 'population_total')."
+    )
             
 def main():
     """Create the static global WWTP-type summary figure and save it to disk."""
@@ -138,7 +164,6 @@ def main():
     boundaries_filepath = cfg['paths']['country_boundaries_filepath']
     pop_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     stats_filepath = cfg['paths']['raster_country_stats_filepath']
-    stats_filepath = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/raster_country_stats.csv"
 
     pop_column = 'population_served_index'
     filter_col = '2024_zonal_sum'
@@ -168,7 +193,10 @@ def main():
     #pop_gdf[industrial_col] = np.random.randint(0, 2, len(pop_gdf)).astype(bool)
     pop_gdf[industrial_col] = pop_gdf['category_number'].isin(cfg['industrial_category_numbers'])
 
+    if not os.path.exists(stats_filepath):
+        raise FileNotFoundError(f"Stats file not found: {stats_filepath}")
     stats_df = pd.read_csv(stats_filepath)
+    stats_df.columns = [str(c).strip().lstrip('\ufeff') for c in stats_df.columns]
     
     agg_datasets = []
     for is_pop, col_list in agg_columns.items():
@@ -186,7 +214,8 @@ def main():
     # Plot boundaries colored by population / WWTP metric
     boundaries = boundaries.drop_duplicates(subset=['country'])
     #boundaries[pop_column] = boundaries[pop_column]/1000
-    boundaries[pop_column] = boundaries[pop_column]*100
+    pop_column = ensure_population_percentage_column(boundaries, pop_column)
+    boundaries[pop_column] = pd.to_numeric(boundaries[pop_column], errors='coerce').fillna(0) * 100
     """     boundaries[boundaries.geometry.notna()].plot(
         ax=ax,
         column=pop_column,
