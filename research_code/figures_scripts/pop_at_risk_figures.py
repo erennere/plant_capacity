@@ -278,6 +278,7 @@ def main():
     #unserved_df = cfg['paths']['raster_country_stats_filepath'
     unserved_df_filepath = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/non_served_areas.csv"
     unserved_df = duckdb.sql(f"""SELECT {', '.join(needed_cols)} FROM '{unserved_df_filepath}'""").to_df()
+    unserved_df = unserved_df.groupby('tile', as_index=False)['pop_sum'].sum()
     tiles_gdf = pd.merge(tiles_gdf, unserved_df, on='tile', how='left') 
     create_single_plot(
         z8_stats=tiles_gdf,
