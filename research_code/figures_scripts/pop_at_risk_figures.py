@@ -15,6 +15,46 @@ from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+def _robust_bounds(values, positive_only=False, quantile_range=(0.02, 0.98), iqr_factor=1.5):
+    """Estimate robust plotting bounds by combining quantile and IQR filtering."""
+    clean = pd.to_numeric(values, errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
+    if positive_only:
+        clean = clean[clean > 0]
+
+    if clean.empty:
+        raise ValueError("No valid values available to compute robust bounds.")
+
+    q1 = float(clean.quantile(0.25))
+    q3 = float(clean.quantile(0.75))
+    iqr = q3 - q1
+
+    if iqr > 0:
+        iqr_low = q1 - iqr_factor * iqr
+        iqr_high = q3 + iqr_factor * iqr
+    else:
+        iqr_low = float(clean.min())
+        iqr_high = float(clean.max())
+
+    q_low = float(clean.quantile(quantile_range[0]))
+    q_high = float(clean.quantile(quantile_range[1]))
+
+    low = max(iqr_low, q_low)
+    high = min(iqr_high, q_high)
+
+    if positive_only:
+        low = max(low, np.finfo(float).tiny)
+
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        low = float(clean.min())
+        high = float(clean.max())
+        if positive_only:
+            low = max(low, np.finfo(float).tiny)
+        if high <= low:
+            high = low * (10.0 if positive_only else 1.000001)
+
+    return low, high
+
 def create_single_plot(
     z8_stats,
     column,
@@ -39,6 +79,8 @@ def create_single_plot(
     author_note=None,
     save_dpi=1000,
     show=True,
+    outlier_quantiles=(0.02, 0.98),
+    outlier_iqr_factor=1.5,
 ):
     """Create a projected choropleth plot from a GeoDataFrame column.
 
@@ -78,19 +120,32 @@ def create_single_plot(
         if valid_values.empty:
             raise ValueError("No valid positive values in 'plot_value' for logarithmic normalization.")
 
+        auto_vmin, auto_vmax = _robust_bounds(
+            valid_values,
+            positive_only=True,
+            quantile_range=outlier_quantiles,
+            iqr_factor=outlier_iqr_factor,
+        )
+
         if vmin is None:
-            vmin = max(10 ** (-3), 10 ** (np.floor(np.log10(valid_values.min()))))
+            vmin = auto_vmin
         if vmax is None:
-            vmax = 10 ** 2
+            vmax = auto_vmax
         norm = LogNorm(vmin=vmin, vmax=vmax)
 
         gdf.loc[gdf['plot_value'] < vmin, 'plot_value'] = np.nan
         gdf.loc[gdf['plot_value'] > vmax, 'plot_value'] = np.nan
     elif scale_type == 'linear':
+        auto_vmin, auto_vmax = _robust_bounds(
+            gdf['plot_value'],
+            positive_only=False,
+            quantile_range=outlier_quantiles,
+            iqr_factor=outlier_iqr_factor,
+        )
         if vmin is None:
-            vmin = gdf['plot_value'].min()
+            vmin = auto_vmin
         if vmax is None:
-            vmax = gdf['plot_value'].max()
+            vmax = auto_vmax
         if vmin == vmax:
             raise ValueError("Minimum and maximum values are the same. Cannot normalize.")
         norm = Normalize(vmin=vmin, vmax=vmax)
