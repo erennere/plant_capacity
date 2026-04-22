@@ -238,6 +238,7 @@ def load_config(
         "annotations_grid_dir":  f(cfg["paths"]["annotations_grid_dir"]),
         "annotations_by_osm_dir": f(cfg["paths"]["annotations_by_osm_dir"]),
         "csv_output_filepath" : f(cfg['paths']['csv_output_filepath']), 
+        "raster_country_stats_filepath": f(cfg['paths']['raster_country_stats_filepath']),
         "non_served_outpath" : f(cfg['paths']['non_served_outpath']),
         "non_served_above_threshold_outpath" : f(cfg['paths']['non_served_above_threshold_outpath']),
         "non_served_nxt_river_outpath" : f(cfg['paths']['non_served_nxt_river_outpath']),

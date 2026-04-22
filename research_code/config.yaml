@@ -7,10 +7,64 @@ arguments:
 paths:
   # Template variables available below: {data_dir}, {version}, {level},
   # {buffer}, {final_data_dir}, {extra_points_dir}, {annotations_dir}, {dl_dir}.
+  #
+  # ##############################
+  # REQUIRED BASE DIRECTORIES (these are all under 'data_dir')
+  # ##############################
   data_dir: "../data"
+  final_data_dir : "final_data_source"
+  extra_points_dir: "extra_points"
+  dl_dir: "DL_results"
+  annotations_dir: "annotations"
+  watersheds_zip_dir: "{data_dir}/hydroshed_river_levels/lvl{level}"  #zip files should be located here
+
+  # ##############################
+  # REQUIRED INPUT FILES (replace for your environment)
+  # ##############################
+  bboxes: "{data_dir}/bboxes.csv"
+  cities: "{data_dir}/cities.csv"
+  hydrowaste: "{data_dir}/cleaned_hydrowaste.csv"
+  
+  #watershed is created by combine_watershed.py make sure the zip files are in 'watershed_zip_dir' and run that script before running the main pipeline
+  watershed: "{data_dir}/hydroshed_river_levels/hydrobase_lvl{level}_combined.gpkg"
+  rivershed: "{data_dir}/hydrorivers.gpkg" #HydroSHEDs combined river network file, used for river assignment in risk calculation step, you should create this file
+  country_boundaries_filepath: "{data_dir}/boundaries/ne_110m_admin_0_countries.shp"
+
+  # final/base datasets consumed by merge/analysis flows
+  corrected_all: "{data_dir}/all_merged_v{version}.gpkg"
+  corrected_south: "{data_dir}/corrected_WWTP_enhanced_v{version}.geojson"
+  seg_corrected_south: "{data_dir}/seg_corrected_WWTP_enhanced_v{version}.gpkg"
+  eu_ref_filepath: "{data_dir}/{extra_points_dir}/UWWTD_TreatmentPlants.gpkg"
+  canada_filepath: "{data_dir}/{extra_points_dir}/Canada_14_03_2025.csv"
+  us_filepath: "{data_dir}/{extra_points_dir}/US_mapped_data_final.csv"
+  germany_filepath: "{data_dir}/{extra_points_dir}/Germany_Hydra_waste_geospatial_corrected.geojson"
+  osmgeo_filepath: "{data_dir}/wastewater_plant.geojson"
+  paul_corrected_filepath: "{data_dir}/Enhanced_HW_WWTP__jun20_2025.geojson"
+  us_new_filepath: "{data_dir}/{final_data_dir}/final_USA_WWT_dec3.geojson"
+  eu_new_filepath: "{data_dir}/{final_data_dir}/final_W_europe_WWT_dec3.geojson"
+  thailand_filepath: "{data_dir}/{final_data_dir}/Thailand_500m_merged.geojson"
+
+  # ##############################
+  # EXTERNAL INPUTS (machine-specific or mount-specific)
+  # ##############################
+  seg_results_filepath: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/Images_z17_512/results/csv/segoutput.csv"
+  annotations_results_filepath: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/inference/csv_files/chunk_1/i2t_res1.csv"
+  annotations_images_dir: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/mm/Images_z17_512"
+  annotated_images_output_dir:  "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/Images_z17_512" 
+  annotations_verf_image_outpath_dir: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/inference/test" #optional
+
+  # ##############################
+  # AUTO-DOWNLOADED / CACHEABLE INPUTS
+  # ##############################
+  overture: "{data_dir}/overture_maps_countries.parquet" 
+  dl_zipfile: "{data_dir}/{dl_dir}/csvv2-2.zip" # this is not auto-downloaded. You might not need this file if you don't do legacy merge
+  dl_mapfile: "{data_dir}/{dl_dir}/aftersort.geojson" # this is not auto-downloaded either
+
+  # ##############################
+  # GENERATED OUTPUT DIRECTORIES
+  # ##############################
   pop_dir: "{data_dir}/population"
   buffers_dir: "{data_dir}/buffers/v{version}/lvl{level}/bf{buffer}"
-  final_data_dir : "final_data_source"
   voronoi_dir: "{data_dir}/voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}"
   verification_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}"
   pop_tif_dir: "{data_dir}/population/unzipped"
@@ -19,47 +73,18 @@ paths:
   pop_dif_output_dir: "{data_dir}/pop_diff_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}"
   hw_plots_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/hw_plots"
   eu_plots_dir: "{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/eu_plots"
-  watersheds_zip_dir: "{data_dir}/hydroshed_river_levels/lvl{level}"
-  dl_dir: "DL_results"
-  extra_points_dir: "extra_points"
-  annotations_dir: "annotations"
   annotations_grid_dir: "{data_dir}/{annotations_dir}/GRID"
   annotations_by_osm_dir: "{data_dir}/{annotations_dir}/osm_by_idx"
-  bboxes: "{data_dir}/bboxes.csv"
-  cities: "{data_dir}/cities.csv"
-  
-  watershed: "{data_dir}/hydroshed_river_levels/hydrobase_lvl{level}_combined.gpkg"
-  rivershed: "{data_dir}/hydrorivers.gpkg"
+
+  # ##############################
+  # GENERATED OUTPUT FILES
+  # ##############################
   rivershed_output_path: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/hydroshed_basin_assigned_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
-  
-  overture: "{data_dir}/overture_maps_countries.parquet"
-  hydrowaste: "{data_dir}/cleaned_hydrowaste.csv"
-  dl_zipfile: "{data_dir}/{dl_dir}/csvv2-2.zip"
-  dl_mapfile: "{data_dir}/{dl_dir}/aftersort.geojson"
-  corrected_all: "{data_dir}/all_merged_v{version}.gpkg"
   new_points_filepath: "{data_dir}/new_locations_v{version}.gpkg"
-  seg_corrected_south: "{data_dir}/seg_corrected_WWTP_enhanced_v{version}.gpkg"
-  corrected_south: "{data_dir}/corrected_WWTP_enhanced_v{version}.geojson"
-  eu_ref_filepath: "{data_dir}/{extra_points_dir}/UWWTD_TreatmentPlants.gpkg"
-  canada_filepath: "{data_dir}/{extra_points_dir}/Canada_14_03_2025.csv"
-  us_filepath: "{data_dir}/{extra_points_dir}/US_mapped_data_final.csv"
-  germany_filepath: "{data_dir}/{extra_points_dir}/Germany_Hydra_waste_geospatial_corrected.geojson"
-  osmgeo_filepath: "{data_dir}/wastewater_plant.geojson"
-  paul_corrected_filepath: "{data_dir}/Enhanced_HW_WWTP__jun20_2025.geojson"
-  
-  seg_results_filepath: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/Images_z17_512/results/csv/segoutput.csv"
- 
-  annotations_results_filepath: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/inference/csv_files/chunk_1/i2t_res1.csv"
-  annotations_verf_image_outpath_dir: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/inference/test"
-  annotated_images_output_dir:  "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/Images_z17_512"
-  annotations_images_dir: "/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/mm/Images_z17_512" 
   annotations_temp_parquet_dir: "{data_dir}/temp_parquets"
 
-  us_new_filepath: "{data_dir}/{final_data_dir}/final_USA_WWT_dec3.geojson"
-  eu_new_filepath: "{data_dir}/{final_data_dir}/final_W_europe_WWT_dec3.geojson"
-  thailand_filepath: "{data_dir}/{final_data_dir}/Thailand_500m_merged.geojson"
-
   csv_output_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/raster_country_stats_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.csv"
+  raster_country_stats_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/raster_country_stats_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.csv"
   non_served_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
   non_served_above_threshold_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_above_threshold_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
   non_served_nxt_river_outpath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_nxt_river_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
@@ -68,8 +93,6 @@ paths:
   industrial_areas_ohsome_parquet_filepath: "{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/industrial_areas_final_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet"
   
   pop_at_risk_output_filepath: "{data_dir}/results_pop_at_risk/v{version}/lvl{level}/bf{buffer}/{weight_type}/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet"
-
-  country_boundaries_filepath: "{data_dir}/boundaries/ne_110m_admin_0_countries.shp"
 
   interactive_piechart_html_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html"
   static_piechart_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
@@ -80,26 +103,26 @@ s3:
   divisions: "{latest_url}/theme=divisions/type=division_area/*"
 
 params:
-  buffer: 15000
-  max_workers: 16
-  n_points: 250
-  threshold: 500
-  sigma: 3
-  percent_threshold: 10
-  percent_verification: 0.8
-  osm_threshold: 1000
-  eu_utm: 32634
-  rad: 5000
-  add_pop_max_workers: 8
-  weight_method: square_root
+  buffer: 15000  # Buffer radius in meters for overlap grouping / clipping.
+  max_workers: 16  # Default process workers for heavy parallel geospatial jobs.
+  n_points: 250  # Grid step size for Voronoi rasterization (higher = coarser) in meters
+  threshold: 500  # Distance threshold (m) for clustering nearby WWTP points.
+  sigma: 3  # Std-dev multiplier used in weight outlier clipping.
+  percent_threshold: 10  # Lower clipping divisor for weights (median / value).
+  percent_verification: 0.8  # Sampling fraction used in verification utilities.
+  osm_threshold: 1000  # Distance threshold (m) used in OSM-based assignment steps.
+  eu_utm: 32634  # UTM CRS used for EU reference processing.
+  rad: 5000  # Radius parameter used in risk/impact polygon calculations.
+  add_pop_max_workers: 8  # Worker count for population-enrichment scripts.
+  weight_method: square_root  # Weight transform: linear | square_root | logarithmic | sigmoid.
   # weight_func controls weighted distance mode: mult | add | "".
-  weight_func: mult
-  zoom_level: 8
-  industrial_category_numbers: []
-  min_pixels: 9
-  overwrite: false
-  voronoi_overwrite: false
-  pop_voronoi_overwrite: false
+  weight_func: mult  # Distance weighting mode passed to Voronoi solver.
+  zoom_level: 8  # Tile zoom level for raster/tile-based annotation workflows.
+  industrial_category_numbers: []  # Category IDs to treat as industrial-only facilities.
+  min_pixels: 9  # Minimum connected pixels to keep in raster-derived features.
+  overwrite: false  # Global overwrite flag for generic output writes.
+  voronoi_overwrite: false  # Allow overwriting existing Voronoi output files.
+  pop_voronoi_overwrite: false  # Allow overwriting existing pop-enriched Voronoi outputs.
   
 annotations:
   # default_mode controls create_rasters.sh execution: array | sequential | parallel.
@@ -108,25 +131,25 @@ annotations:
   cell_size: 3072
   # factor expands the nominal tile footprint to preserve context around each point.
   factor: 1.194
-  max_workers: 8
-  random_seed: 42
-  overwrite: false
-  retries: 5
+  max_workers: 8  # Worker count for parallel annotation download/export tasks.
+  random_seed: 42  # Seed for reproducible sampling in annotation workflows.
+  overwrite: false  # Skip export if output annotation file already exists.
+  retries: 5  # Max retry attempts per failed tile download.
 
 booleans:
-  scipy: false
-  cv2: false
-  city_voronoi: false
-  csv_files: false
-  duckdb: false
-  sindex_concurrency: true
-  eu_correction: true
-  legacy_merge: true
-  remove_industrial: false
+  scipy: false  # Use scipy marching-squares for Voronoi contour extraction (smoother, slower).
+  cv2: false  # Use OpenCV contour extraction instead of rasterio shapes (fast edge detection).
+  city_voronoi: false  # Enable city-centroid Voronoi (approach 2); requires cities input.
+  csv_files: false  # Read WWTP bounding boxes from CSV instead of GeoPackage.
+  duckdb: false  # Use DuckDB for watershed intersection queries (experimental).
+  sindex_concurrency: true  # Build spatial indices concurrently during watershed intersection.
+  eu_correction: true  # Apply EU-specific OSM coordinate correction pass.
+  legacy_merge: true  # Include legacy segmentation merge step; disable on first run.
+  remove_industrial: false  # Exclude facilities flagged as industrial from outputs.
 
 figures:
-  pop_threshold: 1000
-  approach: 3a
+  pop_threshold: 1000  # Minimum population served to include a plant in figure outputs.
+  approach: 3a  # Voronoi approach ID used for figure generation scripts.
 
 credentials:
  s3_access_key_id: "lymqeBSuT1dt9FhcUv3z"
@@ -139,11 +162,11 @@ execution:
                          # Leave empty to let shell wrappers choose environment defaults.
 
 impact_polygons_pop_params:
-  org_per_pop: 60.0
-  width: 12.0
-  c_limit: 5.0
-  base_k: 0.23
-  theta: 1.047
-  step_m: 100.0
-  least_discharge_cms: 0.269
-  impact_radii: [1000, 2000]
+  org_per_pop: 60.0  # Organic load per population equivalent in grams per day (g/day/person).
+  width: 12.0  # Plume half-width (m) applied when load ratio is below threshold.
+  c_limit: 5.0  # Concentration limit (mg/L) used to normalize the load ratio.
+  base_k: 0.23  # Base first-order decay coefficient for pollutant attenuation.
+  theta: 1.047  # Temperature-correction factor (Arrhenius) for decay-rate adjustment.
+  step_m: 100.0  # Interpolation step along river segments in meters.
+  least_discharge_cms: 0.269  # Minimum river discharge (m³/s) substituted when flow is zero or missing.
+  impact_radii: [1000, 2000]  # Plume half-widths (m) to materialize; one output layer is written per radius.

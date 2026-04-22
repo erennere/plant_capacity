@@ -66,6 +66,11 @@ for level in levels:
     for weight_func in weight_funcs:
         for weight_method in weight_methods:
             for buffer in buffers:
+                # When weight_func is empty the distance weighting is disabled,
+                # so weight_method has no effect on the output. Only include
+                # one canonical method (linear) to avoid redundant runs.
+                if weight_func == "" and weight_method != "linear":
+                    continue
                 combos.append((level, buffer, weight_method, weight_func))
 
 random.Random(seed).shuffle(combos)

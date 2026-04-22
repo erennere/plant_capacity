@@ -74,20 +74,42 @@ def parse_pop_output_path(filepath):
 
 
 def list_pop_output_files(data_dir):
-    """List all parseable pop-output GPKGs in the sweep root."""
+    """List all parseable pop-output GPKGs in the sweep root.
+
+    When ``weight_func`` is empty the distance weighting is disabled, so
+    ``weight_method`` (and therefore ``weight_type``) has no effect on the
+    output. Any such duplicates that differ only in ``weight_type`` are
+    deduplicated here: only the first encountered file per
+    ``(version, level, buffer, approach, only_round)`` group with an empty
+    ``weight_func`` is kept.
+    """
     root = Path(data_dir) / "pop_voronoi_layers"
     if not root.exists():
         logger.warning("pop_voronoi_layers directory not found: %s", root)
         return []
 
     records = []
+    seen_empty_wf = set()
     for filepath in sorted(root.rglob("*.gpkg")):
         if Path(filepath).name.startswith('temp_'):
             continue
 
         params = parse_pop_output_path(filepath)
-        if params is not None:
-            records.append(params)
+        if params is None:
+            continue
+
+        if params["weight_func"] == "":
+            key = (params["version"], params["level"], params["buffer"],
+                   params["approach"], params["only_round"])
+            if key in seen_empty_wf:
+                logger.debug(
+                    "Skipping duplicate empty-weight_func file (weight_type=%s differs but output is identical): %s",
+                    params["weight_type"], filepath,
+                )
+                continue
+            seen_empty_wf.add(key)
+
+        records.append(params)
     return records
 
 

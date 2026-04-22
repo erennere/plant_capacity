@@ -32,7 +32,6 @@ log() {
 }
 
 TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
-VORONOI_FILE_INDEX="${TASK_ID}"
 
 if ! [[ "${TASK_ID}" =~ ^[0-9]+$ ]]; then
     log "ERROR: Invalid task id '${TASK_ID}'"
@@ -43,7 +42,7 @@ if (( TASK_ID < 0 || TASK_ID > 9 )); then
     exit 1
 fi
 
-log "Starting add_pop parameter sweep task ${TASK_ID}/9 using voronoi_file_index=${VORONOI_FILE_INDEX}, shuffle_seed=${SHUFFLE_SEED}"
+log "Starting add_pop parameter sweep task ${TASK_ID}/9, shuffle_seed=${SHUFFLE_SEED}"
 
 log "Installing research_code module (editable)"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null
@@ -67,6 +66,11 @@ for level in levels:
     for weight_func in weight_funcs:
         for weight_method in weight_methods:
             for buffer in buffers:
+                # When weight_func is empty the distance weighting is disabled,
+                # so weight_method has no effect on the output. Only include
+                # one canonical method (linear) to avoid redundant runs.
+                if weight_func == "" and weight_method != "linear":
+                    continue
                 combos.append((level, buffer, weight_method, weight_func))
 
 random.Random(seed).shuffle(combos)
@@ -83,10 +87,39 @@ for combo in "${ASSIGNED_COMBOS[@]}"; do
     if [[ "${weight_func}" == "__EMPTY__" ]]; then
         weight_func=""
     fi
-    run_count=$((run_count + 1))
-    log "Run ${run_count}: index=${VORONOI_FILE_INDEX} level=${level} buffer=${buffer} weight_method=${weight_method} weight_func='${weight_func}'"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${VORONOI_FILE_INDEX}" "${level}" "${VERSION}" "${buffer}" "${weight_method}" "${weight_func}" \
-        2>&1 | tee -a "${LOG_DIR}/add_pop_sweep_${TASK_ID}.log"
+
+    # Discover how many voronoi files exist for this parameter combination.
+    # Each (level, buffer, weight_func) maps to a different voronoi directory,
+    # so the file count must be determined at runtime rather than using TASK_ID.
+    num_files=$(${PYTHON_CMD} - "${level}" "${VERSION}" "${buffer}" "${weight_method}" "${weight_func}" <<'PY'
+import os, sys
+sys.argv = [''] + sys.argv[1:]
+try:
+    from research_code.starter import load_config, parse_config_overrides
+except ImportError:
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('starter', pathlib.Path(__file__).parent.parent / 'research_code' / 'starter.py')
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    load_config = m.load_config; parse_config_overrides = m.parse_config_overrides
+overrides = parse_config_overrides(start_index=1)
+cfg = load_config(**overrides)
+d = cfg['paths']['voronoi_dir']
+files = sorted(f for f in os.listdir(d) if f.endswith('.gpkg')) if os.path.isdir(d) else []
+print(len(files))
+PY
+    2>/dev/null || echo 0)
+
+    if (( num_files == 0 )); then
+        log "WARNING: No voronoi files found for level=${level} buffer=${buffer} weight_method=${weight_method} weight_func='${weight_func}' — skipping"
+        continue
+    fi
+
+    for file_idx in $(seq 0 $((num_files - 1))); do
+        run_count=$((run_count + 1))
+        log "Run ${run_count}: file_index=${file_idx}/${num_files} level=${level} buffer=${buffer} weight_method=${weight_method} weight_func='${weight_func}'"
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${file_idx}" "${level}" "${VERSION}" "${buffer}" "${weight_method}" "${weight_func}" \
+            2>&1 | tee -a "${LOG_DIR}/add_pop_sweep_${TASK_ID}.log"
+    done
 done
 
 log "Completed task ${TASK_ID}. Executed ${run_count} parameter combinations."
