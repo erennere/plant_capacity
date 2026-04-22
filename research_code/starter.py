@@ -200,6 +200,7 @@ def load_config(
 
     paths = {
         "data_dir": data_dir,
+        "figures_dir": os.path.join(data_dir, figures_dir),
         "buffers_dir": f(cfg["paths"]["buffers_dir"]),
         "pop_dir" : f(cfg["paths"]["pop_dir"]),
         "watersheds_zip_dir" : f(cfg["paths"]["watersheds_zip_dir"]),
