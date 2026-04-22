@@ -319,6 +319,9 @@ def main():
     logging.info(f"Configuration loaded: voronoi_dir={paths['voronoi_dir']}, "
                 f"pop_tif_dir={paths['pop_tif_dir']}, max_workers={max_workers}")
     
+    if os.path.exists(paths['pop_output_dir']) and not cfg['pop_voronoi_overwrite']:
+        logging.warning(f"Output directory {paths['pop_output_dir']} already exists and voronoi_overwrite is False. Existing files may be skipped.")
+    
     try:
         orchestrate_intersections(
             paths['voronoi_dir'],

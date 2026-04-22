@@ -82,6 +82,9 @@ def list_pop_output_files(data_dir):
 
     records = []
     for filepath in sorted(root.rglob("*.gpkg")):
+        if Path(filepath).name.startswith('temp_'):
+            continue
+
         params = parse_pop_output_path(filepath)
         if params is not None:
             records.append(params)

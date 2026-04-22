@@ -305,5 +305,6 @@ def load_config(
         "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],
         "legacy_merge": flags['legacy_merge'],
         "overwrite": cfg['params']['overwrite'],
-        "voronoi_overwrite": cfg['params']['voronoi_overwrite']
+        "voronoi_overwrite": cfg['params']['voronoi_overwrite'],
+        "pop_voronoi_overwrite": cfg['params']['pop_voronoi_overwrite'],
     }
