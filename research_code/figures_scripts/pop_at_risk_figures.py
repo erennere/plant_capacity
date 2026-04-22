@@ -226,7 +226,7 @@ def main():
         column='pop_sum',
         title='Unserved Population',
         output_filename='unserved_population_tiles.png',
-        output_dir=cfg['paths']['figures'],
+        output_dir=cfg['paths']['figures_dir'],
         cmap=plt.get_cmap('inferno'),
         scale_type='linear',
         value_label='Unserved population',
