@@ -1,5 +1,6 @@
 import os
 import logging
+import duckdb
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -195,7 +196,7 @@ def create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, output_filepath):
             output_filename=output_filename,
             output_dir=output_filepath,
             cmap=selected_cmap,
-            scale_type='linear',
+            scale_type='log',
             value_label="Population at risk",
             suptitle_template="{title}",
             show=False,
@@ -212,14 +213,16 @@ def main():
     country_id_col = 'ISO_A2'  # Change this to the appropriate column name in your GeoDataFrame
     max_workers = 8
     zoom_level = int(cfg['zoom_level'])
+    needed_cols = ['tile', 'pop_sum']
 
     #pop_at_risk_gdf = gpd.read_parquet(cfg['paths']['pop_at_risk_output_filepath'])
     pop_at_risk_gdf = gpd.read_parquet("/mnt/sds-hd/sd17f001/eren/plant-capacity/data/pop_at_risk_pop.parquet")
     tiles_gdf = find_tiles_in_countries(country_boundaries_gdf, zoom_level=zoom_level, country_id_col=country_id_col, max_workers=max_workers)
     create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['paths']['figures_dir'])
 
-    #unserved_df = pd.read_csv(cfg['paths']['raster_country_stats_filepath'], usecols=['tile', 'pop_sum'])
-    unserved_df = pd.read_csv("/mnt/sds-hd/sd17f001/eren/plant-capacity/data/non_served_areas.csv", usecols=['tile', 'pop_sum'])
+    #unserved_df = cfg['paths']['raster_country_stats_filepath'
+    unserved_df_filepath = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/non_served_areas.csv"
+    unserved_df = duckdb.sql(f"""SELECT {', '.join(needed_cols)} FROM '{unserved_df_filepath}'""").to_df()
     tiles_gdf = pd.merge(tiles_gdf, unserved_df, on='tile', how='left') 
     create_single_plot(
         z8_stats=tiles_gdf,
@@ -228,7 +231,7 @@ def main():
         output_filename='unserved_population_tiles.png',
         output_dir=cfg['paths']['figures_dir'],
         cmap=plt.get_cmap('inferno'),
-        scale_type='linear',
+        scale_type='log',
         value_label='Unserved population',
         suptitle_template='{title}',
         show=False,
