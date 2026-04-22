@@ -208,15 +208,15 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     
     cfg = load_config(**overrides)
-    country_boundaries_gdf = gpd.read_file(cfg['path']['country_boundaries_filepath'])
+    country_boundaries_gdf = gpd.read_file(cfg['paths']['country_boundaries_filepath'])
     country_id_col = 'ISO_A2'  # Change this to the appropriate column name in your GeoDataFrame
     max_workers = 8
     zoom_level = int(cfg['zoom_level'])
 
-    #pop_at_risk_gdf = gpd.read_parquet(cfg['path']['pop_at_risk_output_filepath'])
+    #pop_at_risk_gdf = gpd.read_parquet(cfg['paths']['pop_at_risk_output_filepath'])
     pop_at_risk_gdf = gpd.read_parquet("/sd17f001/eren/plant-capacity/data/pop_at_risk_pop.parquet")
     tiles_gdf = find_tiles_in_countries(country_boundaries_gdf, zoom_level=zoom_level, country_id_col=country_id_col, max_workers=max_workers)
-    create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['path']['figures'])
+    create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['paths']['figures'])
 
     unserved_df = pd.read_csv(cfg['paths']['raster_country_stats_filepath'], usecols=['tile', 'pop_sum'])
     tiles_gdf = pd.merge(tiles_gdf, unserved_df, on='tile', how='left') 
@@ -225,7 +225,7 @@ def main():
         column='pop_sum',
         title='Unserved Population',
         output_filename='unserved_population_tiles.png',
-        output_dir=cfg['path']['figures'],
+        output_dir=cfg['paths']['figures'],
         cmap=plt.get_cmap('inferno'),
         scale_type='linear',
         value_label='Unserved population',
