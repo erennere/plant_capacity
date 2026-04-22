@@ -164,6 +164,7 @@ def main():
     boundaries_filepath = cfg['paths']['country_boundaries_filepath']
     pop_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     stats_filepath = cfg['paths']['raster_country_stats_filepath']
+    stats_filepath = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/raster_country_stats.csv"
 
     pop_column = 'population_served_index'
     filter_col = '2024_zonal_sum'
