@@ -51,7 +51,7 @@ def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
 
 def generate_parameter_combinations() -> List[Tuple[int, str, int, str, str]]:
     """Generate all parameter combinations for the sweep."""
-    levels = [7, 8, 9]
+    levels = [6]
     weight_funcs = ["mult", "add", ""]
     weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
     buffers = [9000, 11000, 13000, 15000]

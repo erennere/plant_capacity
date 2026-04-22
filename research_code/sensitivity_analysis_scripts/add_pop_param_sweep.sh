@@ -19,7 +19,7 @@ VERSION="${1:-}"
 SHUFFLE_SEED="${SHUFFLE_SEED:-42}"
 
 # Parameter grids
-LEVELS=(6 7 8)
+LEVELS=(6)
 WEIGHT_FUNCS=("mult" "add" "")
 WEIGHT_METHODS=("linear" "logarithmic" "square_root" "sigmoid")
 BUFFERS=(9000 11000 13000 15000)
@@ -56,7 +56,7 @@ import sys
 task_id = int(sys.argv[1])
 seed = int(sys.argv[2])
 
-levels = [6, 7, 8]
+levels = [6]
 weight_funcs = ["mult", "add", ""]
 weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
 buffers = [9000, 11000, 13000, 15000]
@@ -104,7 +104,10 @@ except ImportError:
 overrides = parse_config_overrides(start_index=1)
 cfg = load_config(**overrides)
 d = cfg['paths']['voronoi_dir']
-files = sorted(f for f in os.listdir(d) if f.endswith('.gpkg')) if os.path.isdir(d) else []
+files = sorted(
+    f for f in os.listdir(d)
+    if f.endswith('.gpkg') and not f.startswith('temp_')
+) if os.path.isdir(d) else []
 print(len(files))
 PY
     2>/dev/null || echo 0)

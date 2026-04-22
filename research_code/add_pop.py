@@ -249,7 +249,13 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
     Exception
         If reading, processing, or writing the selected file fails.
     """
-    voronoi_files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.gpkg')])
+    voronoi_files = sorted(
+        [
+            os.path.join(data_dir, f)
+            for f in os.listdir(data_dir)
+            if f.endswith('.gpkg') and not f.startswith('temp_')
+        ]
+    )
     
     if index >= len(voronoi_files):
         raise IndexError(f"File index {index} out of range (found {len(voronoi_files)} files)")
