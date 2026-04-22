@@ -216,7 +216,7 @@ def main():
     #pop_at_risk_gdf = gpd.read_parquet(cfg['paths']['pop_at_risk_output_filepath'])
     pop_at_risk_gdf = gpd.read_parquet("/mnt/sds-hd/sd17f001/eren/plant-capacity/data/pop_at_risk_pop.parquet")
     tiles_gdf = find_tiles_in_countries(country_boundaries_gdf, zoom_level=zoom_level, country_id_col=country_id_col, max_workers=max_workers)
-    create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['paths']['figures'])
+    create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['paths']['figures_dir'])
 
     #unserved_df = pd.read_csv(cfg['paths']['raster_country_stats_filepath'], usecols=['tile', 'pop_sum'])
     unserved_df = pd.read_csv("/mnt/sds-hd/sd17f001/eren/plant-capacity/data/non_served_areas.csv", usecols=['tile', 'pop_sum'])
