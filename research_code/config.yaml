@@ -13,11 +13,11 @@ paths:
   # ##############################
   data_dir: "../data"
   final_data_dir : "final_data_source"
-  extra_points_dir: "extra_points"
-  dl_dir: "DL_results"
-  annotations_dir: "annotations"
+  extra_points_dir: "extra_points" 
+  dl_dir: "DL_results" # will be created by merge_seg_results.py if legacy_merge is enabled
+  annotations_dir: "annotations" # will be created by annotation scripts
   watersheds_zip_dir: "{data_dir}/hydroshed_river_levels/lvl{level}"  #zip files should be located here
-
+  figures_dir: "figures" # will be created by figure generation scripts
   # ##############################
   # REQUIRED INPUT FILES (replace for your environment)
   # ##############################
@@ -94,9 +94,9 @@ paths:
   
   pop_at_risk_output_filepath: "{data_dir}/results_pop_at_risk/v{version}/lvl{level}/bf{buffer}/{weight_type}/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet"
 
-  interactive_piechart_html_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html"
-  static_piechart_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
-  leaflet_geojson_filepath: "{data_dir}/figures/v{version}/lvl{level}/{weight_type}/leaflet_size_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.geojson"
+  interactive_piechart_html_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html"
+  static_piechart_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
+  leaflet_geojson_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/leaflet_size_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.geojson"
 
 s3:
   latest_url: "s3://overturemaps-us-west-2/release/2025-01-22.0"

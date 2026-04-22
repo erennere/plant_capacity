@@ -166,6 +166,7 @@ def load_config(
     final_data_dir = cfg["paths"]["final_data_dir"]
     annotations_dir = cfg["paths"]["annotations_dir"]
     dl_dir = cfg["paths"]["dl_dir"]
+    figures_dir = cfg["paths"]["figures_dir"]
     
     weight_type = {
         'linear': 'li',
@@ -194,6 +195,7 @@ def load_config(
             dl_dir=dl_dir,
             weight_type=weight_type,
             weight_func=weight_func_suffix,
+            figures_dir=figures_dir
         )
 
     paths = {
