@@ -77,7 +77,7 @@ from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 from skimage.measure import find_contours
 import cv2
 
-from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, box, from_wkt, to_wkt
+from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, box, from_wkt, to_wkt, vectorized
 from shapely.ops import unary_union
 from shapely.geometry import shape
 import shapely.affinity
@@ -92,6 +92,31 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def geometry_contains_points(geometry, points):
+    """Return a boolean mask for points contained in geometry.
+
+    Uses shapely vectorized predicates when available to avoid creating
+    one Point object per grid coordinate.
+    """
+    if points is None or len(points) == 0:
+        return np.array([], dtype=bool)
+
+    x_coords = points[:, 0]
+    y_coords = points[:, 1]
+
+    try:
+        return np.asarray(shapely.contains_xy(geometry, x_coords, y_coords), dtype=bool)
+    except Exception:
+        try:  # type: ignore[attr-defined]
+            return np.asarray(vectorized.contains(geometry, x_coords, y_coords), dtype=bool)
+        except Exception:
+            return np.fromiter(
+                (geometry.contains(Point(x, y)) for x, y in points),
+                dtype=bool,
+                count=len(points),
+            )
 
 
 def ensure_output_dir_for_file(filepath):
@@ -150,16 +175,16 @@ def is_valid_geom(geom):
             logger.debug("Geometry is None")
             return False
         if not geom.is_valid:
-            logger.warning(f"Invalid geometry topology: {geom.geom_type}")
+            logger.debug(f"Invalid geometry topology: {geom.geom_type}")
             return False
         coords = list(geom.coords) if hasattr(geom, "coords") else []
         for x, y in coords:
             if not np.isfinite(x) or not np.isfinite(y):
-                logger.warning(f"Non-finite coordinates in {geom.geom_type}: x={x}, y={y}")
+                logger.debug(f"Non-finite coordinates in {geom.geom_type}: x={x}, y={y}")
                 return False
         return True
     except Exception as e:
-        logger.warning(f"Exception during geometry validation: {e}")
+        logger.debug(f"Exception during geometry validation: {e}")
         return False
     
 def drop_duplicates(df, col):
@@ -209,10 +234,10 @@ def buffer_geometry(geom):
             buffered = geom.buffer(0)
             return buffered
         except Exception as e:
-            logger.warning(f"Error buffering geometry: {e}")
+            logger.debug(f"Error buffering geometry: {e}")
             return geom
     else:
-        logger.warning(f"Unknown geometry type in buffer_geometry: {type(geom)}")
+        logger.debug(f"Unknown geometry type in buffer_geometry: {type(geom)}")
         return geom
     
 def create_centroid_points(row):
@@ -242,7 +267,7 @@ def create_centroid_points(row):
         if centroid.is_valid and not centroid.is_empty:
             return centroid
         else:
-            logger.warning(f"Invalid centroid for {geom.geom_type} geometry")
+            logger.debug(f"Invalid centroid for {geom.geom_type} geometry")
             return None
     else:
         logger.debug(f"Unsupported geometry type for centroid: {type(geom).__name__}")
@@ -551,7 +576,7 @@ def estimate_utm_crs(gdf):
     ]
     
     if valid_geoms.empty:
-        logger.warning("No valid geometries available to estimate UTM CRS. Falling back to Web Mercator (3857).")
+        logger.info("No valid geometries available to estimate UTM CRS. Falling back to Web Mercator (3857).")
         return CRS.from_epsg(3857)
     
     centroid = valid_geoms.unary_union.centroid
@@ -573,7 +598,7 @@ def estimate_utm_crs(gdf):
                 logger.debug(f"Found valid {geom.geom_type} with centroid: lon={lon:.4f}, lat={lat:.4f}")
                 break
         if check:
-            logger.warning("Centroid has non-finite coordinates (inf or NaN). Falling back to Web Mercator (3857).")
+            logger.info("Centroid has non-finite coordinates (inf or NaN). Falling back to Web Mercator (3857).")
             return CRS.from_epsg(3857)
 
     zone = int((lon + 180) / 6) + 1
@@ -583,7 +608,7 @@ def estimate_utm_crs(gdf):
         epgs = CRS.from_epsg(epsg)
         return epgs
     except Exception as err:
-        logger.warning(f'Failed to create UTM CRS EPSG:{epsg}: {err}. Falling back to Web Mercator (3857)')
+        logger.info(f'Failed to create UTM CRS EPSG:{epsg}: {err}. Falling back to Web Mercator (3857)')
         return CRS.from_epsg(3857)
 
 def calculate_area(df, only_round=False):
@@ -1969,7 +1994,8 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     # Create 2D mesh grid
     xv, yv = np.meshgrid(x_coords, y_coords)
     # Flatten to list of (x, y) coordinate pairs
-    grid_points = np.stack([xv, yv], axis=-1).reshape(-1, 2)
+    grid_points = np.column_stack((xv.ravel(), yv.ravel()))
+    del xv, yv
     grid_minx = x_coords[0]
     grid_miny = y_coords[0]
 
@@ -1982,18 +2008,23 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     # Extract only points that are inside the clipping boundary
     # Assign each grid point to its nearest weighted site
     # This is the core Voronoi computation step
-    mask = np.array([actual_clipping_object.contains(Point(p)) for p in grid_points])
+    mask = geometry_contains_points(actual_clipping_object, grid_points)
     valid_points = grid_points[mask]
+    valid_flat_indices = np.flatnonzero(mask)
+    del grid_points
     assignments = assign_sites_streaming(valid_points, points, weights, distance_fn, factor)
+    assignment_grid = np.full(mask.shape, -1, dtype=np.int32)
+    assignment_grid[valid_flat_indices] = assignments
+    assignment_grid_2d = assignment_grid.reshape(len(y_coords), len(x_coords))
+    del assignment_grid, valid_flat_indices, valid_points
     
     # === PHASE 9: REGION BOUNDARY EXTRACTION ===
     # Build Voronoi region polygon for each site
     region_polygons = []
     df.reset_index(drop=True, inplace=True)
     for point, (i, row) in zip(points, df.iterrows()):
-        # Extract grid points assigned to this site
-        region_points = valid_points[assignments == i]
-        if len(region_points) == 0:
+        assigned_to_site = assignments == i
+        if not np.any(assigned_to_site):
             # No points assigned to this site: create empty region placeholder
             region_polygons.append({'WASTE_ID':row['WASTE_ID'], 'geometry':None})
             continue
@@ -2001,9 +2032,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         # === CONTOUR EXTRACTION ===
         # Create 2D binary mask indicating which grid points belong to this site
         # Reshape 1D mask back to 2D grid for contour detection
-        region_mask = np.zeros_like(mask, dtype=bool)
-        region_mask[np.where(mask)[0][assignments == i]] = True
-        region_mask_2d = region_mask.reshape(len(y_coords), len(x_coords))
+        region_mask_2d = assignment_grid_2d == i
         
         # Extract contours (region boundaries) from binary mask using selected method:
         # Different contour extraction algorithms have different speed/accuracy tradeoffs
@@ -2027,6 +2056,8 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         else:
             # No contours found for this site
             region_polygons.append({'WASTE_ID':row['WASTE_ID'], 'geometry': None})
+
+    del assignment_grid_2d, assignments, mask
 
     # === PHASE 10: GEODATAFRAME CONVERSION & DEDUPLICATION ===
     # Convert region list to DataFrame for further processing
@@ -2231,84 +2262,118 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
     df_groups = {str(k): v for k, v in df.groupby(col)}
     clip_groups = {str(k): v for k, v in clipping.groupby(col)} if clipping is not None else {}
 
-    args = []
-    skipped_count = 0
-    for key, sub_df in df_groups.items():
-        # For each group, perform weight normalization and outlier clipping before Voronoi generation
-        # Each group will be projected to the appropriate UTM CRS for accurate area calculation and Voronoi generation
-        # the clipping geometry for each group will also be projected to the same UTM CRS for accurate clipping during Voronoi generation
-        if sub_df is None or sub_df.empty or 'ISO_2' not in sub_df:
-            continue
-        
-        # Calculate area for weight normalization and outlier clipping
-        sub_df = calculate_area(sub_df, only_round)
-        sub_df = create_weights(sub_df, sigma, percent_threshold, method)
-        
-        # Estimate UTM CRS for this group based on geometry centroid for accurate distance calculations in Voronoi
-        # and apply it to both the sites and the clipping geometry for this group   
-        utm_crs = estimate_utm_crs(sub_df)
-        if utm_crs is None:
-            logger.debug(f"Group {key}: Could not estimate UTM CRS, skipping")
-            skipped_count += 1
-            continue
+    task_stats = {
+        'generated': 0,
+        'skipped_groups': 0,
+    }
 
-        sub_df = sub_df.to_crs(utm_crs)
-        logger.debug(f"Group {key}: {len(sub_df)} sites after area calculation and CRS conversion")
-        sub_df = drop_duplicates(drop_duplicates(sub_df, 'WASTE_ID'), 'geometry')
-        if sub_df is None or sub_df.empty:
-            continue
-        
-        # Get corresponding clipping geometry for this group if available
-        sub_clip = clip_groups.get(key, None)
-        if sub_clip is not None and not sub_clip.empty:
-            if sub_clip.crs is None:
-                sub_clip = sub_clip.set_crs(4326)
-            sub_clip = sub_clip.to_crs(utm_crs)
-            sub_clip = drop_duplicates(drop_duplicates(sub_clip, col), 'geometry')
+    def iter_voronoi_args(batch_size):
+        batch = []
 
-        # Get corresponding country boundary for this group if available
-        country_iso_2 = []
-        country_clip = None
-        if not sub_df.empty and 'ISO_2' in sub_df:
-            iso2_series = sub_df['ISO_2'].dropna()
-            if not iso2_series.empty:
-                unique_vals = iso2_series.unique().tolist()
-                if unique_vals:
-                    country_iso_2 = unique_vals
+        for key, sub_df in df_groups.items():
+            # For each group, perform weight normalization and outlier clipping before Voronoi generation
+            # Each group will be projected to the appropriate UTM CRS for accurate area calculation and Voronoi generation
+            # the clipping geometry for each group will also be projected to the same UTM CRS for accurate clipping during Voronoi generation
+            if sub_df is None or sub_df.empty or 'ISO_2' not in sub_df:
+                continue
 
-        if len(country_iso_2) > 0:
-            country_clip = country_df[country_df['country'].isin(country_iso_2)]
-            if country_clip is not None and not country_clip.empty:
-                if country_clip.crs is None:
-                    country_clip = country_clip.set_crs(4326)
-                country_clip = country_clip.to_crs(utm_crs)
+            # Calculate area for weight normalization and outlier clipping
+            sub_df = calculate_area(sub_df, only_round)
+            sub_df = create_weights(sub_df, sigma, percent_threshold, method)
 
-        # If no country clipping is needed, pass the entire sub_df to the worker.
-        # Otherwise, create separate tasks for each country within the group.
-        if country_clip is None:
-            args.append((sub_df, col, country_clip, scale_weights, sub_clip, n_points, distance_fn, scipy_true, cv2_true, centroid_points, points_col, buffering, buffer, threshold))
-        else:
-            for country in country_iso_2:
-                args.append((sub_df[sub_df['ISO_2'] == country].copy().reset_index(drop=True),
-                            col, country_clip[country_clip['country'] == country].copy().reset_index(drop=True),
-                            scale_weights, sub_clip, n_points, distance_fn, scipy_true, cv2_true,
-                            centroid_points, points_col, buffering, buffer, threshold)
-                            )
-                
-    with Pool(processes=workers) as pool:
-        results = pool.map(voronoi_worker, args)
+            # Estimate UTM CRS for this group based on geometry centroid for accurate distance calculations in Voronoi
+            # and apply it to both the sites and the clipping geometry for this group
+            utm_crs = estimate_utm_crs(sub_df)
+            if utm_crs is None:
+                logger.debug(f"Group {key}: Could not estimate UTM CRS, skipping")
+                task_stats['skipped_groups'] += 1
+                continue
+
+            sub_df = sub_df.to_crs(utm_crs)
+            logger.debug(f"Group {key}: {len(sub_df)} sites after area calculation and CRS conversion")
+            sub_df = drop_duplicates(drop_duplicates(sub_df, 'WASTE_ID'), 'geometry')
+            if sub_df is None or sub_df.empty:
+                continue
+
+            # Get corresponding clipping geometry for this group if available
+            sub_clip = clip_groups.get(key, None)
+            if sub_clip is not None and not sub_clip.empty:
+                if sub_clip.crs is None:
+                    sub_clip = sub_clip.set_crs(4326)
+                sub_clip = sub_clip.to_crs(utm_crs)
+                sub_clip = drop_duplicates(drop_duplicates(sub_clip, col), 'geometry')
+
+            # Get corresponding country boundary for this group if available
+            country_iso_2 = []
+            country_clip = None
+            if not sub_df.empty and 'ISO_2' in sub_df:
+                iso2_series = sub_df['ISO_2'].dropna()
+                if not iso2_series.empty:
+                    unique_vals = iso2_series.unique().tolist()
+                    if unique_vals:
+                        country_iso_2 = unique_vals
+
+            if len(country_iso_2) > 0:
+                country_clip = country_df[country_df['country'].isin(country_iso_2)]
+                if country_clip is not None and not country_clip.empty:
+                    if country_clip.crs is None:
+                        country_clip = country_clip.set_crs(4326)
+                    country_clip = country_clip.to_crs(utm_crs)
+
+            # If no country clipping is needed, pass the entire sub_df to the worker.
+            # Otherwise, create separate tasks for each country within the group.
+            if country_clip is None:
+                task_stats['generated'] += 1
+                task = (sub_df, col, country_clip, scale_weights,
+                        sub_clip, n_points, distance_fn, scipy_true,
+                        cv2_true, centroid_points, points_col, buffering,
+                        buffer, threshold,)
+                batch.append(task)
+            else:
+                for country in country_iso_2:
+                    country_sub_df = sub_df[sub_df['ISO_2'] == country].copy().reset_index(drop=True)
+                    if country_sub_df.empty:
+                        continue
+                    country_sub_clip = country_clip[country_clip['country'] == country].copy().reset_index(drop=True)
+                    task_stats['generated'] += 1
+                    task = (country_sub_df, col, country_sub_clip,
+                            scale_weights, sub_clip, n_points, distance_fn,
+                            scipy_true, cv2_true, centroid_points, points_col,
+                            buffering, buffer, threshold,)
+                    batch.append(task)
+
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch
 
     df_waste_all = []
     region_df_all = []
     point_df_all = []
-    logger.debug(f"Processing {len(results)} Voronoi results from parallel workers")
-    for result in results:
-        if result is None:
-            continue
-        df_waste, region_df, point_df = result
-        df_waste_all.append(df_waste)
-        region_df_all.append(region_df)
-        point_df_all.append(point_df)
+
+    processed_results = 0
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for batch in iter_voronoi_args(batch_size=workers):
+            for result in executor.map(voronoi_worker, batch):
+                if result is None:
+                    continue
+                df_waste, region_df, point_df = result
+                df_waste_all.append(df_waste)
+                region_df_all.append(region_df)
+                point_df_all.append(point_df)
+                processed_results += 1
+
+    if task_stats['generated'] == 0:
+        logger.warning("No Voronoi tasks were generated")
+    else:
+        logger.debug(
+            "Processed %s Voronoi task results (generated=%s, skipped_groups=%s)",
+            processed_results,
+            task_stats['generated'],
+            task_stats['skipped_groups'],
+        )
 
     df_waste_final = finalize_gdf(df_waste_all, df.columns)
     region_df_final = finalize_gdf(region_df_all, df.columns)
