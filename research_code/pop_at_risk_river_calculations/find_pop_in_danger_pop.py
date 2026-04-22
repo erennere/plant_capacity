@@ -40,7 +40,7 @@ def finding_tiles(polygon, zoom_level):
         List of strings in format 'x-y-z' for all intersecting tiles.
     """
     bbox = polygon.bounds
-    tiles = [f'{int(tile.x)}-{int(tile.y)}-{int(tile.z)}' for tile in mercantile.tiles(*bbox, zoom_level)]
+    tiles = [f'{int(tile.x)}-{int(tile.y)}-{int(tile.z)}' for tile in mercantile.tiles(*bbox, zooms=zoom_level)]
     logger.debug(f"Urban area intersects {len(tiles)} tiles at zoom level {zoom_level}")
     return tiles
 
@@ -53,7 +53,7 @@ def find_bbox(tile):
     """
     return box(*mercantile.bounds(*map(int, tile.split('-'))))
 
-def find_tiles_in_a_country(country_polygon, country, zoom_level):
+def find_tiles_in_a_country(country_polygon, country, country_id_col, zoom_level):
     """Find all XYZ tiles that intersect a country's polygon.
     
     Args:
@@ -68,22 +68,23 @@ def find_tiles_in_a_country(country_polygon, country, zoom_level):
     logger.info(f"Country intersects {len(tiles)} tiles at zoom level {zoom_level}")
     gdf = gpd.GeoDataFrame({'tile': tiles, 'geometry': bboxes}, crs=4326)
     gdf = gdf.clip(country_polygon)
-    gdf['ISO_2'] = country
+    gdf[country_id_col] = country
     return gdf
 
-def find_tiles_in_countries(countries_gdf, zoom_level, max_workers=4):
+def find_tiles_in_countries(countries_gdf, zoom_level, country_id_col, max_workers=4):
     """Find all XYZ tiles that intersect multiple countries.
     
     Args:
         countries_gdf: GeoDataFrame with country geometries and ISO_2 codes.
         zoom_level: Zoom level for tile calculation.
+        country_id_col: Column name in countries_gdf that contains the country identifier.
     
     Returns:
         GeoDataFrame with tiles and their corresponding geometries for all countries.
     """
     all_tiles = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(find_tiles_in_a_country, row['geometry'], row['ISO_2'], zoom_level) for _, row in countries_gdf.iterrows()]
+        futures = [executor.submit(find_tiles_in_a_country, row['geometry'], row[country_id_col], country_id_col, zoom_level) for _, row in countries_gdf.iterrows()]
         for future in as_completed(futures):
             all_tiles.append(future.result())
     if all_tiles:
@@ -91,7 +92,7 @@ def find_tiles_in_countries(countries_gdf, zoom_level, max_workers=4):
         return pd.concat(all_tiles, ignore_index=True)
     else:
         logger.warning("No tiles found for any country.")
-        return pd.DataFrame(columns=['tile', 'geometry', 'ISO_2'])
+        return pd.DataFrame(columns=['tile', 'geometry', country_id_col])
     
 def assign_tile_to_df_worker(df, zoom_level):
     """Assign one dataframe chunk to intersecting tiles and clip each row to tile bounds."""
