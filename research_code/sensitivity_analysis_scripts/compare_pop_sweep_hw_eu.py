@@ -15,6 +15,7 @@ CSV outside the plots so charts remain readable when many files are compared.
 import logging
 import os
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import geopandas as gpd
@@ -37,6 +38,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+_REF_GDF = None
+_THRESHOLD = None
 
 
 def parse_pop_output_path(filepath):
@@ -217,47 +222,76 @@ def compute_sensitivity_metrics(df, prediction_col, reference_col):
     }
 
 
-def build_summary_table(records, ref_gdf, threshold):
-    """Compute one-row-per-file-per-source summary using the latest available year."""
+def _init_summary_worker(eu_ref_filepath, eu_utm, factor, threshold):
+    """Initialize process-local references for per-file metric computation."""
+    global _REF_GDF, _THRESHOLD
+    ref_gdf = gpd.read_file(eu_ref_filepath)
+    ref_gdf = ref_gdf.to_crs(eu_utm)
+    ref_gdf["POP_SERVED_EU"] = factor * ref_gdf["uwwCapacity"]
+    _REF_GDF = ref_gdf
+    _THRESHOLD = threshold
+
+
+def _process_single_record(record):
+    """Compute HW/EU metric rows for one pop-output record."""
+    gdf = gpd.read_file(record["filepath"])
+
+    year, year_col = get_latest_year_column(gdf)
+    if year is None or year_col is None:
+        return []
+
+    hw_subset = gdf.copy()
+    if "QUAL_POP" in hw_subset.columns:
+        hw_subset = hw_subset[hw_subset["QUAL_POP"] == 1].copy()
+    hw_metrics = compute_sensitivity_metrics(hw_subset, year_col, "POP_SERVED")
+
+    eu_subset = assign_to_nearest(gdf.copy(), _REF_GDF, _THRESHOLD)
+    if "uwwCapacity" in eu_subset.columns:
+        eu_subset = eu_subset[eu_subset["uwwCapacity"].notna()].reset_index(drop=True)
+    eu_metrics = compute_sensitivity_metrics(eu_subset, year_col, "POP_SERVED_EU")
+
+    rows = []
+    for source, metric_block in (("HW", hw_metrics), ("EU", eu_metrics)):
+        row = {
+            "alias": record["alias"],
+            "filepath": record["filepath"],
+            "filename": record["filename"],
+            "version": record["version"],
+            "level": record["level"],
+            "buffer": record["buffer"],
+            "weight_type": record["weight_type"],
+            "weight_func": record["weight_func"],
+            "approach": record["approach"],
+            "only_round": record["only_round"],
+            "source": source,
+            "year": year,
+        }
+        row.update(metric_block)
+        rows.append(row)
+    return rows
+
+
+def build_summary_table(records, eu_ref_filepath, eu_utm, threshold, factor=1, max_workers=None):
+    """Compute one-row-per-file-per-source summary using parallel file processing."""
     rows = []
     total = len(records)
 
-    for i, record in enumerate(records, start=1):
-        logger.info("[%d/%d] Processing %s", i, total, record["filename"])
-        gdf = gpd.read_file(record["filepath"])
+    if max_workers is None:
+        max_workers = max(1, os.cpu_count() or 1)
 
-        year, year_col = get_latest_year_column(gdf)
-        if year is None or year_col is None:
-            logger.warning("No usable *_zonal_sum column in %s", record["filepath"])
-            continue
-
-        hw_subset = gdf.copy()
-        if "QUAL_POP" in hw_subset.columns:
-            hw_subset = hw_subset[hw_subset["QUAL_POP"] == 1].copy()
-        hw_metrics = compute_sensitivity_metrics(hw_subset, year_col, "POP_SERVED")
-
-        eu_subset = assign_to_nearest(gdf.copy(), ref_gdf, threshold)
-        if "uwwCapacity" in eu_subset.columns:
-            eu_subset = eu_subset[eu_subset["uwwCapacity"].notna()].reset_index(drop=True)
-        eu_metrics = compute_sensitivity_metrics(eu_subset, year_col, "POP_SERVED_EU")
-
-        for source, metric_block in (("HW", hw_metrics), ("EU", eu_metrics)):
-            row = {
-                "alias": record["alias"],
-                "filepath": record["filepath"],
-                "filename": record["filename"],
-                "version": record["version"],
-                "level": record["level"],
-                "buffer": record["buffer"],
-                "weight_type": record["weight_type"],
-                "weight_func": record["weight_func"],
-                "approach": record["approach"],
-                "only_round": record["only_round"],
-                "source": source,
-                "year": year,
-            }
-            row.update(metric_block)
-            rows.append(row)
+    with ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_init_summary_worker,
+        initargs=(eu_ref_filepath, eu_utm, factor, threshold),
+    ) as executor:
+        futures = {executor.submit(_process_single_record, record): record for record in records}
+        for i, future in enumerate(as_completed(futures), start=1):
+            record = futures[future]
+            logger.info("[%d/%d] Processing %s", i, total, record["filename"])
+            try:
+                rows.extend(future.result())
+            except Exception as err:
+                logger.warning("Failed to process %s: %s", record["filepath"], err)
 
     summary = pd.DataFrame(rows)
     if summary.empty:
@@ -419,6 +453,7 @@ def main():
     eu_utm = cfg.get("eu_utm", 32634)
     factor = 1
     eu_ref_filepath = cfg["paths"]["eu_ref_filepath"]
+    max_workers = cfg.get("max_workers", max(1, os.cpu_count() or 1))
 
     out_dir = os.path.join(data_dir, "sensitivity", "hw_eu_pop_sweep")
     os.makedirs(out_dir, exist_ok=True)
@@ -434,11 +469,14 @@ def main():
     alias_df.to_csv(alias_map_path, index=False)
     logger.info("Saved alias map: %s", alias_map_path)
 
-    ref_gdf = gpd.read_file(eu_ref_filepath)
-    ref_gdf = ref_gdf.to_crs(eu_utm)
-    ref_gdf["POP_SERVED_EU"] = factor * ref_gdf["uwwCapacity"]
-
-    summary_df = build_summary_table(records, ref_gdf, threshold)
+    summary_df = build_summary_table(
+        records,
+        eu_ref_filepath,
+        eu_utm,
+        threshold,
+        factor=factor,
+        max_workers=max_workers,
+    )
     if summary_df.empty:
         logger.warning("No sensitivity metrics generated from input files.")
         return
