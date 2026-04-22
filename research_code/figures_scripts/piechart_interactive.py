@@ -80,7 +80,7 @@ def main():
     cfg = load_config(**overrides)
 
     # Path Setup
-    approach = cfg['figures']['approach']
+    approach = str(cfg['figures']['approach'])
     pop_fp = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     boundaries_fp = cfg['paths']['country_boundaries_filepath']
     stats_fp = cfg['paths']['csv_output_filepath']

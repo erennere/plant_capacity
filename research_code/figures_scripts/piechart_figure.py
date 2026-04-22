@@ -134,7 +134,7 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
 
-    approach = cfg['figures']['approach']
+    approach = str(cfg['figures']['approach'])
     boundaries_filepath = cfg['paths']['country_boundaries_filepath']
     pop_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     stats_filepath = cfg['paths']['raster_country_stats_filepath']

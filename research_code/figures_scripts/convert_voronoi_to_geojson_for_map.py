@@ -23,7 +23,7 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
 
-    approach = cfg['figures']['approach']
+    approach = str(cfg['figures']['approach'])
     input_filepath = create_pop_output_paths(cfg)['voronoi'][approach]
     gdf = gpd.read_file(input_filepath, columns=['geometry', 'total_area', 'round_area'])
     gdf['geometry'] = gdf.geometry.apply(lambda geom: geom.centroid if pd.notna(geom) else None)
