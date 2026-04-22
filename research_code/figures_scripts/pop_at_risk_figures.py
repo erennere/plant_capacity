@@ -269,6 +269,7 @@ def main():
     max_workers = 8
     zoom_level = int(cfg['zoom_level'])
     needed_cols = ['tile', 'pop_sum']
+    pop_threshold = 100
 
     #pop_at_risk_gdf = gpd.read_parquet(cfg['paths']['pop_at_risk_output_filepath'])
     pop_at_risk_gdf = gpd.read_parquet("/mnt/sds-hd/sd17f001/eren/plant-capacity/data/pop_at_risk_pop.parquet")
@@ -277,7 +278,7 @@ def main():
 
     #unserved_df = cfg['paths']['raster_country_stats_filepath'
     unserved_df_filepath = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/non_served_areas.csv"
-    unserved_df = duckdb.sql(f"""SELECT {', '.join(needed_cols)} FROM '{unserved_df_filepath}'""").to_df()
+    unserved_df = duckdb.sql(f"""SELECT {', '.join(needed_cols)} FROM '{unserved_df_filepath}' WHERE pop_sum > {pop_threshold}""").to_df()
     unserved_df = unserved_df.groupby('tile', as_index=False)['pop_sum'].sum()
     tiles_gdf = pd.merge(tiles_gdf, unserved_df, on='tile', how='left') 
     create_single_plot(

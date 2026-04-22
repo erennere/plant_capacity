@@ -149,7 +149,7 @@ booleans:
 
 figures:
   pop_threshold: 1000  # Minimum population served to include a plant in figure outputs.
-  approach: 3a  # Voronoi approach ID used for figure generation scripts.
+  approach: 1  # Voronoi approach ID used for figure generation scripts.
 
 credentials:
  s3_access_key_id: "lymqeBSuT1dt9FhcUv3z"
