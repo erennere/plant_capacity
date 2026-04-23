@@ -236,6 +236,7 @@ def load_config(
         buffer_path_token = f"k{str(dynamic_buffer_k).replace('.', '_')}"
     else:
         buffer_path_token = str(int(buffer))
+    industrial_min_cells = str(cfg['params'].get('industrial_min_cells', 100))
 
     def f(path):
         return path.format(
@@ -250,7 +251,8 @@ def load_config(
             dl_dir=dl_dir,
             weight_type=weight_type,
             weight_func=weight_func_suffix,
-            figures_dir=figures_dir
+            figures_dir=figures_dir,
+            industrial_min_cells=industrial_min_cells
         )
 
     paths = {
@@ -303,7 +305,7 @@ def load_config(
         "impact_pop_polygons_outpath": f(cfg['paths']['impact_pop_polygons_outpath']),
         "industrial_areas_temp_db_path" : f(cfg['paths']['industrial_areas_temp_db_path']),
         "industrial_areas_ohsome_parquet_filepath": f(cfg['paths']['industrial_areas_ohsome_parquet_filepath']),
-        "industrial_raster_temp_dir": f(cfg['paths']['industrial_raster_temp_dir']),
+        "industrial_raster_persistent_dir": f(cfg['paths']['industrial_raster_persistent_dir']),
         "industrial_merged_gpkg": f(cfg['paths']['industrial_merged_gpkg']),
         "industrial_unconnected_output": f(cfg['paths']['industrial_unconnected_output']),
         "seg_results_filepath": f(cfg['paths']['seg_results_filepath']),
@@ -318,7 +320,9 @@ def load_config(
         "country_boundaries_filepath": f(cfg['paths']['country_boundaries_filepath']),
         "interactive_piechart_html_filepath": f(cfg['paths']['interactive_piechart_html_filepath']),
         "static_piechart_filepath": f(cfg['paths']['static_piechart_filepath']),
-        "leaflet_geojson_filepath": f(cfg['paths']['leaflet_geojson_filepath'])
+        "leaflet_geojson_filepath": f(cfg['paths']['leaflet_geojson_filepath']),
+        "composite_histogram_filepath": f(cfg['paths']['composite_histogram_filepath']),
+        "composite_scatter_filepath": f(cfg['paths']['composite_scatter_filepath'])
     }
 
     # Normalize all configured filesystem paths once at load time.
@@ -364,6 +368,7 @@ def load_config(
         "zoom_level": cfg["params"]["zoom_level"],
         "remove_industrial": flags['remove_industrial'],  
         "industrial_category_numbers": cfg['params']['industrial_category_numbers'],
+        "zonal_sum_default_column": cfg['params'].get('zonal_sum_default_column', '2024_zonal_sum'),
         "basin_column_name": cfg['params'].get('basin_column_name', 'HYBAS_ID'),
         "min_pixels": cfg['params']['min_pixels'],
         "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],
@@ -380,4 +385,6 @@ def load_config(
         "dynamic_buffer_k": float(dynamic_buffer_k) if dynamic_buffer_k is not None else None,
         "min_buffer": cfg['params'].get('min_buffer', 2000),
         "industrial_zenodo_url": cfg['params'].get('industrial_zenodo_url', 'https://zenodo.org/records/14832219/files/Industrial_land_10m_1093cities_2023.zip'),
+        "industrial_min_cells": cfg['params'].get('industrial_min_cells', 100),
+        "industrial_persist_rasters": cfg['params'].get('industrial_persist_rasters', False),
     }

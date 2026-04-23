@@ -45,7 +45,7 @@ def calculate_size(value, min_value, max_value, min_size, max_size):
     return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
 
 
-def ensure_population_percentage_column(df, preferred_col="population_served_index"):
+def ensure_population_percentage_column(df, preferred_col="population_served_index", zonal_sum_col="2024_zonal_sum"):
     """Ensure a population-served percentage column exists and return its name."""
     if preferred_col in df.columns:
         return preferred_col
@@ -58,17 +58,40 @@ def ensure_population_percentage_column(df, preferred_col="population_served_ind
         return preferred_col
 
     # Secondary fallback: use aggregated latest zonal sum as served estimate.
-    if {'2024_zonal_sum_sum', 'population_total'}.issubset(df.columns):
+    zonal_sum_sum_col = f"{zonal_sum_col}_sum"
+    if {zonal_sum_sum_col, 'population_total'}.issubset(df.columns):
         denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
-        num = pd.to_numeric(df['2024_zonal_sum_sum'], errors='coerce')
+        num = pd.to_numeric(df[zonal_sum_sum_col], errors='coerce')
         df[preferred_col] = (num / denom).fillna(0)
         return preferred_col
 
     raise KeyError(
         "Could not derive population-served percentage. Expected one of: "
         "'population_served_index', ('population_served' + 'population_total'), "
-        "or ('2024_zonal_sum_sum' + 'population_total')."
+        f"or ('{zonal_sum_sum_col}' + 'population_total')."
     )
+
+
+def resolve_zonal_sum_column(df, preferred):
+    """Resolve preferred zonal-sum column with fallback to latest available year."""
+    if preferred in df.columns:
+        return preferred
+
+    candidate_cols = []
+    for col in df.columns:
+        if not col.endswith('_zonal_sum'):
+            continue
+        try:
+            year = int(col.split('_')[0])
+        except (ValueError, IndexError):
+            year = -1
+        candidate_cols.append((year, col))
+
+    if not candidate_cols:
+        raise KeyError("No '*_zonal_sum' column found in population layer.")
+
+    candidate_cols.sort(key=lambda x: x[0])
+    return candidate_cols[-1][1]
 
 def get_pie_svg(res_vals, ind_vals, size_px):
     """Return an inline SVG donut chart for one country marker.
@@ -109,8 +132,7 @@ def main():
     approach = str(cfg['figures']['approach'])
     pop_fp = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     boundaries_fp = cfg['paths']['country_boundaries_filepath']
-    # stats_fp = cfg['paths']['raster_country_stats_filepath']
-    stats_fp = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/raster_country_stats.csv"
+    stats_fp = cfg['paths']['raster_country_stats_filepath']
 
     pop_col, ind_col = 'population_served_index', 'IND/RES'
     tag1, tag2, agg_t = 'round_area', 'wwtp_area_rect_2', 'sum'
@@ -120,8 +142,9 @@ def main():
     boundaries['country'] = boundaries['ISO_A2_EH']
     pop_gdf = gpd.read_file(pop_fp).to_crs("EPSG:4326")
     pop_gdf['country'] = pop_gdf['ISO_2']
-    agg_col = '2024_zonal_sum'
-    alias = 'Pop (2024):'
+    agg_col = resolve_zonal_sum_column(pop_gdf, cfg.get('zonal_sum_default_column', '2024_zonal_sum'))
+    agg_year = agg_col.split('_')[0]
+    alias = f'Pop ({agg_year}):'
     
     # Clean population for Voronoi tooltips
     pop_gdf[agg_col] = pop_gdf[agg_col].fillna(0).round(0)
@@ -143,7 +166,7 @@ def main():
     
     boundaries['total_size'] = boundaries[[f'IND_{tag1}_{agg_t}', f'IND_{tag2}_{agg_t}', 
                                          f'RES_{tag1}_{agg_t}', f'RES_{tag2}_{agg_t}']].sum(axis=1)
-    pop_col = ensure_population_percentage_column(boundaries, pop_col)
+    pop_col = ensure_population_percentage_column(boundaries, pop_col, agg_col)
     boundaries[pop_col] = pd.to_numeric(boundaries[pop_col], errors='coerce').fillna(0) * 100
     
     m = folium.Map(location=[10, 0], zoom_start=3, tiles='CartoDB positron')

@@ -142,7 +142,7 @@ def round_numbers(arr, breaks):
     return rounded
 
 
-def ensure_population_percentage_column(df, preferred_col="population_served_index"):
+def ensure_population_percentage_column(df, preferred_col="population_served_index", zonal_sum_col="2024_zonal_sum"):
     """Ensure a population-served percentage column exists and return its name."""
     if preferred_col in df.columns:
         return preferred_col
@@ -153,17 +153,40 @@ def ensure_population_percentage_column(df, preferred_col="population_served_ind
         df[preferred_col] = (num / denom).fillna(0)
         return preferred_col
 
-    if {'2024_zonal_sum_sum', 'population_total'}.issubset(df.columns):
+    zonal_sum_sum_col = f"{zonal_sum_col}_sum"
+    if {zonal_sum_sum_col, 'population_total'}.issubset(df.columns):
         denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
-        num = pd.to_numeric(df['2024_zonal_sum_sum'], errors='coerce')
+        num = pd.to_numeric(df[zonal_sum_sum_col], errors='coerce')
         df[preferred_col] = (num / denom).fillna(0)
         return preferred_col
 
     raise KeyError(
         "Could not derive population-served percentage. Expected one of: "
         "'population_served_index', ('population_served' + 'population_total'), "
-        "or ('2024_zonal_sum_sum' + 'population_total')."
+        f"or ('{zonal_sum_sum_col}' + 'population_total')."
     )
+
+
+def resolve_zonal_sum_columns(df, preferred):
+    """Resolve preferred zonal-sum column with fallback to latest available year."""
+    if preferred in df.columns:
+        return preferred
+
+    candidate_cols = []
+    for col in df.columns:
+        if not col.endswith('_zonal_sum'):
+            continue
+        try:
+            year = int(col.split('_')[0])
+        except (ValueError, IndexError):
+            year = -1
+        candidate_cols.append((year, col))
+
+    if not candidate_cols:
+        raise KeyError("No '*_zonal_sum' column found in population layer.")
+
+    candidate_cols.sort(key=lambda x: x[0])
+    return candidate_cols[-1][1]
             
 def main():
     """Create the static global WWTP-type summary figure and save it to disk."""
@@ -175,10 +198,10 @@ def main():
     boundaries_filepath = cfg['paths']['country_boundaries_filepath']
     pop_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
     stats_filepath = cfg['paths']['raster_country_stats_filepath']
-    stats_filepath = "/mnt/sds-hd/sd17f001/eren/plant-capacity/data/raster_country_stats.csv"
 
     pop_column = 'population_served_index'
-    filter_col = '2024_zonal_sum'
+    zonal_sum_col = cfg.get('zonal_sum_default_column', '2024_zonal_sum')
+    filter_col = zonal_sum_col
     industrial_col = 'IND/RES'
     tag1 = 'round_area'
     tag2 = 'wwtp_area_rect_2'
@@ -187,10 +210,7 @@ def main():
     agg_type = 'sum'
 
     agg_columns = {
-        True: [ '2024_zonal_sum', '2023_zonal_sum', '2022_zonal_sum', 
-            '2021_zonal_sum', '2020_zonal_sum', '2019_zonal_sum',
-            '2018_zonal_sum', '2017_zonal_sum', '2016_zonal_sum',
-            '2015_zonal_sum', '2014_zonal_sum'],
+        True: [zonal_sum_col],
         False: ['num_detection_circle', 'num_detection_rect', 'total_area', tag1, tag2]}
     
     # Load boundaries
@@ -202,6 +222,9 @@ def main():
     pop_gdf = gpd.read_file(pop_filepath)
     pop_gdf['country'] = pop_gdf['ISO_2']
     pop_gdf = pop_gdf.drop('geometry', axis=1)
+    zonal_sum_col = resolve_zonal_sum_columns(pop_gdf, zonal_sum_col)
+    filter_col = zonal_sum_col
+    agg_columns[True] = [zonal_sum_col]
     #pop_gdf[industrial_col] = np.random.randint(0, 2, len(pop_gdf)).astype(bool)
     pop_gdf[industrial_col] = pop_gdf['category_number'].isin(cfg['industrial_category_numbers'])
 
@@ -226,7 +249,7 @@ def main():
     # Plot boundaries colored by population / WWTP metric
     boundaries = boundaries.drop_duplicates(subset=['country'])
     #boundaries[pop_column] = boundaries[pop_column]/1000
-    pop_column = ensure_population_percentage_column(boundaries, pop_column)
+    pop_column = ensure_population_percentage_column(boundaries, pop_column, zonal_sum_col)
     boundaries[pop_column] = pd.to_numeric(boundaries[pop_column], errors='coerce').fillna(0) * 100
     """     boundaries[boundaries.geometry.notna()].plot(
         ax=ax,

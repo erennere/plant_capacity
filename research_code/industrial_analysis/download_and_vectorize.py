@@ -63,7 +63,7 @@ def download_file(url: str, dest_path: str, chunk_size: int = 8192) -> None:
     logger.info(f"Downloaded to {dest_path}")
 
 
-def vectorize_raster_file(raster_path: str, crs: str = "EPSG:4326") -> gpd.GeoDataFrame:
+def vectorize_raster_file(raster_path: str, crs: str = "EPSG:4326", min_cells: int = 100) -> gpd.GeoDataFrame:
     """
     Vectorize a single raster file to polygons.
     
@@ -73,6 +73,9 @@ def vectorize_raster_file(raster_path: str, crs: str = "EPSG:4326") -> gpd.GeoDa
         Path to the raster file.
     crs : str
         Coordinate reference system for output.
+    min_cells : int
+        Minimum number of connected pixels a polygon must cover to be retained.
+        At 10 m resolution, 100 cells ≈ 1 ha.
     
     Returns
     -------
@@ -87,11 +90,18 @@ def vectorize_raster_file(raster_path: str, crs: str = "EPSG:4326") -> gpd.GeoDa
         data = src.read(1)
         transform = src.transform
         
+        # Minimum area filter: one pixel = |dx| * |dy| in raster native units
+        pixel_area = abs(transform.a) * abs(transform.e)
+        min_area = min_cells * pixel_area
+
         # Extract shapes from raster (convert pixels to polygons)
         for geom, value in shapes(data, transform=transform):
             if value > 0:  # Only keep non-zero pixels
+                geom_shape = shape(geom)
+                if geom_shape.area < min_area:
+                    continue
                 polygons.append({
-                    'geometry': shape(geom),
+                    'geometry': geom_shape,
                     'value': value
                 })
     
@@ -110,7 +120,8 @@ def vectorize_raster_file(raster_path: str, crs: str = "EPSG:4326") -> gpd.GeoDa
 def vectorize_rasters_parallel(
     raster_dir: str,
     max_workers: int = 8,
-    crs: str = "EPSG:4326"
+    crs: str = "EPSG:4326",
+    min_cells: int = 100,
 ) -> List[gpd.GeoDataFrame]:
     """
     Vectorize multiple raster files in parallel.
@@ -140,7 +151,7 @@ def vectorize_rasters_parallel(
     gdfs = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(vectorize_raster_file, str(raster_file), crs)
+            executor.submit(vectorize_raster_file, str(raster_file), crs, min_cells)
             for raster_file in raster_files
         ]
         
@@ -219,94 +230,128 @@ def add_boundary_info(
     return gpd.GeoDataFrame(enriched, geometry="geometry", crs=industrial_gdf.crs)
 
 
+def _find_raster_dirs(base_dir: str) -> List[str]:
+    """Walk *base_dir* and return every subdirectory that contains .tif/.tiff files."""
+    raster_dirs = []
+    for root, _dirs, files in os.walk(base_dir):
+        if any(f.lower().endswith((".tif", ".tiff")) for f in files):
+            raster_dirs.append(root)
+    return raster_dirs
+
+
+def _vectorize_and_merge(raster_dirs: List[str], max_workers: int, min_cells: int) -> gpd.GeoDataFrame:
+    """Vectorize all rasters in *raster_dirs* and dissolve into a single GeoDataFrame."""
+    if not raster_dirs:
+        raise FileNotFoundError("No raster directories found")
+    gdfs = []
+    for raster_dir in raster_dirs:
+        logger.info(f"Vectorizing rasters in directory: {raster_dir}")
+        gdfs.extend(
+            vectorize_rasters_parallel(raster_dir, max_workers=max_workers, crs="EPSG:4326", min_cells=min_cells)
+        )
+    if not gdfs:
+        raise ValueError("Failed to vectorize any raster files")
+    return merge_geodataframes(gdfs)
+
+
 def main():
     """Download, vectorize, and merge industrial land data."""
     overrides = parse_config_overrides(args=None, argv=None, start_index=1)
     cfg = load_config(**overrides)
-    
+
     output_path = cfg['paths']['industrial_merged_gpkg']
     overwrite = cfg.get('industrial_vectorize_overwrite', False)
-    
-    # Check if output exists and overwrite is disabled
+    min_cells = cfg.get('industrial_min_cells', 100)
+    persist_rasters = cfg.get('industrial_persist_rasters', False)
+
+    # Fast exit: final enriched output is already up to date.
     if os.path.exists(output_path) and not overwrite:
         logger.info(f"Output file exists and overwrite=false. Skipping vectorization.")
         return True
-    
-    # Create temp directory for downloads
-    with tempfile.TemporaryDirectory() as temp_dir:
-        zip_path = os.path.join(temp_dir, "industrial_land.zip")
-        extract_dir = os.path.join(temp_dir, "extracted")
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        try:
-            # Download
-            download_file(cfg['industrial_zenodo_url'], zip_path)
-            
-            # Unzip
-            logger.info(f"Extracting to {extract_dir}...")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
-            
-            # Find raster directories (can be multiple nested dirs)
-            raster_dirs = []
-            for root, dirs, files in os.walk(extract_dir):
-                if any(f.lower().endswith((".tif", ".tiff")) for f in files):
-                    raster_dirs.append(root)
 
-            if not raster_dirs:
-                raise FileNotFoundError("No raster files found in extracted archive")
+    # Intermediate file: merged vectorized polygons (pre-enrichment).
+    # Named after min_cells so different thresholds don't clobber each other.
+    industrial_analysis_dir = os.path.dirname(output_path)
+    vectorized_path = os.path.join(industrial_analysis_dir, f"industrial_areas_mp{min_cells}.gpkg")
 
-            logger.info(f"Found {len(raster_dirs)} raster directories")
-
-            # Vectorize all raster directories and concatenate results
-            gdfs = []
-            for raster_dir in raster_dirs:
-                logger.info(f"Vectorizing rasters in directory: {raster_dir}")
-                gdfs.extend(
-                    vectorize_rasters_parallel(
-                        raster_dir,
-                        max_workers=cfg['max_workers'],
-                        crs="EPSG:4326"
-                    )
+    try:
+        # ------------------------------------------------------------------ #
+        # Step 1 – obtain merged_gdf (from cache or fresh vectorization)      #
+        # ------------------------------------------------------------------ #
+        if os.path.exists(vectorized_path) and not overwrite:
+            logger.info(f"Loading cached vectorized polygons from {vectorized_path}")
+            merged_gdf = gpd.read_file(vectorized_path)
+        else:
+            if persist_rasters:
+                # Rasters are kept on disk so future runs can skip download.
+                raster_base_dir = cfg['paths']['industrial_raster_persistent_dir']
+                os.makedirs(raster_base_dir, exist_ok=True)
+                existing = (
+                    list(Path(raster_base_dir).rglob("*.tif"))
+                    + list(Path(raster_base_dir).rglob("*.tiff"))
                 )
-            
-            if not gdfs:
-                raise ValueError("Failed to vectorize any raster files")
-            
-            # Merge
-            merged_gdf = merge_geodataframes(gdfs)
-            
-            # Load watershed geometry for basin attribution
-            logger.info("Loading watershed data...")
-            watershed_gdf = gpd.read_file(
-                cfg['paths']['watershed'],
-                driver='GPKG'
-            )
+                if existing and not overwrite:
+                    logger.info(f"Reusing {len(existing)} existing raster(s) in {raster_base_dir}")
+                else:
+                    zip_path = os.path.join(raster_base_dir, "industrial_land.zip")
+                    download_file(cfg['industrial_zenodo_url'], zip_path)
+                    logger.info(f"Extracting to {raster_base_dir}...")
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(raster_base_dir)
+                raster_dirs = _find_raster_dirs(raster_base_dir)
+            else:
+                # Use a temporary directory; rasters are discarded after vectorization.
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    zip_path = os.path.join(temp_dir, "industrial_land.zip")
+                    extract_dir = os.path.join(temp_dir, "extracted")
+                    os.makedirs(extract_dir, exist_ok=True)
+                    download_file(cfg['industrial_zenodo_url'], zip_path)
+                    logger.info(f"Extracting to {extract_dir}...")
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_dir)
+                    raster_dirs = _find_raster_dirs(extract_dir)
+                    merged_gdf = _vectorize_and_merge(raster_dirs, cfg['max_workers'], min_cells)
 
-            # Add country and watershed attributes without modifying geometry
-            enriched_gdf = add_boundary_info(
-                merged_gdf,
-                watershed_gdf,
-                cfg['paths']['overture'],
-                cfg['paths']['overture_s3_url'],
-                cfg.get('basin_column_name', 'HYBAS_ID'),
-                cfg.get('sindex_concurrency', False),
-            )
-            
-            # Save to GeoPackage
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            
-            logger.info(f"Writing to {output_path}...")
-            enriched_gdf.to_file(output_path, driver='GPKG', index=False)
-            logger.info(f"Successfully created {output_path}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error during vectorization: {e}", exc_info=True)
-            return False
+            if persist_rasters:
+                # _vectorize_and_merge is called outside the with-block for the
+                # persistent-dir branch so the rasters remain accessible.
+                merged_gdf = _vectorize_and_merge(raster_dirs, cfg['max_workers'], min_cells)
+
+            # Save intermediate result so boundary enrichment can be re-run
+            # independently without repeating download + vectorization.
+            os.makedirs(industrial_analysis_dir, exist_ok=True)
+            if os.path.exists(vectorized_path):
+                os.remove(vectorized_path)
+            logger.info(f"Saving vectorized polygons to {vectorized_path}...")
+            merged_gdf.to_file(vectorized_path, driver='GPKG', index=False)
+            logger.info(f"Saved {len(merged_gdf)} feature(s) to {vectorized_path}")
+
+        # ------------------------------------------------------------------ #
+        # Step 2 – enrich with country / basin boundaries                     #
+        # ------------------------------------------------------------------ #
+        logger.info("Loading watershed data...")
+        watershed_gdf = gpd.read_file(cfg['paths']['watershed'], driver='GPKG')
+
+        enriched_gdf = add_boundary_info(
+            merged_gdf,
+            watershed_gdf,
+            cfg['paths']['overture'],
+            cfg['paths']['overture_s3_url'],
+            cfg.get('basin_column_name', 'HYBAS_ID'),
+            cfg.get('sindex_concurrency', False),
+        )
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        logger.info(f"Writing to {output_path}...")
+        enriched_gdf.to_file(output_path, driver='GPKG', index=False)
+        logger.info(f"Successfully created {output_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error during vectorization: {e}", exc_info=True)
+        return False
 
 
 if __name__ == "__main__":

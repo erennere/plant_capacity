@@ -53,8 +53,8 @@ def load_industrial_areas(cfg: dict) -> Optional[gpd.GeoDataFrame]:
     return gdf
 
 
-def load_wwtps(cfg: dict, require_basin: bool = True) -> gpd.GeoDataFrame:
-    """Load WWTP data and optionally add basin information if missing."""
+def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
+    """Load WWTP data and add basin information if missing."""
     path = cfg['paths']['corrected_all_filepath']
     logger.info(f"Loading WTTPs from {path}...")
     
@@ -63,8 +63,8 @@ def load_wwtps(cfg: dict, require_basin: bool = True) -> gpd.GeoDataFrame:
     
     basin_col = cfg.get('basin_column_name', 'HYBAS_ID')
 
-    # For approach 1, basin ids are required. For approach 0 they are not.
-    if require_basin and (basin_col not in gdf.columns or gdf[basin_col].isna().all()):
+    # Check if configured basin column exists; if not, try to add it
+    if approach_id == '1' and (basin_col not in gdf.columns or gdf[basin_col].isna().all()):
         logger.info(f"Basin information '{basin_col}' missing; attempting to add from watershed intersection...")
         watershed_gdf = gpd.read_file(
             cfg['paths']['watershed'],
@@ -99,9 +99,10 @@ def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDa
     
     logger.info(f"Filtering WTTPs by industrial categories: {industrial_categories}")
     
-    # Assume there's a 'category' or 'treatment_type' column
-    mask = wwtps_gdf['category_number'].isin(industrial_categories) | \
-           wwtps_gdf['category_number'].str.contains('mix', case=False, na=False)
+    # category_number may be numeric; cast to str for consistent comparison
+    cat_as_str = wwtps_gdf['category_number'].astype(str)
+    industrial_as_str = [str(c) for c in industrial_categories]
+    mask = cat_as_str.isin(industrial_as_str) | cat_as_str.str.contains('mix', case=False, na=False)
     
     filtered = wwtps_gdf[mask].copy()
     logger.info(f"Filtered to {len(filtered)} industrial/mixed WTTPs (from {len(wwtps_gdf)} total)")
@@ -139,14 +140,14 @@ def run_voronoi_for_wwtps(
     logger.info(f"Running Voronoi diagram orchestration for filtered WTTPs (approach {approach_id} style)...")
 
     basin_col = cfg.get('basin_column_name', 'HYBAS_ID')
+    if basin_col not in wwtps_gdf.columns:
+        raise KeyError(f"Expected basin column '{basin_col}' in WWTP dataframe before Voronoi run.")
+    if basin_col not in watershed_gdf.columns:
+        raise KeyError(f"Expected basin column '{basin_col}' in watershed dataframe.")
 
     scale_weights = cfg['weight_func'] in {'mult', 'add'}
     if approach_id == '1':
         # Match create_voronoi approach 1 setup.
-        if basin_col not in wwtps_gdf.columns:
-            raise KeyError(f"Expected basin column '{basin_col}' in WWTP dataframe before Voronoi run.")
-        if basin_col not in watershed_gdf.columns:
-            raise KeyError(f"Expected basin column '{basin_col}' in watershed dataframe.")
         run_gdf = wwtps_gdf.copy()
         run_gdf['buffer_id'] = run_gdf[basin_col]
         clipping_gdf = watershed_gdf.copy()
@@ -285,7 +286,7 @@ def main():
             logger.error("No industrial areas available; cannot proceed")
             return False
         
-        wwtps_gdf = load_wwtps(cfg, require_basin=(selected_approach == '1'))
+        wwtps_gdf = load_wwtps(cfg, approach_id=selected_approach)
         if wwtps_gdf.empty:
             logger.error("No WTTPs available; cannot proceed")
             return False

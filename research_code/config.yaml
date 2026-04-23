@@ -95,13 +95,15 @@ paths:
   pop_at_risk_output_filepath: "{data_dir}/results_pop_at_risk/v{version}/lvl{level}/bf{buffer}/{weight_type}/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet"
 
   # Industrial analysis module outputs
-  industrial_raster_temp_dir: "{data_dir}/industrial_analysis/temp_rasters"
-  industrial_merged_gpkg: "{data_dir}/industrial_analysis/industrial_land_merged_v{version}_lvl{level}.gpkg"
-  industrial_unconnected_output: "{data_dir}/industrial_results/v{version}/lvl{level}/bf{buffer}/{weight_type}/unconnected_industrial_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg"
+  industrial_raster_persistent_dir: "{data_dir}/industrial_analysis/rasters"  # Used when industrial_persist_rasters=true.
+  industrial_merged_gpkg: "{data_dir}/industrial_analysis/industrial_land_merged_v{version}_lvl{level}_mp{industrial_min_cells}.gpkg"
+  industrial_unconnected_output: "{data_dir}/industrial_results/v{version}/lvl{level}/bf{buffer}/{weight_type}/unconnected_industrial_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}_mp{industrial_min_cells}.gpkg"
 
   interactive_piechart_html_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html"
   static_piechart_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
   leaflet_geojson_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/leaflet_size_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.geojson"
+  composite_histogram_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/composite_histograms_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
+  composite_scatter_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/composite_scatter_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"
 
 s3:
   latest_url: "s3://overturemaps-us-west-2/release/2025-01-22.0"
@@ -125,6 +127,7 @@ params:
   zoom_level: 8  # Tile zoom level for raster/tile-based annotation workflows.
   industrial_category_numbers: []  # Category IDs to treat as industrial-only facilities.
   min_pixels: 9  # Minimum connected pixels to keep in raster-derived features.
+  zonal_sum_default_column: "2024_zonal_sum"  # Default zonal-sum column used by figures/comparison scripts.
   basin_column_name: "HYBAS_ID"  # Column name in watershed file for basin identifier.
   overwrite: false  # Global overwrite flag for generic output writes.
   voronoi_overwrite: false  # Allow overwriting existing Voronoi output files.
@@ -135,6 +138,8 @@ params:
   dynamic_buffer_k: 0.75  # Scale factor applied to nearest-neighbor-based dynamic buffers.
   min_buffer: 2000  # Minimum buffer parameter forwarded to weighted_voronoi.
   industrial_zenodo_url: "https://zenodo.org/records/14832219/files/Industrial_land_10m_1093cities_2023.zip"  # Industrial raster source archive URL.
+  industrial_min_cells: 100  # Minimum connected pixels (cells) a polygon must span to be retained after vectorization. At 10 m resolution, 100 cells ≈ 1 ha.
+  industrial_persist_rasters: false  # If true, rasters are downloaded/extracted to a persistent directory so subsequent runs can skip download. If false, a temp directory is used.
   industrial_vectorize_overwrite: false  # Allow overwriting existing industrial raster vectorization output.
   industrial_unconnected_overwrite: false  # Allow overwriting existing unconnected industrial areas output.
 

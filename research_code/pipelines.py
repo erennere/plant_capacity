@@ -259,8 +259,9 @@ def prepare_data(cfg):
         watershed_gdf.to_file(watershed_gpkg_filepath, driver='GPKG', index=False)
 
     # Add watershed information to WWTP
-    if 'HYBAS_ID' not in gdf_bbox.columns:
-        gdf_bbox = intersect_watershed_sindex(gdf_bbox, watershed_gdf, 'HYBAS_ID', concurrency=cfg['sindex_concurrency'])
+    basin_col = cfg.get('basin_column_name', 'HYBAS_ID')
+    if basin_col not in gdf_bbox.columns:
+        gdf_bbox = intersect_watershed_sindex(gdf_bbox, watershed_gdf, basin_col, concurrency=cfg['sindex_concurrency'])
         gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, 'WASTE_ID'), 'geometry')
         filename = os.path.join(os.path.dirname(paths['bboxes']), f"expanded_{os.path.basename(paths['bboxes'])}")
         if not os.path.exists(f"{filename}"):    
