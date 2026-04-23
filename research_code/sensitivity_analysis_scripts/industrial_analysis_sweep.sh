@@ -12,6 +12,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(pwd)"
+cd "${PROJECT_ROOT}"
 LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_CMD="python"
 DOWNLOAD_SCRIPT="research_code.industrial_analysis.download_and_vectorize"
