@@ -46,7 +46,11 @@ Aim: Attach population values to generated Voronoi layers. Inputs: Voronoi outpu
 Aim: Build one combined watershed dataset from zipped source layers. Inputs: Watershed zip directory and output path config. Outputs: Merged watershed layer. How: It reads each archive, extracts valid geometry layers, harmonizes schema, and writes one unified file.
 
 ### industrial_analysis/download_and_vectorize.py
-Aim: Download and vectorize industrial land rasters, then enrich with country and basin attributes. Inputs: Industrial raster archive URL, watershed layer, country boundaries cache, and config overrides. Outputs: Merged industrial land polygons in GeoPackage format. How: It downloads the archive, vectorizes all nested raster folders in parallel, merges geometries, then transfers boundary attributes without clipping geometry.
+Aim: Download and vectorize industrial land rasters, then enrich with country and basin attributes. Inputs: Industrial raster archive URL, watershed layer, country boundaries cache, and config overrides. Outputs: Merged industrial land polygons in GeoPackage format. How: It downloads the archive, vectorizes all nested raster folders in parallel applying a configurable minimum-cell filter (`industrial_min_cells`), merges geometries, then transfers boundary attributes without clipping geometry.
+
+Caching behavior:
+- The merged pre-enrichment polygons are written to `data/industrial_analysis/industrial_areas_mp{N}.gpkg` (where N = `industrial_min_cells`). On subsequent runs the enrichment step is skipped straight to `add_boundary_info` if this file exists and `industrial_vectorize_overwrite=false`.
+- When `industrial_persist_rasters=true`, rasters are downloaded to `paths.industrial_raster_persistent_dir` and reused on subsequent runs. When `false` (default), a temporary directory is used and rasters are discarded after vectorization.
 
 ### industrial_analysis/find_unconnected_industrial_areas.py
 Aim: Identify industrial polygons not covered by industrial-filtered WWTP Voronoi service regions. Inputs: Merged industrial polygons, corrected WWTP dataset, watershed/country data, and selected approach (0 or 1). Outputs: Unconnected industrial area GeoPackage. How: It filters WWTPs by configured industrial categories, runs Voronoi with create_voronoi-compatible parameters, and keeps industrial polygons outside service regions.

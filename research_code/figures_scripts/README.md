@@ -19,10 +19,10 @@ python -m research_code.figures_scripts.piechart_interactive
 Aim: Convert Voronoi layers into lightweight map-friendly GeoJSON. Inputs: Voronoi geospatial layers and export settings from config. Outputs: GeoJSON files for web map consumption. How: It selects required fields, normalizes geometry/CRS, and writes map-ready outputs.
 
 ### piechart_figure.py
-Aim: Generate static pie-chart summaries for reporting. Inputs: Aggregated pipeline outputs and plotting settings. Outputs: PNG figure files. How: It computes grouped shares and renders styled static charts.
+Aim: Generate static pie-chart summaries for reporting. Inputs: Aggregated pipeline outputs, plotting settings, and `paths.raster_country_stats_filepath` from config. Outputs: PNG figure files. How: It computes grouped shares and renders styled static charts.
 
 ### piechart_interactive.py
-Aim: Generate interactive pie-chart visualizations. Inputs: Aggregated category data and interactive layout settings. Outputs: HTML interactive charts. How: It builds interactive traces/layout and writes standalone HTML pages.
+Aim: Generate interactive pie-chart visualizations. Inputs: Aggregated category data, interactive layout settings, and `paths.raster_country_stats_filepath` from config. Outputs: HTML interactive charts. How: It builds interactive traces/layout and writes standalone HTML pages.
 
 ### composite_area_population_plots.py
 Aim: Generate two composite diagnostic figures for area/population ratios. Inputs: Pop-Voronoi layer selected via create_pop_output_paths, country boundaries, configured zonal-sum default column, and plotting options. Outputs: One histogram composite and one scatter composite image in the standard figures output directory scheme. How: It merges by ISO_2/ISO_A2, computes facility-level and country-level ratios, trims histogram outliers by quantiles, and renders gridded scatter plots with 1:1 dashed lines and ISO labels.

@@ -1986,7 +1986,13 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
                 df['2_nnd'] = np.nan
             df['2_nnd'] = df['2_nnd'].fillna(buffer)
             df['buffer_length'] = np.minimum(df['2_nnd'] * k * np.sqrt(weights), min_buffer)
-
+        else:
+            df['buffer_length'] = buffer
+    else:
+        if dynamic_buffering:
+            df['buffer_length'] = min(buffer * k, min_buffer)
+        else:
+            df['buffer_length'] = buffer
     # === PHASE 4: BUFFERED EXTENT FOR GRID DOMAIN ===
     # The clipping input may contain multiple geometries, so we unify it into
     # a single geometry and ensure it uses the same CRS as the sites.
@@ -1995,7 +2001,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     # We use this same buffered extent to build the Voronoi grid because
     # using a much larger clipping geometry can increase computation cost
     # significantly (approximately O(nm) for grid dimensions n and m).
-    if len(df) > 1 and dynamic_buffering:
+    if dynamic_buffering:
         buffered = df.copy()
         buffered['geometry'] = buffered.apply(lambda row: row.geometry.buffer(row['buffer_length']), axis=1)
     else:
@@ -2040,7 +2046,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
 
         # Optionally intersect region with buffer around site point
         if buffering:
-            point_buffer = geom.centroid.buffer(buffer)
+            point_buffer = geom.centroid.buffer(df.iloc[0]['buffer_length'])
             region_polygons.loc[0, 'geometry'] = region_polygons.loc[0, 'geometry'].intersection(point_buffer).buffer(0)  # type: ignore[union-attr, index]
 
         # Filter sites that appear in final regions
@@ -2122,10 +2128,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
             # Optionally intersect region with buffer around site for local influence zone
             if buffering:
                 point_buffer = None
-                if dynamic_buffering:
-                    point_buffer = Point(point).buffer(row['buffer_length'])
-                else:
-                    point_buffer = Point(point).buffer(buffer)
+                point_buffer = Point(point).buffer(row['buffer_length'])
                 polygons = polygons.intersection(point_buffer).buffer(0)
             region_polygons.append({'WASTE_ID':row['WASTE_ID'], 'geometry': polygons})
         else:

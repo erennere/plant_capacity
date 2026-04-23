@@ -139,7 +139,7 @@ params:
   min_buffer: 2000  # Minimum buffer parameter forwarded to weighted_voronoi.
   industrial_zenodo_url: "https://zenodo.org/records/14832219/files/Industrial_land_10m_1093cities_2023.zip"  # Industrial raster source archive URL.
   industrial_min_cells: 100  # Minimum connected pixels (cells) a polygon must span to be retained after vectorization. At 10 m resolution, 100 cells ≈ 1 ha.
-  industrial_persist_rasters: false  # If true, rasters are downloaded/extracted to a persistent directory so subsequent runs can skip download. If false, a temp directory is used.
+  industrial_persist_rasters: true  # If true, rasters are downloaded/extracted to a persistent directory so subsequent runs can skip download. If false, a temp directory is used.
   industrial_vectorize_overwrite: false  # Allow overwriting existing industrial raster vectorization output.
   industrial_unconnected_overwrite: false  # Allow overwriting existing unconnected industrial areas output.
 
