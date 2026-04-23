@@ -18,7 +18,7 @@ rm -f "${LOG_DIR}/pop_at_risk_figures.log"
 
 #
 # Usage:
-#   ./pop_at_risk_figures.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./pop_at_risk_figures.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level         - Processing level (default: from config.yaml arguments.default_level)
@@ -31,6 +31,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
@@ -40,6 +42,6 @@ log "Installing research_code module"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
 
 log "Running pop_at_risk_figures"
-${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
+${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
 
 log "Completed pop_at_risk_figures"

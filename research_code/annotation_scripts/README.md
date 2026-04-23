@@ -13,6 +13,12 @@ sbatch annotation_scripts/merge_annotations.sh
 sbatch annotation_scripts/annotations_inspection.sh
 ```
 
+Most wrappers in this folder accept optional config overrides in this order:
+
+```bash
+[level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
+```
+
 ## Python Scripts (Logic)
 
 ### NEW_01_GENERATEGRIDS.py
@@ -28,7 +34,7 @@ Aim: Join OSM wastewater context back to WWTP/grid records. Inputs: OSM extracti
 Aim: Export selected geospatial products as GeoTIFF. Inputs: Prepared geospatial layers and export parameters. Outputs: GeoTIFF files. How: It transforms geometry/raster settings and writes raster outputs. This script at the moment is not used and needed. It is also not tested. 
 
 ### download_bing_annotate.py
-Aim: Download imagery for each tile and prepare annotation assets. Inputs: Grid layer plus imagery source settings. Outputs: Image tiles and tile metadata logs. How: It iterates tiles, requests imagery, saves files, and stores index mappings.
+Aim: Download imagery for each tile and prepare annotation assets. Inputs: Grid layer plus imagery source settings and optional config overrides (including dynamic buffering args). Outputs: Image tiles and tile metadata logs. How: It iterates tiles, requests imagery, saves files, and stores index mappings.
 
 ### merge_annotations.py
 Aim: Merge annotation outputs into the main corrected points layer. Inputs: Annotation CSV/text outputs and corrected points file. Outputs: Updated corrected points with annotation-derived fields. How: It parses annotation data, matches by index/tile identifiers, and writes merged geospatial output.
@@ -39,16 +45,16 @@ Aim: Create QA sampling artifacts for human review. Inputs: Annotation outputs a
 ## Shell Scripts (Entry Points)
 
 ### grid_generation_and_osm_extract.sh
-Aim: One-command orchestration for grid creation and OSM extraction. Inputs: Config defaults and optional overrides. Outputs: Grid/OSM artifacts and logs. How: It runs NEW_01 then NEW_02 in sequence.
+Aim: One-command orchestration for grid creation and OSM extraction. Inputs: Config defaults and optional positional overrides (including dynamic buffering args). Outputs: Grid/OSM artifacts and logs. How: It runs NEW_01 then NEW_02 in sequence.
 
 ### run_download_bing_annotate_array.sh
-Aim: Cluster launcher for large image-download jobs. Inputs: SLURM array task context and config. Outputs: Scheduler logs and imagery outputs. How: It dispatches `download_bing_annotate.py` shards using array jobs.
+Aim: Cluster launcher for large image-download jobs. Inputs: SLURM array task context plus optional positional overrides (including dynamic buffering args). Outputs: Scheduler logs and imagery outputs. How: It dispatches `download_bing_annotate.py` shards using array jobs.
 
 ### merge_annotations.sh
-Aim: Reproducible launcher for annotation merge stage. Inputs: Config and optional overrides. Outputs: Merge logs and updated corrected points. How: It executes `python -m research_code.annotation_scripts.merge_annotations`.
+Aim: Reproducible launcher for annotation merge stage. Inputs: Config and optional positional overrides (including dynamic buffering args). Outputs: Merge logs and updated corrected points. How: It executes `python -m research_code.annotation_scripts.merge_annotations`.
 
 ### annotations_inspection.sh
-Aim: Reproducible launcher for QA sampling stage. Inputs: Config and optional overrides. Outputs: QA logs and inspection artifacts. How: It executes `python -m research_code.annotation_scripts.annotations_inspection`.
+Aim: Reproducible launcher for QA sampling stage. Inputs: Config and optional positional overrides (including dynamic buffering args). Outputs: QA logs and inspection artifacts. How: It executes `python -m research_code.annotation_scripts.annotations_inspection`.
 
 ## Shell -> Python Flow Diagram
 

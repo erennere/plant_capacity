@@ -16,7 +16,7 @@ rm -f "${LOG_DIR}/assign_rivers_to_basin.log"
 
 #
 # Usage:
-#   ./assign_rivers_to_basin.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./assign_rivers_to_basin.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level        - Processing level (default: from config.yaml arguments.default_level)
@@ -30,6 +30,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
@@ -39,5 +41,5 @@ log "Installing research_code module"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
 
 log "Running assign_rivers_to_basin with 2 workers"
-${PYTHON_CMD} -m research_code.pop_at_risk_river_calculations.assign_rivers_to_basin 2 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
+${PYTHON_CMD} -m research_code.pop_at_risk_river_calculations.assign_rivers_to_basin 2 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/assign_rivers_to_basin.log"
 log "Completed assign_rivers_to_basin"

@@ -469,6 +469,8 @@ if __name__ == "__main__":
     parser.add_argument("buffer", nargs="?", default=None, help="Optional config buffer override")
     parser.add_argument("weight_method", nargs="?", default=None, help="Optional config weight_method override")
     parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
+    parser.add_argument("dynamic_buffering", nargs="?", default=None, help="Optional dynamic buffering override (true/false)")
+    parser.add_argument("dynamic_buffer_k", nargs="?", default=None, help="Optional dynamic buffer scaling override")
     args = parser.parse_args()
 
     logging.info("Starting Bing annotation pipeline")

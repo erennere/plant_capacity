@@ -11,7 +11,7 @@ PYTHON_CMD="python"
 
 #
 # Usage:
-#   ./annotations_inspection.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./annotations_inspection.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level        - Processing level (default: from config.yaml arguments.default_level)
@@ -25,6 +25,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -51,4 +53,4 @@ log "Checking package importability..."
 ensure_research_code_importable
 
 log "Running annotations_inspection.py"
-${PYTHON_CMD} -m research_code.annotation_scripts.annotations_inspection "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/annotations_inspection.log"
+${PYTHON_CMD} -m research_code.annotation_scripts.annotations_inspection "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/annotations_inspection.log"

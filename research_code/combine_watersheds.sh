@@ -37,7 +37,7 @@ log "Python command: ${PYTHON_CMD}"
 
 #
 # Usage:
-#   ./combine_watersheds.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./combine_watersheds.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level        - Processing level (default: from config.yaml arguments.default_level)
@@ -51,6 +51,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 log "Installing research_code module (editable)"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/combine_watersheds.log"
@@ -70,7 +72,7 @@ log "Starting watershed archive merge"
 
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/combine_watersheds.log"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/combine_watersheds.log"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

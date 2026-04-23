@@ -43,7 +43,7 @@ log "Processing with 8 parallel workers"
 
 #
 # Usage:
-#   ./download_pop.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./download_pop.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level        - Processing level (default: from config.yaml arguments.default_level)
@@ -57,6 +57,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 # Install package in editable mode before running modules
 log "Installing research_code module (editable)"
@@ -80,7 +82,7 @@ log "Python version: $(${PYTHON_CMD} --version 2>&1)"
 log "Starting population data download and processing..."
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

@@ -441,6 +441,58 @@ def create_ranges(x, y, step, min_step=100):
             step /= 2
             if step < min_step:
                 return np.array([min_val, max_val])
+
+def nearest_neighbor_distances_and_median(df):
+    """Return nearest-neighbor distances and their median from a dataframe.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame | geopandas.GeoDataFrame
+        Input table with a ``geometry`` column.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, float]
+        ``(nearest_neighbor_distances, median_distance)`` where the first item
+        is one distance per valid geometry row and the second item is the
+        median of that array. Distances are computed using up to the two
+        nearest neighbors per point and averaged.
+
+    Notes
+    -----
+    For non-point geometries, centroids are used. If fewer than two valid
+    geometries are available, distances cannot be computed and ``NaN`` values
+    are returned.
+    """
+    if df is None or len(df) == 0 or 'geometry' not in df.columns:
+        return np.array([], dtype=float), np.nan
+
+    coords = []
+    for geom in df['geometry']:
+        if geom is None or getattr(geom, 'is_empty', True):
+            continue
+        if isinstance(geom, Point):
+            coords.append((geom.x, geom.y))
+        elif isinstance(geom, (LineString, MultiLineString, Polygon, MultiPolygon)):
+            c = geom.centroid
+            coords.append((c.x, c.y))
+
+    if len(coords) == 0:
+        return np.array([], dtype=float), np.nan
+    if len(coords) == 1:
+        return np.array([np.nan], dtype=float), np.nan
+
+    points = np.asarray(coords, dtype=float)
+    tree = cKDTree(points)
+    # Query self + up to two nearest neighbors: k=3 for N>=3, otherwise k=2.
+    k = 3 if len(points) >= 3 else 2
+    distances, _ = tree.query(points, k=k)
+    if k == 2:
+        nn_distances = distances[:, 1].astype(float)
+    else:
+        nn_distances = np.nanmean(distances[:, 1:3], axis=1).astype(float)
+    median_distance = float(np.nanmedian(nn_distances))
+    return nn_distances, median_distance
             
 def auto_weight_scale(points):
     """
@@ -1828,7 +1880,8 @@ def assign_sites_streaming(valid_points, points, weights, distance_fn, factor):
     return assignments
 
 def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, n_points=100, distance_fn=default_distance_multiplicative,
-                      scipy_true=False, cv2_true=False, centroid_points=False, points_col=None, buffering=False, buffer=10000, threshold=500):
+                      scipy_true=False, cv2_true=False, centroid_points=False, points_col=None, buffering=False, buffer=10000, threshold=500,
+                      dynamic_buffering=True, k=0.75, min_buffer=2000):
     """
     Generate weighted Voronoi diagram from point sites with multiple contour methods.
     
@@ -1866,6 +1919,13 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         Buffer radius used for clipping and local intersection.
     threshold : float | int, default=500
         Clustering threshold applied before Voronoi generation.
+    dynamic_buffering : bool, default=True
+        Whether to derive per-site buffer lengths from local nearest-neighbor
+        spacing and site weights.
+    k : float, default=0.75
+        Scale factor applied to dynamic per-site buffer lengths.
+    min_buffer : float, default=2000
+        Minimum buffer length applied when dynamic buffering is enabled.
 
     Returns
     -------
@@ -1908,23 +1968,43 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     df = gpd.GeoDataFrame(cluster_points(df, threshold), geometry='geometry', crs=crs)
     logger.debug(f"After clustering: {len(df)} sites")
 
-    # The clipping object might be a collection of objects so we unify them into a single geometry
-    # We also make sure that the clipping geometry is in the same CRS as the sites
-    # IF a clipping object is provided, we will use it
-    # Otherwise, we will use the bounding box of the sites with a buffer as the clipping geometry
-    # We will use the same buffer for the creation of the grid geometry for Voronoi computation
-    # Because using the actual clipping geometry for the grid creation will increase the
-    #  computational cost significantly if the clipping geometry is significantly bigger than the
-    # area of interest [(O(nm)) where n and m are the dimensions of the clipping geometry]
+    # === PHASE 3: SITE COORDINATES & WEIGHT INITIALIZATION ===
+    # For multi-site groups, extract point locations and initialize weights.
+    # Dynamic buffering also computes per-site buffer lengths here.
+    points = weights = factor = None
+    if len(df) > 1:
+        points = extract_site_coordinates(df, centroid_points, points_col)
+        # Set up weight parameters based on distance function type.
+        weights, factor = initialize_voronoi_weights(df, distance_fn, scale_weights, points)
 
-    buffered = df.buffer(buffer)
+        if dynamic_buffering:
+            nnd, _mnd = nearest_neighbor_distances_and_median(df)
+            if len(nnd) == len(df):
+                df['2_nnd'] = nnd
+            else:
+                logger.warning("NN distance length mismatch (%s vs %s); falling back to fixed buffer defaults", len(nnd), len(df))
+                df['2_nnd'] = np.nan
+            df['2_nnd'] = df['2_nnd'].fillna(buffer)
+            df['buffer_length'] = np.minimum(df['2_nnd'] * k * np.sqrt(weights), min_buffer)
+
+    # === PHASE 4: BUFFERED EXTENT FOR GRID DOMAIN ===
+    # The clipping input may contain multiple geometries, so we unify it into
+    # a single geometry and ensure it uses the same CRS as the sites.
+    # If a clipping geometry is provided, we use it directly.
+    # Otherwise, we fall back to a buffered bounding box around the sites.
+    # We use this same buffered extent to build the Voronoi grid because
+    # using a much larger clipping geometry can increase computation cost
+    # significantly (approximately O(nm) for grid dimensions n and m).
+    if len(df) > 1 and dynamic_buffering:
+        buffered = df.copy()
+        buffered['geometry'] = buffered.apply(lambda row: row.geometry.buffer(row['buffer_length']), axis=1)
+    else:
+        buffered = df.copy().buffer(buffer)
     minx, miny, maxx, maxy = buffered.total_bounds
     
-    # === PHASE 3: GRID EXTENT FROM BUFFERED BOUNDS ===
-    # Determine the bounding box for the Voronoi grid computation
-    # If clipping geometry provided: use it as actual_clipping_object
-    # If no clipping: use buffered bounding box as actual_clipping_object
-    # Grid always uses buffered bounding box (minx, miny, maxx, maxy) for computation
+    # === PHASE 5: CLIPPING GEOMETRY PREPARATION ===
+    # Use provided clipping geometry when available (CRS-aligned), otherwise use
+    # the buffered extent bounds as the clipping object.
     actual_clipping_object = None
     if clipping is not None and not clipping.empty:
         if clipping.crs is None:
@@ -1935,7 +2015,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     else:
         actual_clipping_object = buffer_geometry(box(minx, miny, maxx, maxy))
     
-    # === PHASE 4: COUNTRY CRS ALIGNMENT ===
+    # === PHASE 6: COUNTRY CRS ALIGNMENT ===
     # Ensure country clipping geometry is aligned with site CRS
     # This is critical for accurate clipping during final boundary operations
     if country_clip is not None:
@@ -1945,7 +2025,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
             country_clip = country_clip.to_crs(crs)
     
     if len(df) == 1:
-        # === SPECIAL CASE: SINGLE SITE ===
+        # === PHASE 7: SPECIAL CASE (SINGLE SITE) ===
         # When only one site exists, create Voronoi region from clipping boundary
         # This is NOT a true Voronoi diagram, but the site's service area
         region_polygons = pd.DataFrame({'WASTE_ID':[df.iloc[0]['WASTE_ID']], 
@@ -1982,12 +2062,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         point_df = point_df.to_crs(4326)
         return df_waste, region_polygons, point_df
 
-    # === PHASE 5: SITE COORDINATES EXTRACTION ===
-    # Extract point locations for Voronoi site assignment
-    # Points are either pre-computed from points_col or computed as centroids
-    points = extract_site_coordinates(df, centroid_points, points_col)
-
-    # === PHASE 6: GRID GENERATION ===
+    # === PHASE 8: GRID GENERATION ===
     # Use adaptive step sizing to ensure reasonable coverage
     x_coords = create_ranges(minx, maxx, n_points)
     y_coords = create_ranges(miny, maxy, n_points)
@@ -1998,13 +2073,9 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     del xv, yv
     grid_minx = x_coords[0]
     grid_miny = y_coords[0]
-
-    # === PHASE 7: WEIGHT INITIALIZATION ===
-    # Set up weight parameters based on distance function type
-    weights, factor = initialize_voronoi_weights(df, distance_fn, scale_weights, points)
-        
-    # === PHASE 8: GRID MASKING & SITE ASSIGNMENT ===
-    # Filter grid points to include only those within the the clipping boundary to optimize assignment
+  
+    # === PHASE 9: GRID MASKING & SITE ASSIGNMENT ===
+    # Filter grid points to include only those within the clipping boundary to optimize assignment.
     # Extract only points that are inside the clipping boundary
     # Assign each grid point to its nearest weighted site
     # This is the core Voronoi computation step
@@ -2018,7 +2089,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     assignment_grid_2d = assignment_grid.reshape(len(y_coords), len(x_coords))
     del assignment_grid, valid_flat_indices, valid_points
     
-    # === PHASE 9: REGION BOUNDARY EXTRACTION ===
+    # === PHASE 10: REGION BOUNDARY EXTRACTION ===
     # Build Voronoi region polygon for each site
     region_polygons = []
     df.reset_index(drop=True, inplace=True)
@@ -2050,7 +2121,11 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
             polygons = buffer_geometry(unary_union(polygons))
             # Optionally intersect region with buffer around site for local influence zone
             if buffering:
-                point_buffer = Point(point).buffer(buffer)
+                point_buffer = None
+                if dynamic_buffering:
+                    point_buffer = Point(point).buffer(row['buffer_length'])
+                else:
+                    point_buffer = Point(point).buffer(buffer)
                 polygons = polygons.intersection(point_buffer).buffer(0)
             region_polygons.append({'WASTE_ID':row['WASTE_ID'], 'geometry': polygons})
         else:
@@ -2059,7 +2134,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
 
     del assignment_grid_2d, assignments, mask
 
-    # === PHASE 10: GEODATAFRAME CONVERSION & DEDUPLICATION ===
+    # === PHASE 11: GEODATAFRAME CONVERSION & DEDUPLICATION ===
     # Convert region list to DataFrame for further processing
     region_polygons = pd.DataFrame(region_polygons)
     region_polygons = pd.merge(region_polygons, df.drop(['geometry'], axis=1), on=['WASTE_ID'])
@@ -2067,7 +2142,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
     region_polygons = drop_duplicates(region_polygons, 'WASTE_ID')
     
-    # === PHASE 11: OVERLAP RESOLUTION ===
+    # === PHASE 12: OVERLAP RESOLUTION ===
     # Remove overlapping areas between adjacent Voronoi regions
     # Each region intersection is assigned to larger polygon via area comparison
     non_intersecting_polygons = resolve_polygon_overlaps(region_polygons)
@@ -2075,7 +2150,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
     region_polygons['area'] = region_polygons.geometry.area
 
-    # === PHASE 12: FINAL BOUNDARY CLIPPING ===
+    # === PHASE 13: FINAL BOUNDARY CLIPPING ===
     # Filter sites that appear in final regions (have valid geometry)
     # Deduplicate original input sites by WKT representation
     point_df = df[df[col].isin(region_polygons[col])].reset_index(drop=True)
@@ -2090,7 +2165,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         region_polygons = gpd.clip(region_polygons, country_clip)
         region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
     
-    # === PHASE 13: CRS STANDARDIZATION & RETURN ===
+    # === PHASE 14: CRS STANDARDIZATION & RETURN ===
     # Convert all outputs to WGS84 for standard geographic format
     df_waste = df_waste.to_crs(4326)  # type: ignore[union-attr]
     region_polygons = region_polygons.to_crs(4326)
@@ -2119,20 +2194,21 @@ def voronoi_worker(args):
         Catches and prints exceptions during unpacking.
     """
     try:
-        sub_df, col, country_clip, scale_weights, clipping, n_points, distance_fn, scipy_true, cv2_true, centroid_points, points_col, buffering, buffer, threshold = args
+        sub_df, col, country_clip, scale_weights, clipping, n_points, distance_fn, scipy_true, cv2_true, centroid_points, points_col, buffering, buffer, threshold, dynamic_buffering, k, min_buffer = args
         logger.debug(f"voronoi_worker: Unpacked arguments for {len(sub_df)} sites")
     except Exception as err:
         logger.error(f"voronoi_worker: Error unpacking arguments: {err}")
         raise
-    return weighted_voronoi(sub_df, col, country_clip, scale_weights, clipping, n_points, distance_fn, scipy_true, cv2_true, centroid_points, points_col, buffering, buffer, threshold)
+    return weighted_voronoi(sub_df, col, country_clip, scale_weights, clipping, n_points, distance_fn, scipy_true, cv2_true, centroid_points, points_col, buffering, buffer, threshold, dynamic_buffering, k, min_buffer)
 
 def create_weights(sub_df, sigma=3, percent_threshold=10, method='linear'):
-    """Calculate normalized site weights from ``total_area`` values.
+    """Calculate normalized site weights from a detection-adjusted area proxy.
 
     Parameters
     ----------
     sub_df : pandas.DataFrame | geopandas.GeoDataFrame
-        Input records with a ``total_area`` column.
+        Input records with ``total_area`` plus detection count columns
+        ``num_detection_rect`` and ``num_detection_circle``.
     sigma : float, default=3
         Standard-deviation multiplier used for upper clipping.
     percent_threshold : float, default=10
@@ -2143,13 +2219,23 @@ def create_weights(sub_df, sigma=3, percent_threshold=10, method='linear'):
     Returns
     -------
     pandas.DataFrame
-        Copy of ``sub_df`` with a normalized ``weights`` column.
+        Copy of ``sub_df`` with added ``capacity_proxy`` and normalized
+        ``weights`` columns.
     """
     df = sub_df.copy()
+
+    rect_counts = pd.to_numeric(df.get('num_detection_rect', 0), errors='coerce').fillna(0)
+    circle_counts = pd.to_numeric(df.get('num_detection_circle', 0), errors='coerce').fillna(0)
+
+    # Convert detection counts to integers, aggregate, and build the proxy
+    # used as the base signal across normalization methods.
+    num_detections = (rect_counts.astype(int) + circle_counts.astype(int)).clip(lower=0)
+    df['num_detections'] = num_detections
+    df['capacity_proxy'] = df['total_area'] * np.sqrt(df['num_detections'])
     
     # 1. Handle missing/zero values in the raw data
-    fallback_mean = df['total_area'].mean()
-    base_values = df['total_area'].replace(0.0, np.nan).fillna(fallback_mean)
+    fallback_mean = df['capacity_proxy'].mean()
+    base_values = df['capacity_proxy'].replace(0.0, np.nan).fillna(fallback_mean)
     
     # If everything is still NaN (empty or all zeros), fallback to equal distribution
     if base_values.isnull().all() or base_values.sum() == 0:
@@ -2191,7 +2277,7 @@ def create_weights(sub_df, sigma=3, percent_threshold=10, method='linear'):
 def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=False, clipping=None, n_points=100, distance_fn=default_distance_multiplicative,
                                 scipy_true=False, cv2_true=False, centroid_points=False, points_col=None,
                                 buffering=False, buffer=10000, threshold=500, only_round=False, sigma=3, percent_threshold=10,
-                                method='linear', output_path=None, overwrite=False, flush_size=None):
+                                method='linear', output_path=None, overwrite=False, flush_size=None, dynamic_buffering=True, k=0.75, min_buffer=2000):
     """
     Orchestrate parallel Voronoi generation across data groups.
     
@@ -2244,6 +2330,13 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
         If ``True``, existing checkpoint/output files are replaced.
     flush_size : int | None, default=None
         Number of completed worker results to buffer before flushing to temp.
+    dynamic_buffering : bool, default=True
+        Whether workers use dynamic per-site buffer lengths in
+        ``weighted_voronoi``.
+    k : float, default=0.75
+        Scale factor used for dynamic per-site buffer lengths.
+    min_buffer : float, default=2000
+        Minimum buffer parameter forwarded to ``weighted_voronoi``.
 
     Returns
     -------
@@ -2366,7 +2459,7 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
                 task = (sub_df, col, country_clip, scale_weights,
                         sub_clip, n_points, distance_fn, scipy_true,
                         cv2_true, centroid_points, points_col, buffering,
-                        buffer, threshold,)
+                    buffer, threshold, dynamic_buffering, k, min_buffer,)
                 batch.append(task)
             else:
                 for country in country_iso_2:
@@ -2378,7 +2471,7 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
                     task = (country_sub_df, col, country_sub_clip,
                             scale_weights, sub_clip, n_points, distance_fn,
                             scipy_true, cv2_true, centroid_points, points_col,
-                            buffering, buffer, threshold,)
+                            buffering, buffer, threshold, dynamic_buffering, k, min_buffer,)
                     batch.append(task)
 
             if len(batch) >= batch_size:
@@ -2497,7 +2590,7 @@ This section orchestrates the complete Voronoi spatial allocation pipeline.
 4. Output: Saves results to GeoPackage per approach_id
 
 WORKFLOW:
-    overrides = parse_config_overrides(args=args)  # Parse optional level/version/buffer/weight_method/weight_func
+    overrides = parse_config_overrides(args=args)  # Parse optional level/version/buffer/weight_method/weight_func/dynamic_buffering/dynamic_buffer_k
     cfg = load_config(**overrides)                 # Load YAML configuration
   → create_output_paths(cfg)              # Create output directory structure
   → prepare_data(cfg)                     # Load input spatial data
@@ -2541,7 +2634,7 @@ EXAMPLES:
   python -m research_code.create_voronoi --approach 0 1 --only_round
 
   # Run all approaches with config overrides
-  python -m research_code.create_voronoi 8 2 15000 square_root mult
+    python -m research_code.create_voronoi 8 2 15000 square_root mult true 0.75
 
   # Run with verbose logging
   python -m research_code.create_voronoi --approach 1 --verbose
@@ -2560,6 +2653,8 @@ EXAMPLES:
     parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
     parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
     parser.add_argument('weight_func', nargs='?', default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
+    parser.add_argument('dynamic_buffering', nargs='?', default=None, help='Optional dynamic buffering override (true/false)')
+    parser.add_argument('dynamic_buffer_k', nargs='?', default=None, help='Optional dynamic buffer scaling override')
 
     args = parser.parse_args()
     

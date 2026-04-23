@@ -5,7 +5,7 @@
 # Can run locally by specifying file index, or in SLURM job array mode
 #
 # Usage:
-#   ./add_pop.sh <index> [level] [version] [buffer] [weight_method] [weight_func]
+#   ./add_pop.sh <index> [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #   sbatch add_pop.sh              (SLURM array job - uses SLURM_ARRAY_TASK_ID)
 #
 # SLURM Configuration
@@ -33,6 +33,8 @@ VERSION="${3:-}"
 BUFFER="${4:-}"
 WEIGHT_METHOD="${5:-}"
 WEIGHT_FUNC="${6:-}"
+DYNAMIC_BUFFERING="${7:-}"
+DYNAMIC_BUFFER_K="${8:-}"
 
 # Create log directory
 mkdir -p "${LOG_DIR}"
@@ -66,7 +68,7 @@ elif [[ $# -ge 1 ]]; then
 else
     # No task ID provided
     log "ERROR: Task ID not provided"
-    log "Usage: $0 <file_index> [level] [version] [buffer] [weight_method] [weight_func]"
+    log "Usage: $0 <file_index> [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]"
     log "   or: sbatch $0 (SLURM mode)"
     exit 1
 fi
@@ -101,7 +103,7 @@ log "Processing Voronoi file index: ${TASK_ID}"
 # Run the population data integration
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

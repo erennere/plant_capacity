@@ -12,16 +12,22 @@ bash pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
 bash pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
 ```
 
+Most wrappers in this folder accept optional config overrides in this order:
+
+```bash
+[level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
+```
+
 ## Python Scripts (Logic)
 
 ### create_rasters.py
-Aim: Build raster inputs for non-served analysis. Inputs: Voronoi/population outputs and country raster paths. Outputs: Served/non-served raster products. How: It prepares geospatial inputs, performs raster operations, and writes stage outputs.
+Aim: Build raster inputs for non-served analysis. Inputs: Voronoi/population outputs, country raster paths, and optional config overrides including dynamic buffering args. Outputs: Served/non-served raster products. How: It prepares geospatial inputs, performs raster operations, and writes stage outputs.
 
 ### find_unserved_pop.py
 Aim: Extract non-served population areas from raster outputs. Inputs: Raster products and configured thresholds. Outputs: Vectorized non-served area layers. How: It thresholds raster values, vectorizes candidates, and writes geospatial outputs.
 
 ### find_diff_pop.py
-Aim: Compute population differences used by downstream impact logic. Inputs: Served/non-served products and baseline references. Outputs: Difference layers/tables. How: It aligns data products and calculates per-unit differences.
+Aim: Compute population differences used by downstream impact logic. Inputs: Served/non-served products, baseline references, and optional config overrides including dynamic buffering args. Outputs: Difference layers/tables. How: It aligns data products and calculates per-unit differences.
 
 ### assign_rivers_to_basin.py
 Aim: Assign river segments to basin identifiers. Inputs: River and basin datasets. Outputs: Basin-linked river layer. How: It runs spatial intersection/join logic and writes enriched river data.
@@ -38,7 +44,7 @@ Aim: Aggregate final population-at-risk outputs. Inputs: Impact outputs from pre
 ## Shell Scripts (Entry Points)
 
 ### create_rasters.sh
-Aim: Launcher for raster-creation stage with mode handling. Inputs: Config defaults and optional mode overrides. Outputs: Raster stage logs and outputs. How: It dispatches `create_rasters.py` in configured mode.
+Aim: Launcher for raster-creation stage with mode handling. Inputs: Config defaults and optional positional overrides (including dynamic buffering args). Outputs: Raster stage logs and outputs. How: It dispatches `create_rasters.py` in configured mode.
 
 ### find_unserved_pop.sh
 Aim: Launcher for non-served area extraction. Inputs: Config defaults and optional overrides. Outputs: Stage logs and non-served outputs. How: It executes `python -m ...find_unserved_pop`.
@@ -50,7 +56,7 @@ Aim: Launcher for basin assignment stage. Inputs: Config defaults and optional o
 Aim: Launcher for river intersection stage. Inputs: Config defaults and optional overrides. Outputs: Intersection logs and linked outputs. How: It executes `python -m ...find_intersection_river`.
 
 ### pop_differences_and_impact_polygons.sh
-Aim: One-command orchestration for middle risk stages. Inputs: Outputs from create_rasters stage and config settings. Outputs: Difference products, river-linked products, and impact polygons. How: It runs find_unserved_pop, find_diff_pop, assign_rivers_to_basin, find_intersection_river, and impact_polygons_pop in sequence.
+Aim: One-command orchestration for middle risk stages. Inputs: Outputs from create_rasters stage plus optional positional overrides (including dynamic buffering args). Outputs: Difference products, river-linked products, and impact polygons. How: It runs find_unserved_pop, find_diff_pop, assign_rivers_to_basin, find_intersection_river, and impact_polygons_pop in sequence.
 
 ### find_pop_in_danger_pop.sh
 Aim: Launcher for final risk aggregation stage. Inputs: Impact outputs and config defaults. Outputs: Final population-at-risk logs and result files. How: It executes `python -m ...find_pop_in_danger_pop`.

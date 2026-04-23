@@ -23,6 +23,31 @@ def _parse_optional_weight_func(value, field_name="weight_func"):
     raise ValueError(f"Invalid {field_name} '{value}'. Must be one of: mult, add, ''.")
 
 
+def _parse_optional_bool(value, field_name):
+    """Parse optional boolean overrides from common truthy/falsey strings."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid {field_name} '{value}'. Must be a boolean value.")
+
+
+def _parse_optional_float(value, field_name):
+    """Parse optional float overrides."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {field_name} '{value}'. Must be a number.")
+
+
 def parse_config_overrides(args=None, argv=None, start_index=1):
     """Parse optional config overrides for ``load_config``.
 
@@ -30,7 +55,8 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
     ----------
     args : argparse.Namespace or None, optional
         Parsed argparse namespace with optional ``level``, ``version``,
-        ``buffer``, ``weight_method``, and ``weight_func`` attributes.
+        ``buffer``, ``weight_method``, ``weight_func``,
+        ``dynamic_buffering``, and ``dynamic_buffer_k`` attributes.
         When provided, ``argv`` and ``start_index`` are ignored.
     argv : list or None, optional
         ``sys.argv``-style sequence.  Defaults to ``sys.argv``.
@@ -49,6 +75,8 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
         raw_buffer = getattr(args, "buffer", None)
         weight_method = getattr(args, "weight_method", None) or None
         raw_weight_func = getattr(args, "weight_func", None)
+        raw_dynamic_buffering = getattr(args, "dynamic_buffering", None)
+        raw_dynamic_buffer_k = getattr(args, "dynamic_buffer_k", None)
     else:
         argv = sys.argv if argv is None else argv
         level = argv[start_index] if len(argv) > start_index and argv[start_index] else None
@@ -56,6 +84,8 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
         raw_buffer = argv[start_index + 2] if len(argv) > start_index + 2 and argv[start_index + 2] else None
         weight_method = argv[start_index + 3] if len(argv) > start_index + 3 and argv[start_index + 3] else None
         raw_weight_func = argv[start_index + 4] if len(argv) > start_index + 4 and argv[start_index + 4] else None
+        raw_dynamic_buffering = argv[start_index + 5] if len(argv) > start_index + 5 and argv[start_index + 5] else None
+        raw_dynamic_buffer_k = argv[start_index + 6] if len(argv) > start_index + 6 and argv[start_index + 6] else None
 
     buffer = None
     if raw_buffer is not None:
@@ -65,6 +95,8 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
             raise ValueError(f"Invalid buffer '{raw_buffer}'. Must be an integer.")
 
     weight_func = _parse_optional_weight_func(raw_weight_func, "weight_func")
+    dynamic_buffering = _parse_optional_bool(raw_dynamic_buffering, "dynamic_buffering")
+    dynamic_buffer_k = _parse_optional_float(raw_dynamic_buffer_k, "dynamic_buffer_k")
 
     return {
         "level": level,
@@ -72,6 +104,8 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
         "buffer": buffer,
         "weight_method": weight_method,
         "weight_func": weight_func,
+        "dynamic_buffering": dynamic_buffering,
+        "dynamic_buffer_k": dynamic_buffer_k,
     }
 
 
@@ -97,6 +131,8 @@ def load_config(
     buffer=None,
     weight_method=None,
     weight_func=None,
+    dynamic_buffering=None,
+    dynamic_buffer_k=None,
 ):
     """Load and parse YAML configuration with optional CLI overrides.
 
@@ -119,15 +155,22 @@ def load_config(
     weight_func : str or None, optional
         Weighted-distance mode override. Accepted values are ``"mult"``,
         ``"add"``, or ``""``. Falls back to ``params.weight_func``.
+    dynamic_buffering : bool or None, optional
+        Dynamic Voronoi buffering flag override; falls back to
+        ``params.dynamic_buffering``.
+    dynamic_buffer_k : float or None, optional
+        Dynamic buffer scale factor override; falls back to
+        ``params.dynamic_buffer_k``.
 
     Returns
     -------
     dict
         Flat configuration dictionary with keys including ``level``,
         ``version``, ``buffer``, ``weight_method``, ``weight_func``,
-        ``max_workers``, ``n_points``, numeric Voronoi parameters, processing
-        flags, ``distance_fn``, and a ``paths`` sub-dict of 40+ expanded
-        filesystem paths.
+        ``max_workers``, ``n_points``, numeric Voronoi parameters,
+        ``dynamic_buffering``, ``dynamic_buffer_k``, processing flags,
+        ``distance_fn``, and a ``paths`` sub-dict of 40+ expanded filesystem
+        paths.
 
     Notes
     -----
@@ -162,6 +205,12 @@ def load_config(
     if weight_func is None:
         weight_func = ""
 
+    dynamic_buffering = cfg['params'].get('dynamic_buffering', True) if dynamic_buffering is None else dynamic_buffering
+    dynamic_buffering = _parse_optional_bool(dynamic_buffering, "dynamic_buffering")
+
+    dynamic_buffer_k = cfg['params'].get('dynamic_buffer_k', 0.75) if dynamic_buffer_k is None else dynamic_buffer_k
+    dynamic_buffer_k = _parse_optional_float(dynamic_buffer_k, "dynamic_buffer_k")
+
     final_data_dir = cfg["paths"]["final_data_dir"]
     annotations_dir = cfg["paths"]["annotations_dir"]
     dl_dir = cfg["paths"]["dl_dir"]
@@ -181,6 +230,13 @@ def load_config(
 
     distance_fn = default_distance_multiplicative if weight_func in {"", "mult"} else default_distance_additive
 
+    # Keep numeric buffer for computation, but use a dedicated token for
+    # path formatting so dynamic-buffer runs are grouped by k-value.
+    if dynamic_buffering:
+        buffer_path_token = f"k{str(dynamic_buffer_k).replace('.', '_')}"
+    else:
+        buffer_path_token = str(int(buffer))
+
     def f(path):
         return path.format(
             data_dir=data_dir,
@@ -188,7 +244,7 @@ def load_config(
             latest_url=cfg["s3"]["latest_url"],
             extra_points_dir=extra_points_dir,
             level=level,
-            buffer=buffer,
+            buffer=buffer_path_token,
             final_data_dir=final_data_dir,
             annotations_dir=annotations_dir,
             dl_dir=dl_dir,
@@ -247,6 +303,9 @@ def load_config(
         "impact_pop_polygons_outpath": f(cfg['paths']['impact_pop_polygons_outpath']),
         "industrial_areas_temp_db_path" : f(cfg['paths']['industrial_areas_temp_db_path']),
         "industrial_areas_ohsome_parquet_filepath": f(cfg['paths']['industrial_areas_ohsome_parquet_filepath']),
+        "industrial_raster_temp_dir": f(cfg['paths']['industrial_raster_temp_dir']),
+        "industrial_merged_gpkg": f(cfg['paths']['industrial_merged_gpkg']),
+        "industrial_unconnected_output": f(cfg['paths']['industrial_unconnected_output']),
         "seg_results_filepath": f(cfg['paths']['seg_results_filepath']),
         "pop_at_risk_output_filepath": f(cfg['paths']['pop_at_risk_output_filepath']),
 
@@ -274,6 +333,7 @@ def load_config(
         "version": version,
         "paths": paths,
         "buffer": buffer,
+        "buffer_path_token": buffer_path_token,
         "weight_method": weight_method, # linear, logarithmic, square_root, sigmoid
         "weight_type": weight_type, # li, log, sq, sig
         "weight_func": weight_func,
@@ -302,8 +362,9 @@ def load_config(
         "weight_method": weight_method,
         "weight_func": weight_func,
         "zoom_level": cfg["params"]["zoom_level"],
-        "remove_industrial": flags['remove_industrial'],
+        "remove_industrial": flags['remove_industrial'],  
         "industrial_category_numbers": cfg['params']['industrial_category_numbers'],
+        "basin_column_name": cfg['params'].get('basin_column_name', 'HYBAS_ID'),
         "min_pixels": cfg['params']['min_pixels'],
         "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],
         "legacy_merge": flags['legacy_merge'],
@@ -311,6 +372,12 @@ def load_config(
         "voronoi_overwrite": cfg['params']['voronoi_overwrite'],
         "pop_voronoi_overwrite": cfg['params']['pop_voronoi_overwrite'],
         "temp_voronoi_overwrite": cfg['params']['temp_voronoi_overwrite'],
+        "industrial_vectorize_overwrite": cfg['params'].get('industrial_vectorize_overwrite', False),
+        "industrial_unconnected_overwrite": cfg['params'].get('industrial_unconnected_overwrite', False),
         "return_boolean": flags['return_boolean'],
-        "flush_size": cfg['params']['flush_size']
+        "flush_size": cfg['params']['flush_size'],
+        "dynamic_buffering": dynamic_buffering,
+        "dynamic_buffer_k": float(dynamic_buffer_k) if dynamic_buffer_k is not None else None,
+        "min_buffer": cfg['params'].get('min_buffer', 2000),
+        "industrial_zenodo_url": cfg['params'].get('industrial_zenodo_url', 'https://zenodo.org/records/14832219/files/Industrial_land_10m_1093cities_2023.zip'),
     }

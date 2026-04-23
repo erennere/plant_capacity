@@ -52,7 +52,7 @@ export NUMEXPR_NUM_THREADS=$OMP_NUM_THREADS
 
 #
 # Usage:
-#   ./create_rasters.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./create_rasters.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level        - Processing level (default: from config.yaml arguments.default_level)
@@ -66,6 +66,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 # Read key from a YAML section using awk (no external dependencies).
 get_yaml_value_from_section() {
@@ -116,7 +118,7 @@ if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
         TOTAL_JOBS=1
     fi
     log "Running raster job ${JOB_INDEX} of ${TOTAL_JOBS} in array mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
     if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
@@ -124,7 +126,7 @@ elif [[ "$MODE" == "sequential" ]]; then
         exit 0
     fi
     log "Running raster processing in sequential mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 0 1 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
+    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 0 1 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run indices 0..X-1 concurrently.
     TOTAL_JOBS=$(get_yaml_value_from_section "annotations" "max_workers")
@@ -135,7 +137,7 @@ elif [[ "$MODE" == "parallel" ]]; then
     
     for ((JOB_INDEX=0; JOB_INDEX<TOTAL_JOBS; JOB_INDEX++)); do
         log "Launching raster job ${JOB_INDEX} in background"
-        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log" &
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log" &
     done
     
     # Wait for all background jobs to complete

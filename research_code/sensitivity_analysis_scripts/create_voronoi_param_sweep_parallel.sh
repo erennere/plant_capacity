@@ -17,7 +17,9 @@ PYTHON_CMD="python"
 PYTHON_SCRIPT="research_code.sensitivity_analysis_scripts.create_voronoi_parallel_sweep"
 APPROACH="${1:-1}"
 VERSION="${2:-}"
-NUM_JOBS=3
+DYNAMIC_BUFFERING="${3:-}"
+DYNAMIC_BUFFER_K="${4:-}"
+NUM_JOBS=16
 
 mkdir -p "${LOG_DIR}"
 rm -f "${LOG_DIR}/voronoi_parallel_sweep_${SLURM_ARRAY_TASK_ID:-0}.log" \
@@ -46,12 +48,14 @@ log "  - Total CPUs: ${SLURM_CPUS_PER_TASK}"
 log "  - Total memory: ${SLURM_MEM_PER_NODE}MB"
 log "  - Approach: ${APPROACH}"
 log "  - Version: ${VERSION:-default}"
+log "  - Dynamic buffering: ${DYNAMIC_BUFFERING:-default}"
+log "  - Dynamic buffer k: ${DYNAMIC_BUFFER_K:-default}"
 
 log "Installing research_code module (editable)"
 ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null 2>&1
 
 log "Running parallel sweep with ${NUM_JOBS} concurrent jobs"
-${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${VERSION}" \
+${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${VERSION}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" \
     --approach "${APPROACH}" \
     --num-jobs "${NUM_JOBS}" \
     2>&1 | tee -a "${LOG_DIR}/voronoi_parallel_sweep_${TASK_ID}.log"

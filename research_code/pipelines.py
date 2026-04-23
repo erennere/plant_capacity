@@ -31,7 +31,7 @@ def create_output_paths(cfg):
     """
     version = cfg['version']
     level = cfg['level']
-    buffer = cfg['buffer']
+    buffer = cfg.get('buffer_path_token', cfg['buffer'])
     weight_func = cfg['weight_func']
     weight_func_suffix = cfg['weight_func_suffix']
     weight_type = cfg['weight_type']
@@ -40,25 +40,25 @@ def create_output_paths(cfg):
     
     paths = {
         'buffers': {
-            'WWTP': os.path.join(buffers_dir, f'dissolved_wwtp_buffers_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
-            'city': os.path.join(buffers_dir, f'dissolved_city_buffers_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
-            'WWTP_convex': os.path.join(buffers_dir, f'dissolved_wwtp_convex_hull_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
-            'city_convex': os.path.join(buffers_dir, f'dissolved_city_convex_hull_v{version}_lvl{level}_bf{int(buffer)}.gpkg'),
+            'WWTP': os.path.join(buffers_dir, f'dissolved_wwtp_buffers_v{version}_lvl{level}_bf{buffer}.gpkg'),
+            'city': os.path.join(buffers_dir, f'dissolved_city_buffers_v{version}_lvl{level}_bf{buffer}.gpkg'),
+            'WWTP_convex': os.path.join(buffers_dir, f'dissolved_wwtp_convex_hull_v{version}_lvl{level}_bf{buffer}.gpkg'),
+            'city_convex': os.path.join(buffers_dir, f'dissolved_city_convex_hull_v{version}_lvl{level}_bf{buffer}.gpkg'),
         },
-        'voronoi': {
-            '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-            '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-            '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-            '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-            '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-        }
         #'voronoi': {
-        #    '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
-        #    '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
-        #    '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
-        #    '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
-        #    '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}_{weight_type}{weight_func_suffix}.gpkg'),
+        #    '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+        #    '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+        #    '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+        #    '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
+        #    '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
         #}
+        'voronoi': {
+            '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
+            '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
+            '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
+            '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
+            '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
+        }
     }
     return paths
 
@@ -146,6 +146,9 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
         output_path=output_path if cfg['return_boolean'] else None,
         overwrite=cfg['temp_voronoi_overwrite'],
         flush_size=cfg['flush_size'],
+        dynamic_buffering=cfg.get('dynamic_buffering', True),
+        k=cfg.get('dynamic_buffer_k', 0.75),
+        min_buffer=cfg.get('min_buffer', 2000),
     )
 
     if isinstance(orchestrate_result, bool):

@@ -6,11 +6,13 @@ Runs 4 instances of create_voronoi.py in parallel, each handling a subset
 of parameter combinations. Designed to be called from SLURM array jobs.
 
 Usage:
-    python -m research_code.create_voronoi_parallel_sweep [TASK_ID] [VERSION] [APPROACH]
+    python -m research_code.sensitivity_analysis_scripts.create_voronoi_parallel_sweep [TASK_ID] [VERSION] [DYNAMIC_BUFFERING] [DYNAMIC_BUFFER_K] [--approach APPROACH]
 
 Parameters:
     TASK_ID: SLURM array task ID (0-9)
     VERSION: Optional config version
+    DYNAMIC_BUFFERING: Backward-compatible positional arg (ignored; sweep grid controls this)
+    DYNAMIC_BUFFER_K: Backward-compatible positional arg (ignored; sweep grid controls this)
     APPROACH: Approach to run (default: 1)
 """
 
@@ -49,34 +51,62 @@ def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
     return logger
 
 
-def generate_parameter_combinations() -> List[Tuple[int, str, int, str, str]]:
-    """Generate all parameter combinations for the sweep."""
-    levels = [6]
+def generate_parameter_combinations() -> List[Tuple[int, str, int, str, str, str, str]]:
+    """Generate all parameter combinations for the sweep.
+
+    Combination tuple:
+        (level, version, buffer, weight_method, weight_func,
+         dynamic_buffering, dynamic_buffer_k)
+    """
+    levels = [6, 7, 8, 9]
     weight_funcs = ["mult", "add", ""]
     weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
-    buffers = [9000, 11000, 13000, 15000]
+    rigid_buffers = [9000, 11000, 13000, 15000]
+    dynamic_k_values = [0.6, 0.7, 0.8]
     
     combinations = []
     for level in levels:
         for weight_func in weight_funcs:
             for weight_method in weight_methods:
-                for buffer in buffers:
-                    # When weight_func is empty the distance weighting is disabled,
-                    # so weight_method has no effect on the output. Only include
-                    # one canonical method (linear) to avoid redundant runs.
-                    if weight_func == "" and weight_method != "linear":
-                        continue
-                    combinations.append((level, "", buffer, weight_method, weight_func))
+                # When weight_func is empty the distance weighting is disabled,
+                # so weight_method has no effect on the output. Only include
+                # one canonical method (linear) to avoid redundant runs.
+                if weight_func == "" and weight_method != "linear":
+                    continue
+
+                # (a) Rigid buffering regime.
+                for buffer in rigid_buffers:
+                    combinations.append((
+                        level,
+                        "",
+                        buffer,
+                        weight_method,
+                        weight_func,
+                        "false",
+                        "",
+                    ))
+
+                # (b) Dynamic buffering regime.
+                for k in dynamic_k_values:
+                    combinations.append((
+                        level,
+                        "",
+                        9000,
+                        weight_method,
+                        weight_func,
+                        "true",
+                        str(k),
+                    ))
     
     return combinations
 
 
 def filter_combinations_by_task(
-    combinations: List[Tuple[int, str, int, str, str]],
+    combinations: List[Tuple[int, str, int, str, str, str, str]],
     task_id: int,
     num_tasks: int = 10,
     shuffle_seed: int = 42,
-) -> List[Tuple[int, str, int, str, str]]:
+) -> List[Tuple[int, str, int, str, str, str, str]]:
     """Deterministically shuffle then assign combinations to this task ID."""
     shuffled = list(combinations)
     random.Random(shuffle_seed).shuffle(shuffled)
@@ -84,9 +114,9 @@ def filter_combinations_by_task(
 
 
 def split_combinations_into_jobs(
-    combinations: List[Tuple[int, str, int, str, str]],
+    combinations: List[Tuple[int, str, int, str, str, str, str]],
     num_jobs: int = 4
-) -> List[List[Tuple[int, str, int, str, str]]]:
+) -> List[List[Tuple[int, str, int, str, str, str, str]]]:
     """Split combinations into num_jobs roughly equal groups."""
     if not combinations:
         return [[] for _ in range(num_jobs)]
@@ -100,19 +130,23 @@ def split_combinations_into_jobs(
 
 def run_voronoi_job(
     job_id: int,
-    combinations: List[Tuple[int, str, int, str, str]],
+    combinations: List[Tuple[int, str, int, str, str, str, str]],
     approach: str,
     logger: logging.Logger,
     project_root: str,
     version: str = "",
+    dynamic_buffering: str = "",
+    dynamic_buffer_k: str = "",
     max_retries: int = 2,
-) -> List[Tuple[int, str, int, str, str]]:
+) -> List[Tuple[int, str, int, str, str, str, str]]:
     """
     Worker function: Run a subset of parameter combinations.
     
     Parameters:
         job_id: Identifier for this job (0-3)
-        combinations: List of (level, version, buffer, weight_method, weight_func) tuples
+        combinations: List of
+            (level, version, buffer, weight_method, weight_func,
+             dynamic_buffering, dynamic_buffer_k) tuples
         approach: Approach ID to run
         logger: Logger instance
         project_root: Root project directory
@@ -128,14 +162,14 @@ def run_voronoi_job(
     log_msg = f"Job {job_id}: Starting with {len(combinations)} parameter combinations"
     logger.info(f"[Job {job_id}] {log_msg}")
 
-    failed_combinations: List[Tuple[int, str, int, str, str]] = []
-    output_exists_cache: dict[Tuple[int, str, int, str, str], bool] = {}
+    failed_combinations: List[Tuple[int, str, int, str, str, str, str]] = []
+    output_exists_cache: dict[Tuple[int, str, int, str, str, str, str], bool] = {}
 
-    def output_exists_for_combo(combo: Tuple[int, str, int, str, str]) -> bool:
+    def output_exists_for_combo(combo: Tuple[int, str, int, str, str, str, str]) -> bool:
         if combo in output_exists_cache:
             return output_exists_cache[combo]
 
-        level, combo_version, buffer, weight_method, weight_func = combo
+        level, combo_version, buffer, weight_method, weight_func, combo_dynamic_buffering, combo_dynamic_buffer_k = combo
         version_override = version or combo_version or None
 
         cfg = load_config(
@@ -144,6 +178,8 @@ def run_voronoi_job(
             buffer=int(buffer),
             weight_method=weight_method,
             weight_func=weight_func,
+            dynamic_buffering=combo_dynamic_buffering if combo_dynamic_buffering else None,
+            dynamic_buffer_k=combo_dynamic_buffer_k if combo_dynamic_buffer_k else None,
         )
         output_path = create_output_paths(cfg)["voronoi"][approach]
         exists = os.path.exists(output_path)
@@ -153,16 +189,17 @@ def run_voronoi_job(
     try:
         import subprocess
 
-        for run_idx, (level, _, buffer, weight_method, weight_func) in enumerate(combinations, 1):
+        for run_idx, (level, _, buffer, weight_method, weight_func, combo_dynamic_buffering, combo_dynamic_buffer_k) in enumerate(combinations, 1):
             log_msg = f"Job {job_id}: Run {run_idx}/{len(combinations)}: " \
                      f"level={level} buffer={buffer} weight_method={weight_method} " \
-                     f"weight_func='{weight_func}'"
+                     f"weight_func='{weight_func}' dynamic_buffering={combo_dynamic_buffering} dynamic_buffer_k={combo_dynamic_buffer_k}"
             logger.debug(f"[Job {job_id}] {log_msg}")
 
             # Build command
             cmd = [
                 sys.executable, "-m", "research_code.create_voronoi",
                 str(level), version, str(buffer), weight_method, weight_func,
+                combo_dynamic_buffering, combo_dynamic_buffer_k,
                 "--approach", approach
             ]
             env = os.environ.copy()
@@ -194,7 +231,7 @@ def run_voronoi_job(
                     time.sleep(backoff_seconds)
 
             if not run_succeeded:
-                combo = (level, "", buffer, weight_method, weight_func)
+                combo = (level, "", buffer, weight_method, weight_func, combo_dynamic_buffering, combo_dynamic_buffer_k)
                 if output_exists_for_combo(combo):
                     logger.warning(
                         "[Job %s] Run %s returned non-zero but output file exists; skipping retry mark",
@@ -228,14 +265,16 @@ def run_voronoi_job(
 
 
 def execute_with_job_count(
-    combinations: List[Tuple[int, str, int, str, str]],
+    combinations: List[Tuple[int, str, int, str, str, str, str]],
     num_jobs: int,
     approach: str,
     logger: logging.Logger,
     project_root: str,
     version: str,
+    dynamic_buffering: str,
+    dynamic_buffer_k: str,
     retry_failed_runs: int,
-) -> List[Tuple[int, str, int, str, str]]:
+) -> List[Tuple[int, str, int, str, str, str, str]]:
     """Execute a batch with a fixed number of jobs and return failed combinations."""
     job_combinations = split_combinations_into_jobs(combinations, num_jobs=num_jobs)
     non_empty_jobs = [
@@ -249,7 +288,7 @@ def execute_with_job_count(
     if not non_empty_jobs:
         return []
 
-    failed_combinations: List[Tuple[int, str, int, str, str]] = []
+    failed_combinations: List[Tuple[int, str, int, str, str, str, str]] = []
     with ThreadPoolExecutor(max_workers=num_jobs, thread_name_prefix="VoronoiJob") as executor:
         futures = {
             executor.submit(
@@ -260,6 +299,8 @@ def execute_with_job_count(
                 logger,
                 project_root,
                 version,
+                dynamic_buffering,
+                dynamic_buffer_k,
                 retry_failed_runs,
             ): job_id
             for job_id, combos in non_empty_jobs
@@ -287,6 +328,10 @@ def main():
                        help="SLURM array task ID (0-9)")
     parser.add_argument("version", nargs="?", default="",
                        help="Optional config version")
+    parser.add_argument("dynamic_buffering", nargs="?", default="",
+                       help="Backward-compatible positional arg (ignored; sweep grid controls this)")
+    parser.add_argument("dynamic_buffer_k", nargs="?", default="",
+                       help="Backward-compatible positional arg (ignored; sweep grid controls this)")
     parser.add_argument("--approach", type=str, default="1",
                        help="Approach to run (default: 1)")
     parser.add_argument("--num-jobs", type=int, default=4,
@@ -315,6 +360,11 @@ def main():
     logger.info(f"Starting parallel Voronoi sweep (task {task_id}/9, approach={args.approach})")
     logger.info(f"Initial parallel jobs: {args.num_jobs}")
     logger.info(f"Shuffle seed: {args.shuffle_seed}")
+    if args.dynamic_buffering or args.dynamic_buffer_k:
+        logger.info(
+            "Dynamic buffering positional overrides were provided but are ignored; "
+            "sweep combinations define rigid and dynamic modes explicitly."
+        )
     
     try:
         # Install editable package
@@ -352,6 +402,8 @@ def main():
                 logger=logger,
                 project_root=project_root,
                 version=args.version,
+                dynamic_buffering=args.dynamic_buffering,
+                dynamic_buffer_k=args.dynamic_buffer_k,
                 retry_failed_runs=args.retry_failed_runs,
             )
 

@@ -69,13 +69,18 @@ Most users should edit these keys first:
 3. params.buffer
 4. params.weight_method
 5. params.weight_func
-6. paths.data_dir
-7. paths.seg_results_filepath
-8. paths.annotations_images_dir
-9. paths.annotations_results_filepath
-10. booleans.legacy_merge
-11. execution.mode
-12. annotations.default_mode
+6. params.dynamic_buffering
+7. params.dynamic_buffer_k
+8. params.min_buffer
+9. params.basin_column_name
+10. params.industrial_zenodo_url
+11. paths.data_dir
+12. paths.seg_results_filepath
+13. paths.annotations_images_dir
+14. paths.annotations_results_filepath
+15. booleans.legacy_merge
+16. execution.mode
+17. annotations.default_mode
 
 Practical guidance:
 
@@ -108,6 +113,14 @@ python -m research_code.create_voronoi --approach 2
 - Controlled by params.buffer (or CLI positional override).
 - Larger buffer generally expands candidate influence area and can smooth boundaries.
 - Smaller buffer is faster and more local but may under-cover sparse regions.
+
+### Dynamic Buffering
+
+- Controlled by params.dynamic_buffering and params.dynamic_buffer_k.
+- When enabled, per-site buffer lengths are derived from nearest-neighbor spacing and site weights.
+- params.min_buffer is propagated to weighted_voronoi and sets the minimum dynamic buffer parameter.
+- All shell wrappers and sweep scripts now support dynamic overrides through positional args:
+    [dynamic_buffering] [dynamic_buffer_k].
 
 ### Weight Normalization Method
 
@@ -150,6 +163,12 @@ Example with full overrides:
 python -m research_code.create_voronoi 8 2 15000 square_root mult --approach 1 --only_round
 ```
 
+### Output Path Token Behavior
+
+- Voronoi and derived output paths now use a buffer path token.
+- Rigid buffering runs keep numeric buffer tokens.
+- Dynamic buffering runs use k-based tokens (for example k0_75) to avoid collisions and to keep outputs grouped by dynamic regime.
+
 ## End-to-End Run Order (Recommended)
 
 Run from research_code/:
@@ -162,10 +181,11 @@ Run from research_code/:
 6. download_pop.sh
 7. create_voronoi.sh
 8. add_pop.sh
-9. pop_at_risk_river_calculations/create_rasters.sh
-10. pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
-11. pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
-12. pop_validation_scripts/comparison.sh and figures scripts
+9. Optional industrial branch: industrial_analysis/industrial_analysis.sh
+10. pop_at_risk_river_calculations/create_rasters.sh
+11. pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
+12. pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
+13. pop_validation_scripts/comparison.sh and figures scripts
 
 Workflow relationship:
 
@@ -192,8 +212,16 @@ Typical sweep commands:
 ```bash
 sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep.sh or sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel.sh
 sbatch sensitivity_analysis_scripts/add_pop_param_sweep.sh
+sbatch sensitivity_analysis_scripts/industrial_analysis_sweep.sh
 
 ```
+
+Sweep updates now included:
+
+- Level grid expanded to 6-9.
+- Rigid and dynamic buffering regimes are both generated.
+- Dynamic regime sweeps dynamic_buffer_k values.
+- Empty weight_func combinations are deduplicated to one canonical method.
 
 ## Folder Documentation
 

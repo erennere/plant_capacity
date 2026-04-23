@@ -12,7 +12,7 @@ PYTHON_CMD="python"
 
 #
 # Usage:
-#   ./research_code/annotation_scripts/copy_falsy_images.sh [level] [version] [buffer] [weight_method] [weight_func]
+#   ./research_code/annotation_scripts/copy_falsy_images.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 #
 # Arguments (all optional config overrides):
 #   level         - Processing level (default: from config.yaml arguments.default_level)
@@ -25,6 +25,8 @@ VERSION="${2:-}"
 BUFFER="${3:-}"
 WEIGHT_METHOD="${4:-}"
 WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
 
 mkdir -p "${LOG_DIR}"
 rm -f "${LOG_DIR}/copy_falsy_images.log"
@@ -48,5 +50,5 @@ log "Checking package importability..."
 ensure_research_code_importable
 
 log "Running copy_falsy_images.py"
-${PYTHON_CMD} -m research_code.annotation_scripts.copy_falsy_images "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" 2>&1 | tee -a "${LOG_DIR}/copy_falsy_images.log"
+${PYTHON_CMD} -m research_code.annotation_scripts.copy_falsy_images "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/copy_falsy_images.log"
 log "Completed copy_falsy_images.py"

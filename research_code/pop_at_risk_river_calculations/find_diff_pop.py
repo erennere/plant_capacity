@@ -150,6 +150,8 @@ def parse_args():
     parser.add_argument("buffer", nargs="?", default=None)
     parser.add_argument("weight_method", nargs="?", default=None)
     parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
+    parser.add_argument("dynamic_buffering", nargs="?", default=None, help="Optional dynamic buffering override (true/false)")
+    parser.add_argument("dynamic_buffer_k", nargs="?", default=None, help="Optional dynamic buffer scaling override")
     args = parser.parse_args()
     args.is_parallel = parse_bool(args.is_parallel)
     return args
