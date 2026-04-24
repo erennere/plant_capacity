@@ -70,7 +70,7 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
 
-    figures_cfg = cfg.get("figures") or {}
+    figures_cfg = cfg["figures"] or {}
     if "pop_threshold" not in figures_cfg:
         raise KeyError("Missing 'pop_threshold' in config under 'figures'")
 

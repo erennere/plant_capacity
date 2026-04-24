@@ -142,7 +142,7 @@ def main():
     boundaries['country'] = boundaries['ISO_A2_EH']
     pop_gdf = gpd.read_file(pop_fp).to_crs("EPSG:4326")
     pop_gdf['country'] = pop_gdf['ISO_2']
-    agg_col = resolve_zonal_sum_column(pop_gdf, cfg.get('zonal_sum_default_column', '2024_zonal_sum'))
+    agg_col = resolve_zonal_sum_column(pop_gdf, cfg['zonal_sum_default_column'])
     agg_year = agg_col.split('_')[0]
     alias = f'Pop ({agg_year}):'
     

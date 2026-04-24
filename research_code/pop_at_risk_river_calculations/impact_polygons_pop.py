@@ -137,7 +137,7 @@ def get_runtime_params(cfg):
         'least_discharge_cms': 0.269,
         'impact_radii': [1000, 2000]
     }
-    section = cfg.get('impact_polygons_pop_params', {}) if isinstance(cfg, dict) else {}
+    section = cfg['impact_polygons_pop_params'] if isinstance(cfg, dict) else {}
     if not isinstance(section, dict):
         section = {}
 

@@ -450,10 +450,10 @@ def main():
 
     data_dir = cfg["paths"]["data_dir"]
     threshold = cfg["threshold"]
-    eu_utm = cfg.get("eu_utm", 32634)
+    eu_utm = cfg["eu_utm"]
     factor = 1
     eu_ref_filepath = cfg["paths"]["eu_ref_filepath"]
-    max_workers = cfg.get("max_workers", max(1, os.cpu_count() or 1))
+    max_workers = cfg["max_workers"]
 
     out_dir = os.path.join(data_dir, "sensitivity", "hw_eu_pop_sweep")
     os.makedirs(out_dir, exist_ok=True)

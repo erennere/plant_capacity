@@ -307,8 +307,8 @@ def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     cfg = load_config(**overrides)
     
-    paths = cfg.get('paths', {})
-    max_workers = cfg.get('add_pop_max_workers', 8)
+    paths = cfg['paths']
+    max_workers = cfg['add_pop_max_workers']
     
     if not paths:
         logging.error("No 'paths' configuration found. Check config file.")

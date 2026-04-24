@@ -200,7 +200,7 @@ def main():
     stats_filepath = cfg['paths']['raster_country_stats_filepath']
 
     pop_column = 'population_served_index'
-    zonal_sum_col = cfg.get('zonal_sum_default_column', '2024_zonal_sum')
+    zonal_sum_col = cfg['zonal_sum_default_column']
     filter_col = zonal_sum_col
     industrial_col = 'IND/RES'
     tag1 = 'round_area'

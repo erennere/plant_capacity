@@ -129,6 +129,15 @@ params:
   min_pixels: 9  # Minimum connected pixels to keep in raster-derived features.
   zonal_sum_default_column: "2024_zonal_sum"  # Default zonal-sum column used by figures/comparison scripts.
   basin_column_name: "HYBAS_ID"  # Column name in watershed file for basin identifier.
+  country_output_column: "ISO_2"  # Output column populated by country boundary enrichment.
+  country_boundary_column: "country"  # Country identifier column in boundary datasets (e.g., Overture parquet).
+  site_id_column: "WASTE_ID"  # Primary unique identifier column for WWTP/site records.
+  old_site_id_column: "OLD_WASTE_ID"  # Backup column name used when site IDs are reassigned.
+  calculate_area_fn: "calculate_area"  # Function name (in create_voronoi.py) used to compute area/base_values before weighting.
+  calculate_buffer_fn: "calculate_buffer"  # Function name (in create_voronoi.py) used to compute per-site buffers.
+  area_fn_kwargs: {}  # Extra kwargs forwarded to area_fn in orchestrate_voronoi_weights.
+  calculate_buffer_kwargs: {}  # Kwargs forwarded to calculate_buffer_fn for per-site buffers.
+  prepare_data_fn: "prepare_data"  # Function name (in pipelines.py) called to load and prepare input spatial data; must accept cfg and return a data dict.
   overwrite: false  # Global overwrite flag for generic output writes.
   voronoi_overwrite: false  # Allow overwriting existing Voronoi output files.
   pop_voronoi_overwrite: false  # Allow overwriting existing pop-enriched Voronoi outputs.
@@ -152,6 +161,7 @@ annotations:
   factor: 1.194
   max_workers: 8  # Worker count for parallel annotation download/export tasks.
   random_seed: 42  # Seed for reproducible sampling in annotation workflows.
+  n_sample_size: 1000  # Number of annotation samples drawn for inspection.
   overwrite: false  # Skip export if output annotation file already exists.
   retries: 5  # Max retry attempts per failed tile download.
 

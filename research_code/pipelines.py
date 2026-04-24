@@ -1,8 +1,29 @@
 """
 Pipeline orchestration for Voronoi-based spatial analysis.
 
-Provides high-level workflow functions for different approaches to
-Voronoi generation, path management, and data processing pipelines.
+Functions are grouped by purpose:
+
+**Internal helpers**
+  - ``_compute_mean_2_nnd_web_mercator`` — per-site nearest-neighbour spacing
+  - ``_resolve_configured_callable``    — resolve a config string or callable
+    to an actual function in a given module
+
+**Path builders**
+  - ``create_output_paths``    — canonical output paths for all Voronoi approaches
+  - ``create_pop_output_paths`` — population-enriched output path variants
+
+**Data preparation**
+  - ``prepare_data`` — load and enrich all spatial inputs (WWTP, basin, country
+    layers); can be swapped via ``cfg['prepare_data_fn']``
+
+**Voronoi execution**
+  - ``run_voronoi_approach`` — run one Voronoi approach end-to-end using
+    configurable area/buffer/data functions resolved through
+    ``_resolve_configured_callable``
+
+All config values are read directly from the ``cfg`` dict produced by
+``starter.load_config``; no default values are hard-coded here — they live
+exclusively in ``config.yaml``.
 """
 
 import os
@@ -12,8 +33,87 @@ import geopandas as gpd
 from shapely import from_wkt, to_wkt, from_wkb
 import shapely
 import logging
+from scipy.spatial import cKDTree
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_mean_2_nnd_web_mercator(gdf):
+    """Compute mean distance to the next two neighbors in EPSG:3857.
+
+    Distances are calculated only for rows with valid, non-empty geometries.
+    Values are written to ``mean_2_nnd``; rows without enough valid neighbors
+    remain ``NaN``.
+    """
+    gdf['mean_2_nnd'] = np.nan
+    if gdf is None or gdf.empty:
+        return gdf
+
+    valid_mask = gdf['geometry'].notna() & gdf['geometry'].is_valid & (~gdf['geometry'].is_empty)
+    valid_idx = gdf.index[valid_mask]
+    if len(valid_idx) < 2:
+        return gdf
+
+    # Use representative points so non-point valid geometries can still participate.
+    valid_geom = gdf.loc[valid_idx, 'geometry'].map(
+        lambda geom: geom if geom.geom_type == 'Point' else geom.representative_point()
+    )
+    tmp = gpd.GeoDataFrame({'geometry': valid_geom}, geometry='geometry', crs=gdf.crs)
+    if tmp.crs is None:
+        tmp = tmp.set_crs('epsg:4326')
+    tmp = tmp.to_crs('epsg:3857')
+
+    coords = np.column_stack((tmp.geometry.x.to_numpy(), tmp.geometry.y.to_numpy()))
+    n = len(coords)
+    if n < 2:
+        return gdf
+
+    # k includes the point itself as distance 0; k=3 gives self + two neighbors.
+    k = min(3, n)
+    tree = cKDTree(coords)
+    distances, _ = tree.query(coords, k=k)
+    if k == 2:
+        mean_dist = distances[:, 1].astype(float)
+    else:
+        mean_dist = np.nanmean(distances[:, 1:3], axis=1).astype(float)
+
+    gdf.loc[valid_idx, 'mean_2_nnd'] = mean_dist
+    return gdf
+
+
+def _resolve_configured_callable(value, default_fn, cfg_key, module):
+    """Resolve a config value to a callable, looking it up by name in *module* if needed.
+
+    Parameters
+    ----------
+    value : callable | str | None
+        Raw config value — already a callable, a function-name string, or
+        ``None`` (meaning "use the default").
+    default_fn : callable
+        Returned when *value* is ``None`` or an empty string.
+    cfg_key : str
+        Config key being resolved, used in error messages only.
+    module : module
+        Python module searched by ``getattr`` when *value* is a string.
+    """
+    if value is None:
+        return default_fn
+    if callable(value):
+        return value
+    if isinstance(value, str):
+        fn_name = value.strip()
+        if not fn_name:
+            return default_fn
+        resolved = getattr(module, fn_name, None)
+        if not callable(resolved):
+            raise ValueError(
+                f"cfg['{cfg_key}'] references '{fn_name}', but no callable with "
+                f"that name exists in {module.__name__!r}."
+            )
+        return resolved
+    raise TypeError(
+        f"cfg['{cfg_key}'] must be a callable or string function name, got {type(value).__name__!r}."
+    )
 
 
 def create_output_paths(cfg):
@@ -31,7 +131,7 @@ def create_output_paths(cfg):
     """
     version = cfg['version']
     level = cfg['level']
-    buffer = cfg.get('buffer_path_token', cfg['buffer'])
+    buffer = cfg['buffer_path_token']
     weight_func = cfg['weight_func']
     weight_func_suffix = cfg['weight_func_suffix']
     weight_type = cfg['weight_type']
@@ -74,56 +174,105 @@ def create_pop_output_paths(cfg):
 
 def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distance_fn, output_path,
                         buffer_id_col='buffer_id', scale_weights=False, only_round=False, buffering=False,
-                        method='linear'):
-    """
-    Run a single Voronoi generation approach.
-    
+                        method='linear', site_country_col=None, country_boundary_col=None):
+    """Run a single Voronoi generation approach end-to-end.
+
     Parameters
     ----------
     approach_id : str
-        Approach identifier such as ``0``, ``1a``, or ``3d``.
+        Approach identifier such as ``'0'``, ``'1'``, or ``'2'``.
     gdf : geopandas.GeoDataFrame
         Input sites for the selected approach.
     clipping_gdf : geopandas.GeoDataFrame | None
-        Optional clipping geometries used to trim Voronoi regions.
+        Optional clipping geometries used to constrain Voronoi regions (e.g.
+        basin polygons for approach 1, dissolved WWTP buffers for approach 0).
     country_df : geopandas.GeoDataFrame
-        Country boundaries used for final clipping.
+        Country boundaries used for final spatial clipping.
     cfg : dict
-        Runtime configuration dictionary.
+        Runtime configuration dictionary produced by ``starter.load_config``.
+        All function names and kwargs are resolved from this dict; no defaults
+        are applied here.
     distance_fn : callable
-        Distance function used by the weighted Voronoi solver.
+        Distance function passed to the weighted Voronoi solver
+        (``cfg['distance_fn']`` from the caller).
     output_path : str
-        Output file path.
+        Absolute path where the resulting GeoPackage is written.
     buffer_id_col : str, default='buffer_id'
-        Column used to group features before region generation.
+        Column used to group features into independent Voronoi partitions.
     scale_weights : bool, default=False
-        Whether to scale feature weights before Voronoi generation.
+        Whether to scale feature weights before region generation.
     only_round : bool, default=False
-        Whether to use round-area weights only.
+        When ``True``, only the round-area component is used for weighting.
+        Forwarded as ``area_fn_kwargs['only_round']``.
     buffering : bool, default=False
-        Whether to intersect the output with local feature buffers.
+        When ``True``, intersect the output with the local feature buffers
+        (approach-0 style).
     method : str, default='linear'
-        Weight-transformation method passed into the Voronoi workflow.
+        Weight-transformation method passed to the Voronoi orchestrator
+        (one of ``'linear'``, ``'logarithmic'``, ``'square_root'``,
+        ``'sigmoid'``).
+    site_country_col : str | None, default=None
+        Country-code column on ``gdf``. Falls back to
+        ``cfg['country_output_column']`` when ``None``.
+    country_boundary_col : str | None, default=None
+        Country-code column on ``country_df``. Falls back to
+        ``cfg['country_boundary_column']`` when ``None``.
 
     Returns
     -------
     tuple
-        Tuple ``(df_waste, region_df, point_df)`` returned by the Voronoi workflow.
+        ``(region_df, point_df)`` as returned by the Voronoi orchestrator, or
+        ``(None, None)`` if the run was skipped or orchestration failed.
 
     Notes
     -----
-    This function always overwrites ``output_path`` when called. Any skip-if-
-    output-exists behavior must be implemented by the caller.
+    Skip-if-exists logic is applied at the top of this function using
+    ``cfg['voronoi_overwrite']``.  The area function, buffer function, and
+    their respective kwargs are resolved via ``_resolve_configured_callable``
+    using ``cfg['calculate_area_fn']``, ``cfg['calculate_buffer_fn']``,
+    ``cfg['area_fn_kwargs']``, and ``cfg['calculate_buffer_kwargs']``.
     """
     if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
         logger.info(f"Approach {approach_id}: Output already exists at {output_path} and overwrite is False. Skipping.")
-        return None, None, None
+        return None, None
     
     try:
-        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file
+        from . import create_voronoi as create_voronoi_module
+        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file, calculate_area, calculate_buffer
     except ImportError:  # Support running as a top-level script
-        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file
+        import create_voronoi as create_voronoi_module
+        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file, calculate_area, calculate_buffer
+
+    site_country_col = site_country_col or cfg['country_output_column']
+    country_boundary_col = country_boundary_col or cfg['country_boundary_column']
+    site_id_col = cfg['site_id_column']
     
+    calc_buffer_kwargs = cfg['calculate_buffer_kwargs']
+    if calc_buffer_kwargs is not None and not isinstance(calc_buffer_kwargs, dict):
+        raise TypeError("cfg['calculate_buffer_kwargs'] must be a dict when provided.")
+
+    calculate_area_fn = _resolve_configured_callable(
+        cfg['calculate_area_fn'],
+        calculate_area,
+        'calculate_area_fn',
+        create_voronoi_module,
+    )
+
+    calculate_buffer_fn = _resolve_configured_callable(
+        cfg['calculate_buffer_fn'],
+        calculate_buffer,
+        'calculate_buffer_fn',
+        create_voronoi_module,
+    )
+    
+    cfg_area_kwargs = cfg['area_fn_kwargs']
+    if cfg_area_kwargs is None:
+        cfg_area_kwargs = {}
+    if not isinstance(cfg_area_kwargs, dict):
+        raise TypeError("cfg['area_fn_kwargs'] must be a dict when provided.")
+    area_kwargs = dict(cfg_area_kwargs)
+    area_kwargs['only_round'] = only_round
+
     logger.info(f"Approach {approach_id}: Running Voronoi generation (scale_weights={scale_weights}, only_round={only_round})")
     
     orchestrate_result = orchestrate_voronoi_weights(
@@ -135,72 +284,85 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
         scipy_true=cfg['scipy_true'],
         cv2_true=cfg['cv2_true'],
         centroid_points=True,
-        points_col=None,
         buffering=buffering,
-        buffer=cfg['buffer'],
         threshold=cfg['threshold'],
-        only_round=only_round,
         sigma=cfg['sigma'],
         percent_threshold=cfg['percent_threshold'],
+        area_fn=calculate_area_fn,
+        area_fn_kwargs=area_kwargs,
         method=method,
         output_path=output_path if cfg['return_boolean'] else None,
         overwrite=cfg['temp_voronoi_overwrite'],
         flush_size=cfg['flush_size'],
-        dynamic_buffering=cfg.get('dynamic_buffering', True),
-        k=cfg.get('dynamic_buffer_k', 0.75),
-        min_buffer=cfg.get('min_buffer', 2000),
+        calculate_buffer_fn=calculate_buffer_fn,
+        buffer_fn_kwargs=calc_buffer_kwargs,
+        site_country_col=site_country_col,
+        country_boundary_col=country_boundary_col,
+        site_id_col=site_id_col,
     )
 
     if isinstance(orchestrate_result, bool):
         if not orchestrate_result:
             logger.error(f"Approach {approach_id}: Voronoi orchestration failed")
-            return None, None, None
+            return None, None
         logger.info(f"Approach {approach_id}: Saved regions to {output_path}")
-        return None, None, None
+        return None, None
 
-    df_waste, region_df, point_df = orchestrate_result
+    region_df, point_df = orchestrate_result
     ensure_output_dir_for_file(output_path)
     region_df.to_file(output_path, driver='GPKG', index=False)
     logger.info(f"Approach {approach_id}: Saved {len(region_df)} regions to {output_path}")
-    return df_waste, region_df, point_df
+    return region_df, point_df
 
 
 def prepare_data(cfg):
-    """
-    Load and prepare all input data.
-    
+    """Load and enrich all spatial inputs required by the Voronoi pipeline.
+
+    This is the default data-preparation function.  It can be replaced by
+    setting ``cfg['prepare_data_fn']`` to the name of another function in
+    this module (or a callable) — see ``_resolve_configured_callable``.
+
     Parameters
     ----------
     cfg : dict
-        Runtime configuration dictionary.
+        Runtime configuration dictionary produced by ``starter.load_config``.
 
     Returns
     -------
-    tuple
-        Tuple ``(gdf_bbox, watershed_gdf, country_df)`` containing the prepared
-        WWTP, watershed, and country layers.
+    dict
+        Dictionary with keys:
+
+        - ``'gdf_bbox'``   : WWTP site GeoDataFrame enriched with country codes
+          and basin identifiers, with buffered geometry and re-indexed site IDs.
+        - ``'watershed_gdf'`` : Basin polygon GeoDataFrame enriched with country
+          codes.
+        - ``'country_df'``    : Country boundary GeoDataFrame loaded from the
+          Overture parquet cache.
     """
     try:
         from .create_voronoi import (
-            drop_duplicates, buffer_geometry, duckdb_intersect,
-            download_overture_maps, intersect_watershed_sindex,
+            drop_duplicates, buffer_geometry, intersects_with_country_db,
+            download_overture_maps, intersect_with_polygon_sindex,
             orchestrate_overlaps, ensure_output_dir_for_file,
         )
     except ImportError:  # Support running as a top-level script
         from create_voronoi import (
-            drop_duplicates, buffer_geometry, duckdb_intersect,
-            download_overture_maps, intersect_watershed_sindex,
+            drop_duplicates, buffer_geometry, intersects_with_country_db,
+            download_overture_maps, intersect_with_polygon_sindex,
             orchestrate_overlaps, ensure_output_dir_for_file,
         )
     
     logger.info("Preparing input data...")
     paths = cfg['paths']
+    country_output_col = cfg['country_output_column']
+    country_boundary_col = cfg['country_boundary_column']
+    site_id_col = cfg['site_id_column']
     
     # Load WWTP bounding boxes
     if cfg['csv_files']:
         gdf_bbox = pd.read_csv(paths['bboxes'])
         hydrowaste_df = pd.read_csv(paths['hydrowaste'])
-        gdf_bbox = pd.merge(gdf_bbox, hydrowaste_df.drop(['LON_WWTP', 'LAT_WWTP', 'geometry', 'POP_SERVED'], axis=1), on=['WASTE_ID'])
+        gdf_bbox = pd.merge(gdf_bbox, hydrowaste_df.drop(['LON_WWTP', 'LAT_WWTP', 'geometry', 'POP_SERVED'], axis=1), on=[site_id_col])
         gdf_bbox = gpd.GeoDataFrame(
             gdf_bbox,
             geometry=gdf_bbox['geometry'].map(from_wkt),
@@ -213,14 +375,16 @@ def prepare_data(cfg):
             gdf_bbox['geometry'] = gdf_bbox['final_geometry']
             gdf_bbox = gdf_bbox.drop(columns=['final_geometry'])
     
-    gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, 'WASTE_ID'), 'geometry')
+    gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, site_id_col), 'geometry')
     gdf_bbox['geometry'] = pd.Series(
         [buffer_geometry(geom) for geom in gdf_bbox['geometry']],
         index=gdf_bbox.index,
     )
     gdf_bbox['WKT_WWTP'] = gdf_bbox['geometry'].apply(lambda geom: to_wkt(geom))
-    gdf_bbox['OLD_WASTE_ID'] = gdf_bbox['WASTE_ID']
-    gdf_bbox['WASTE_ID'] = np.arange(len(gdf_bbox))
+    old_site_id_col = cfg['old_site_id_column']
+    gdf_bbox[old_site_id_col] = gdf_bbox[site_id_col]
+    gdf_bbox[site_id_col] = np.arange(len(gdf_bbox))
+    gdf_bbox = _compute_mean_2_nnd_web_mercator(gdf_bbox)
 
     if cfg['remove_industrial']:
         if 'category_number' in gdf_bbox.columns:
@@ -231,12 +395,17 @@ def prepare_data(cfg):
     # Add country codes
     #if 'ISO_2' not in gdf_bbox.columns:
     if True:
-        if 'ISO_2' in gdf_bbox.columns:
-            gdf_bbox = gdf_bbox.drop(columns=['ISO_2'])
+        if country_output_col in gdf_bbox.columns:
+            gdf_bbox = gdf_bbox.drop(columns=[country_output_col])
         if not os.path.exists(paths['overture']):
             download_overture_maps(paths['overture_s3_url'], paths['overture'])
-        gdf_bbox = duckdb_intersect(gdf_bbox, paths['overture'])
-    gdf_bbox.loc[gdf_bbox['ISO_2'].isna(), 'ISO_2'] = 'XX'
+        gdf_bbox = intersects_with_country_db(
+            gdf_bbox,
+            paths['overture'],
+            polygon_country_col=country_boundary_col,
+            output_country_col=country_output_col,
+        )
+    gdf_bbox.loc[gdf_bbox[country_output_col].isna(), country_output_col] = 'XX'
     
     # Load watersheds
     watershed_gdf = gpd.read_file(paths['watershed'], crs='epsg:4326')
@@ -245,24 +414,29 @@ def prepare_data(cfg):
         [buffer_geometry(geom) for geom in watershed_gdf['geometry']],
         index=watershed_gdf.index,
     )
-    
+    watershed_gdf['basin_area'] = watershed_gdf[['geometry']].to_crs(6933).geometry.area
     #if 'ISO_2' not in watershed_gdf.columns:
     if True:
-        if 'ISO_2' in watershed_gdf.columns:
-            watershed_gdf = watershed_gdf.drop(columns=['ISO_2'])
+        if country_output_col in watershed_gdf.columns:
+            watershed_gdf = watershed_gdf.drop(columns=[country_output_col])
         if not os.path.exists(paths['overture']):
             download_overture_maps(paths['overture_s3_url'], paths['overture'])
-        watershed_gdf = duckdb_intersect(watershed_gdf, paths['overture'])
+        watershed_gdf = intersects_with_country_db(
+            watershed_gdf,
+            paths['overture'],
+            polygon_country_col=country_boundary_col,
+            output_country_col=country_output_col,
+        )
     watershed_gpkg_filepath = os.path.abspath(paths['watershed'].replace('.geojson', '.gpkg'))
     if not os.path.exists(watershed_gpkg_filepath):
         ensure_output_dir_for_file(watershed_gpkg_filepath)
         watershed_gdf.to_file(watershed_gpkg_filepath, driver='GPKG', index=False)
 
     # Add watershed information to WWTP
-    basin_col = cfg.get('basin_column_name', 'HYBAS_ID')
+    basin_col = cfg['basin_column_name']
     if basin_col not in gdf_bbox.columns:
-        gdf_bbox = intersect_watershed_sindex(gdf_bbox, watershed_gdf, basin_col, concurrency=cfg['sindex_concurrency'])
-        gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, 'WASTE_ID'), 'geometry')
+        gdf_bbox = intersect_with_polygon_sindex(gdf_bbox, watershed_gdf, basin_col, concurrency=cfg['sindex_concurrency'])
+        gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, site_id_col), 'geometry')
         filename = os.path.join(os.path.dirname(paths['bboxes']), f"expanded_{os.path.basename(paths['bboxes'])}")
         if not os.path.exists(f"{filename}"):    
             ensure_output_dir_for_file(filename)

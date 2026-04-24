@@ -15,11 +15,11 @@ import mercantile
 
 try:
     from ..add_pop import intersect_all_files
-    from ..create_voronoi import duckdb_intersect, ensure_output_dir_for_file
+    from ..create_voronoi import intersects_with_country_db, ensure_output_dir_for_file
     from ..starter import load_config, parse_config_overrides
 except ImportError:
     from research_code.add_pop import intersect_all_files
-    from research_code.create_voronoi import duckdb_intersect, ensure_output_dir_for_file
+    from research_code.create_voronoi import intersects_with_country_db, ensure_output_dir_for_file
     from research_code.starter import load_config, parse_config_overrides
 
 # Configure logging
@@ -136,6 +136,8 @@ def main():
     zoom_level = int(cfg['zoom_level'])
     max_workers = 64
     tif_dir = cfg['paths']['pop_tif_dir']
+    country_boundary_col = cfg['country_boundary_column']
+    country_output_col = cfg['country_output_column']
 
     input_pattern = cfg['paths']['impact_pop_polygons_outpath'].replace('.gpkg', '_*.gpkg')
     input_files = glob(input_pattern)
@@ -146,7 +148,12 @@ def main():
 
         impact_polygons = gpd.read_file(input_file)
         impact_polygons = assign_tile_to_df(impact_polygons, zoom_level, max_workers)
-        impact_polygons = duckdb_intersect(impact_polygons, cfg['paths']['overture'])
+        impact_polygons = intersects_with_country_db(
+            impact_polygons,
+            cfg['paths']['overture'],
+            polygon_country_col=country_boundary_col,
+            output_country_col=country_output_col,
+        )
         ensure_output_dir_for_file('impact_polygons_tiled.gpkg')
         impact_polygons.to_file('impact_polygons_tiled.gpkg', index=False, driver='GPKG')
         impact_polygons = intersect_all_files(impact_polygons, tif_dir, int(max_workers/8), all_years=False)

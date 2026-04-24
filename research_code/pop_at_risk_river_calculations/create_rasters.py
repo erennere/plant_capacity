@@ -30,13 +30,13 @@ from shapely.ops import unary_union
 try:
     from ..add_pop import find_newest_country_tif_files
     from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import download_overture_maps, duckdb_intersect, ensure_output_dir_for_file
+    from ..create_voronoi import download_overture_maps, intersects_with_country_db, ensure_output_dir_for_file
     from ..pipelines import create_pop_output_paths
     from .find_pop_in_danger_pop import find_bbox, finding_tiles
 except ImportError:
     from research_code.add_pop import find_newest_country_tif_files
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.create_voronoi import download_overture_maps, duckdb_intersect, ensure_output_dir_for_file
+    from research_code.create_voronoi import download_overture_maps, intersects_with_country_db, ensure_output_dir_for_file
     from research_code.pipelines import create_pop_output_paths
     from research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop import find_bbox, finding_tiles
 
@@ -638,11 +638,18 @@ def main():
     )
 
     watershed_gdf = gpd.read_file(cfg['paths']['watershed'], crs='epsg:4326').drop_duplicates(subset=['HYBAS_ID', 'geometry'], keep='first').reset_index(drop=True)
-    if 'ISO_2' not in watershed_gdf.columns: 
-        logger.warning("Watershed ISO_2 missing; running overture enrichment")
+    country_boundary_col = cfg['country_boundary_column']
+    country_output_col = cfg['country_output_column']
+    if country_output_col not in watershed_gdf.columns: 
+        logger.warning("Watershed %s missing; running overture enrichment", country_output_col)
         if not os.path.exists(cfg['paths']['overture']):
             download_overture_maps(cfg['paths']['overture_s3_url'], cfg['paths']['overture'])
-        watershed_gdf = duckdb_intersect(watershed_gdf, cfg['paths']['overture'])
+        watershed_gdf = intersects_with_country_db(
+            watershed_gdf,
+            cfg['paths']['overture'],
+            polygon_country_col=country_boundary_col,
+            output_country_col=country_output_col,
+        )
         ensure_output_dir_for_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'))
         watershed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
     

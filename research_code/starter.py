@@ -136,46 +136,61 @@ def load_config(
 ):
     """Load and parse YAML configuration with optional CLI overrides.
 
-    Constructs paths by expanding template strings in ``config.yaml`` using
-    ``{data_dir}``, ``{version}``, ``{level}``, ``{buffer}``, and related
-    variables.
+    All parameter defaults live exclusively in ``config.yaml``.  The optional
+    keyword arguments are *runtime overrides* that the shell wrappers inject;
+    when a value is ``None`` the YAML default is used unchanged.  No fallback
+    defaults are hard-coded in this function.
+
+    Path templates in ``config.yaml`` are expanded using ``str.format`` with
+    the variables ``{data_dir}``, ``{version}``, ``{level}``, ``{buffer}``,
+    ``{weight_type}``, ``{weight_func}``, ``{final_data_dir}``,
+    ``{extra_points_dir}``, ``{annotations_dir}``, ``{dl_dir}``,
+    ``{figures_dir}``, and ``{industrial_min_cells}``.
 
     Parameters
     ----------
     config : str, default="config.yaml"
         Path to the YAML configuration file.
     level : str or None, optional
-        Processing level override; falls back to ``arguments.default_level``.
+        Processing level override (e.g. ``"7"``).  Falls back to
+        ``arguments.default_level`` in the YAML.
     version : str or None, optional
-        Data version override; falls back to ``arguments.default_version``.
+        Data-version override (e.g. ``"2"``).  Falls back to
+        ``arguments.default_version`` in the YAML.
     buffer : int or None, optional
-        Buffer distance in metres override; falls back to ``params.buffer``.
+        Buffer radius override in metres.  Falls back to ``params.buffer``.
     weight_method : str or None, optional
-        Weight transformation override; falls back to ``params.weight_method``.
+        Weight-transform override (``'linear'`` | ``'square_root'`` |
+        ``'logarithmic'`` | ``'sigmoid'``).  Falls back to
+        ``params.weight_method``.
     weight_func : str or None, optional
-        Weighted-distance mode override. Accepted values are ``"mult"``,
-        ``"add"``, or ``""``. Falls back to ``params.weight_func``.
+        Distance-weighting mode override.  Accepted values are ``"mult"``,
+        ``"add"``, or ``""``.  Falls back to ``params.weight_func``.
     dynamic_buffering : bool or None, optional
-        Dynamic Voronoi buffering flag override; falls back to
+        Per-site dynamic buffering flag override.  Falls back to
         ``params.dynamic_buffering``.
     dynamic_buffer_k : float or None, optional
-        Dynamic buffer scale factor override; falls back to
+        Dynamic buffer scale-factor override.  Falls back to
         ``params.dynamic_buffer_k``.
 
     Returns
     -------
     dict
-        Flat configuration dictionary with keys including ``level``,
-        ``version``, ``buffer``, ``weight_method``, ``weight_func``,
-        ``max_workers``, ``n_points``, numeric Voronoi parameters,
-        ``dynamic_buffering``, ``dynamic_buffer_k``, processing flags,
-        ``distance_fn``, and a ``paths`` sub-dict of 40+ expanded filesystem
-        paths.
+        Flat configuration dictionary consumed by all pipeline modules.
+        Keys include ``level``, ``version``, ``buffer``, ``buffer_path_token``,
+        ``weight_method``, ``weight_func``, ``weight_type``,
+        ``weight_func_suffix``, ``max_workers``, ``n_points``, all numeric
+        Voronoi tuning parameters, ``dynamic_buffering``, ``dynamic_buffer_k``,
+        all boolean flags, ``distance_fn`` (resolved callable),
+        ``prepare_data_fn``, ``calculate_area_fn``, ``calculate_buffer_fn``
+        (all as raw string names for deferred resolution by
+        ``_resolve_configured_callable``), and a ``paths`` sub-dict of 50+
+        expanded absolute filesystem paths.
 
     Notes
     -----
-    For CLI-driven scripts use ``parse_config_overrides()`` to derive
-    runtime overrides from argparse or ``sys.argv`` before passing them here.
+    For CLI-driven scripts use ``parse_config_overrides()`` to collect
+    overrides from argparse or ``sys.argv`` before passing them here.
     """
     # Lazy import to avoid circular import issues
     try:
@@ -205,10 +220,10 @@ def load_config(
     if weight_func is None:
         weight_func = ""
 
-    dynamic_buffering = cfg['params'].get('dynamic_buffering', True) if dynamic_buffering is None else dynamic_buffering
+    dynamic_buffering = cfg['params']['dynamic_buffering'] if dynamic_buffering is None else dynamic_buffering
     dynamic_buffering = _parse_optional_bool(dynamic_buffering, "dynamic_buffering")
 
-    dynamic_buffer_k = cfg['params'].get('dynamic_buffer_k', 0.75) if dynamic_buffer_k is None else dynamic_buffer_k
+    dynamic_buffer_k = cfg['params']['dynamic_buffer_k'] if dynamic_buffer_k is None else dynamic_buffer_k
     dynamic_buffer_k = _parse_optional_float(dynamic_buffer_k, "dynamic_buffer_k")
 
     final_data_dir = cfg["paths"]["final_data_dir"]
@@ -236,7 +251,7 @@ def load_config(
         buffer_path_token = f"k{str(dynamic_buffer_k).replace('.', '_')}"
     else:
         buffer_path_token = str(int(buffer))
-    industrial_min_cells = str(cfg['params'].get('industrial_min_cells', 100))
+    industrial_min_cells = str(cfg['params']['industrial_min_cells'])
 
     def f(path):
         return path.format(
@@ -363,13 +378,20 @@ def load_config(
         "figures": cfg["figures"],
         "credentials": cfg["credentials"],
         "add_pop_max_workers": cfg["params"]["add_pop_max_workers"],
-        "weight_method": weight_method,
-        "weight_func": weight_func,
         "zoom_level": cfg["params"]["zoom_level"],
         "remove_industrial": flags['remove_industrial'],  
         "industrial_category_numbers": cfg['params']['industrial_category_numbers'],
-        "zonal_sum_default_column": cfg['params'].get('zonal_sum_default_column', '2024_zonal_sum'),
-        "basin_column_name": cfg['params'].get('basin_column_name', 'HYBAS_ID'),
+        "zonal_sum_default_column": cfg['params']['zonal_sum_default_column'],
+        "basin_column_name": cfg['params']['basin_column_name'],
+        "country_output_column": cfg['params']['country_output_column'],
+        "country_boundary_column": cfg['params']['country_boundary_column'],
+        "site_id_column": cfg['params']['site_id_column'],
+        "old_site_id_column": cfg['params']['old_site_id_column'],
+        "calculate_area_fn": cfg['params']['calculate_area_fn'],
+        "calculate_buffer_fn": cfg['params']['calculate_buffer_fn'],
+        "area_fn_kwargs": cfg['params']['area_fn_kwargs'],
+        "calculate_buffer_kwargs": cfg['params']['calculate_buffer_kwargs'],
+        "prepare_data_fn": cfg['params']['prepare_data_fn'],
         "min_pixels": cfg['params']['min_pixels'],
         "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],
         "legacy_merge": flags['legacy_merge'],
@@ -377,14 +399,14 @@ def load_config(
         "voronoi_overwrite": cfg['params']['voronoi_overwrite'],
         "pop_voronoi_overwrite": cfg['params']['pop_voronoi_overwrite'],
         "temp_voronoi_overwrite": cfg['params']['temp_voronoi_overwrite'],
-        "industrial_vectorize_overwrite": cfg['params'].get('industrial_vectorize_overwrite', False),
-        "industrial_unconnected_overwrite": cfg['params'].get('industrial_unconnected_overwrite', False),
+        "industrial_vectorize_overwrite": cfg['params']['industrial_vectorize_overwrite'],
+        "industrial_unconnected_overwrite": cfg['params']['industrial_unconnected_overwrite'],
         "return_boolean": flags['return_boolean'],
         "flush_size": cfg['params']['flush_size'],
         "dynamic_buffering": dynamic_buffering,
         "dynamic_buffer_k": float(dynamic_buffer_k) if dynamic_buffer_k is not None else None,
-        "min_buffer": cfg['params'].get('min_buffer', 2000),
-        "industrial_zenodo_url": cfg['params'].get('industrial_zenodo_url', 'https://zenodo.org/records/14832219/files/Industrial_land_10m_1093cities_2023.zip'),
-        "industrial_min_cells": cfg['params'].get('industrial_min_cells', 100),
-        "industrial_persist_rasters": cfg['params'].get('industrial_persist_rasters', False),
+        "min_buffer": cfg['params']['min_buffer'],
+        "industrial_zenodo_url": cfg['params']['industrial_zenodo_url'],
+        "industrial_min_cells": cfg['params']['industrial_min_cells'],
+        "industrial_persist_rasters": cfg['params']['industrial_persist_rasters'],
     }

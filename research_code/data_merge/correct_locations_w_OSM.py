@@ -16,7 +16,7 @@ try:
     from ..starter import load_config, parse_config_overrides
     from ..download_pop import get_iso_codes
 except ImportError:
-    from research_code.create_voronoi import estimate_utm_epsg, duckdb_intersect, download_overture_maps, buffer_geometry, ensure_output_dir_for_file
+    from research_code.create_voronoi import estimate_utm_epsg, intersects_with_country_db, download_overture_maps, buffer_geometry, ensure_output_dir_for_file
     from research_code.starter import load_config, parse_config_overrides
     from research_code.download_pop import get_iso_codes
 

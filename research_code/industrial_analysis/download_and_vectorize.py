@@ -29,10 +29,10 @@ import pandas as pd
 
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import duckdb_intersect, intersect_watershed_sindex, download_overture_maps
+    from ..create_voronoi import intersects_with_country_db, intersect_with_polygon_sindex, download_overture_maps
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.create_voronoi import duckdb_intersect, intersect_watershed_sindex, download_overture_maps
+    from research_code.create_voronoi import intersects_with_country_db, intersect_with_polygon_sindex, download_overture_maps
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -194,6 +194,8 @@ def add_boundary_info(
     overture_s3_url: str,
     basin_col: str,
     sindex_concurrency: bool,
+    country_boundary_col: str = 'country',
+    country_output_col: str = 'ISO_2',
 ) -> gpd.GeoDataFrame:
     """Add country and basin attributes without clipping industrial geometry."""
     if basin_col not in watershed_gdf.columns:
@@ -209,13 +211,18 @@ def add_boundary_info(
     enriched["__row_id"] = enriched.index.astype(int)
     original_geometry = enriched[["__row_id", "geometry"]].rename(columns={"geometry": "_original_geometry"})
 
-    logger.info("Adding ISO_2 via create_voronoi.duckdb_intersect...")
-    enriched = duckdb_intersect(enriched, overture_path)
+    logger.info("Adding %s via create_voronoi.intersects_with_country_db...", country_output_col)
+    enriched = intersects_with_country_db(
+        enriched,
+        overture_path,
+        polygon_country_col=country_boundary_col,
+        output_country_col=country_output_col,
+    )
 
-    logger.info(f"Adding basin info via create_voronoi.intersect_watershed_sindex ({basin_col})...")
+    logger.info(f"Adding basin info via create_voronoi.intersect_with_polygon_sindex ({basin_col})...")
     if enriched.crs != watershed_gdf.crs:
         watershed_gdf = watershed_gdf.to_crs(enriched.crs)
-    enriched = intersect_watershed_sindex(
+    enriched = intersect_with_polygon_sindex(
         enriched,
         watershed_gdf,
         basin_col,
@@ -260,9 +267,9 @@ def main():
     cfg = load_config(**overrides)
 
     output_path = cfg['paths']['industrial_merged_gpkg']
-    overwrite = cfg.get('industrial_vectorize_overwrite', False)
-    min_cells = cfg.get('industrial_min_cells', 100)
-    persist_rasters = cfg.get('industrial_persist_rasters', False)
+    overwrite = cfg['industrial_vectorize_overwrite']
+    min_cells = cfg['industrial_min_cells']
+    persist_rasters = cfg['industrial_persist_rasters']
 
     # Fast exit: final enriched output is already up to date.
     if os.path.exists(output_path) and not overwrite:
@@ -337,8 +344,10 @@ def main():
             watershed_gdf,
             cfg['paths']['overture'],
             cfg['paths']['overture_s3_url'],
-            cfg.get('basin_column_name', 'HYBAS_ID'),
-            cfg.get('sindex_concurrency', False),
+            cfg['basin_column_name'],
+            cfg['sindex_concurrency'],
+            cfg['country_boundary_column'],
+            cfg['country_output_column'],
         )
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

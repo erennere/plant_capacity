@@ -133,8 +133,8 @@ def main():
     histogram_path = os.path.join(image_output_dir, 'annotation_category_histogram.png')
     plot_category_distribution(df, 'category_name', save_path=histogram_path, show=False)
 
-    sample_size = int(cfg['annotations'].get('n_sample_size', 1000))
-    random_seed = int(cfg['annotations'].get('random_seed', 42))
+    sample_size = int(cfg['annotations']['n_sample_size'])
+    random_seed = int(cfg['annotations']['random_seed'])
     df_sampled = get_stratified_sample(df, 'category_name', total_n=sample_size, seed=random_seed)
 
     sample_csv_path = os.path.join(image_output_dir, 'annotation_stratified_sample.csv')

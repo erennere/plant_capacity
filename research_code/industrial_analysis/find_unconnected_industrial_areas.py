@@ -24,12 +24,14 @@ import pandas as pd
 
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..pipelines import run_voronoi_approach, prepare_data, create_output_paths
-    from ..create_voronoi import intersect_watershed_sindex, orchestrate_overlaps, drop_duplicates
+    from .. import pipelines as _pipelines_module
+    from ..pipelines import run_voronoi_approach, prepare_data, create_output_paths, _resolve_configured_callable
+    from ..create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.pipelines import run_voronoi_approach, prepare_data, create_output_paths
-    from research_code.create_voronoi import intersect_watershed_sindex, orchestrate_overlaps, drop_duplicates
+    import research_code.pipelines as _pipelines_module
+    from research_code.pipelines import run_voronoi_approach, prepare_data, create_output_paths, _resolve_configured_callable
+    from research_code.create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -61,9 +63,7 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path, driver='GPKG')
     logger.info(f"Loaded {len(gdf)} WTTPs")
     
-    basin_col = cfg.get('basin_column_name', 'HYBAS_ID')
-
-    # Check if configured basin column exists; if not, try to add it
+    basin_col = cfg['basin_column_name']
     if approach_id == '1' and (basin_col not in gdf.columns or gdf[basin_col].isna().all()):
         logger.info(f"Basin information '{basin_col}' missing; attempting to add from watershed intersection...")
         watershed_gdf = gpd.read_file(
@@ -78,11 +78,11 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
             watershed_gdf = watershed_gdf.to_crs(gdf.crs)
         
         # Use the same watershed intersection method as industrial vectorization.
-        gdf = intersect_watershed_sindex(
+        gdf = intersect_with_polygon_sindex(
             gdf,
             watershed_gdf[[basin_col, 'geometry']].copy(),
             basin_col,
-            concurrency=cfg.get('sindex_concurrency', False),
+            concurrency=cfg['sindex_concurrency'],
         )
         logger.info(f"Added basin info to {len(gdf[gdf[basin_col].notna()])} WTTPs")
     
@@ -91,7 +91,7 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
 
 def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Filter WTTPs to those with industrial or mixed usage."""
-    industrial_categories = cfg.get('industrial_category_numbers', [])
+    industrial_categories = cfg['industrial_category_numbers']
     
     if not industrial_categories:
         logger.warning("No industrial categories configured; using all WTTPs")
@@ -139,7 +139,9 @@ def run_voronoi_for_wwtps(
     """
     logger.info(f"Running Voronoi diagram orchestration for filtered WTTPs (approach {approach_id} style)...")
 
-    basin_col = cfg.get('basin_column_name', 'HYBAS_ID')
+    basin_col = cfg['basin_column_name']
+    country_output_col = cfg['country_output_column']
+    site_id_col = cfg['site_id_column']
     if basin_col not in wwtps_gdf.columns:
         raise KeyError(f"Expected basin column '{basin_col}' in WWTP dataframe before Voronoi run.")
     if basin_col not in watershed_gdf.columns:
@@ -160,18 +162,19 @@ def run_voronoi_for_wwtps(
             cfg['max_workers'],
             paths_dict['buffers']['WWTP'],
             cfg['buffer'],
+            country_col=country_output_col,
         )
-        dissolved_buffers = drop_duplicates(drop_duplicates(dissolved_buffers, 'WASTE_ID'), 'geometry')
+        dissolved_buffers = drop_duplicates(drop_duplicates(dissolved_buffers, site_id_col), 'geometry')
         dissolved_buffers['buffer_id'] = np.arange(len(dissolved_buffers))
 
         run_gdf = wwtps_gdf.copy()
-        run_gdf = intersect_watershed_sindex(
+        run_gdf = intersect_with_polygon_sindex(
             run_gdf,
             dissolved_buffers,
             'buffer_id',
-            concurrency=cfg.get('sindex_concurrency', False),
+            concurrency=cfg['sindex_concurrency'],
         )
-        run_gdf = drop_duplicates(drop_duplicates(run_gdf, 'WASTE_ID'), 'geometry')
+        run_gdf = drop_duplicates(drop_duplicates(run_gdf, site_id_col), 'geometry')
         clipping_gdf = dissolved_buffers
         buffering = False
     else:
@@ -182,7 +185,7 @@ def run_voronoi_for_wwtps(
                                   scale_weights=scale_weights, only_round=only_round, buffering=buffering,
                                   method=cfg['weight_method'])
 
-    _, region_df, _ = result
+    region_df, _ = result
     if region_df is None:
         logger.error("Voronoi orchestration failed")
         return None
@@ -272,7 +275,7 @@ def main():
     paths_dict = create_output_paths(cfg)
     
     output_path = cfg['paths']['industrial_unconnected_output']
-    overwrite = cfg.get('industrial_unconnected_overwrite', False)
+    overwrite = cfg['industrial_unconnected_overwrite']
     
     # Check if output exists and overwrite is disabled
     if os.path.exists(output_path) and not overwrite:
@@ -298,7 +301,9 @@ def main():
             unconnected = industrial_gdf.copy()
         else:
             # Load preprocessed watershed + country data
-            data = prepare_data(cfg)
+            data = _resolve_configured_callable(
+                cfg['prepare_data_fn'], prepare_data, 'prepare_data_fn', _pipelines_module,
+            )(cfg)
             country_gdf = data['country_df']
             watershed_gdf = data['watershed_gdf']
             path_key = f"{selected_approach}_only_round" if only_round and selected_approach in {'0', '1'} else selected_approach
