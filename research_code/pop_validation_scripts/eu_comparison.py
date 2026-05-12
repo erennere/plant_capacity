@@ -184,7 +184,7 @@ def main():
 
     factor = 1
     threshold = cfg['threshold']
-    utm = 32634 
+    utm = 3857 
     pop_col = 'POP_SERVED_EU'
     ref_filepath = cfg['paths']['eu_ref_filepath']
     organic_m_column = 'uwwCapacity'

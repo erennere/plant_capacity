@@ -156,7 +156,7 @@ def main():
         )
         ensure_output_dir_for_file('impact_polygons_tiled.gpkg')
         impact_polygons.to_file('impact_polygons_tiled.gpkg', index=False, driver='GPKG')
-        impact_polygons = intersect_all_files(impact_polygons, tif_dir, int(max_workers/8), all_years=False)
+        impact_polygons = intersect_all_files(impact_polygons, tif_dir, int(max_workers/8), all_years=False, country_col=country_output_col)
         tile_groups = group_tile_population_sums(impact_polygons)
         del impact_polygons
 

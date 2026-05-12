@@ -390,7 +390,16 @@ def load_config(
         "calculate_area_fn": cfg['params']['calculate_area_fn'],
         "calculate_buffer_fn": cfg['params']['calculate_buffer_fn'],
         "area_fn_kwargs": cfg['params']['area_fn_kwargs'],
-        "calculate_buffer_kwargs": cfg['params']['calculate_buffer_kwargs'],
+        "calculate_buffer_kwargs": {
+                "buffer": buffer,
+                "dynamic_buffering": dynamic_buffering,
+                "min_buffer": cfg['params']['min_buffer'],
+                "max_buffer": cfg['params']['max_buffer'],
+                "k_min": cfg['params']['k_min'],
+                "k_max": cfg['params']['k_max'],
+                "conf_threshold": cfg['params']['detection_confidence_threshold'],
+                "k_value": dynamic_buffer_k
+        },
         "prepare_data_fn": cfg['params']['prepare_data_fn'],
         "min_pixels": cfg['params']['min_pixels'],
         "impact_polygons_pop_params": cfg['impact_polygons_pop_params'],

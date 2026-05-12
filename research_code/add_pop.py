@@ -181,33 +181,35 @@ def find_newest_country_tif_files(countries, tif_dir):
     return newest
 
 
-def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True):
+def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True, country_col='ISO_2'):
     """Intersect population rasters with polygons across all countries.
 
     Parameters
     ----------
     gdf : geopandas.GeoDataFrame
-        Input polygons with an ``ISO_2`` column.
+        Input polygons with a country-code column (see ``country_col``).
     tif_dir : str
         Root directory containing country raster subdirectories.
     max_workers : int, default=16
         Maximum number of worker processes.
     all_years : bool, default=True
         Whether to attach all discovered raster years instead of only the latest.
+    country_col : str, default='ISO_2'
+        Column on ``gdf`` containing ISO 3166-1 alpha-2 country codes.
 
     Returns
     -------
     geopandas.GeoDataFrame
         Concatenated result with population statistics attached.
     """
-    tif_filepaths = find_country_tif_files(gdf['ISO_2'].unique(), tif_dir)
+    tif_filepaths = find_country_tif_files(gdf[country_col].unique(), tif_dir)
 
     data = []
-    countries = gdf['ISO_2'].unique().tolist()
+    countries = gdf[country_col].unique().tolist()
     countries = [c for c in countries if c in tif_filepaths and tif_filepaths[c] is not None]
     random.shuffle(countries)
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(intersect_single_file, gdf[gdf['ISO_2'] == iso_2].copy(), tif_filepaths.get(iso_2, []), all_years=all_years)
+        futures = [executor.submit(intersect_single_file, gdf[gdf[country_col] == iso_2].copy(), tif_filepaths.get(iso_2, []), all_years=all_years)
                     for iso_2 in countries]
         
         # Progress bar for country processing
@@ -226,7 +228,7 @@ def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True):
         logging.warning("No data returned from any country - check raster files and polygon-raster intersection")
         return gpd.GeoDataFrame()
     
-def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=16):
+def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=16, country_col='ISO_2'):
     """Run the population-intersection workflow for one Voronoi file.
 
     Parameters
@@ -241,6 +243,8 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
         Zero-based index of the Voronoi file to process.
     max_workers : int, default=16
         Maximum number of worker processes for zonal statistics.
+    country_col : str, default='ISO_2'
+        Column on the loaded GeoDataFrame containing ISO alpha-2 country codes.
 
     Raises
     ------
@@ -267,7 +271,7 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
         gdf = gpd.read_file(voronoi_file)
         logging.info(f"Loaded Voronoi layer with {len(gdf)} features")
         
-        gdf = intersect_all_files(gdf, tif_dir, max_workers, all_years=True)
+        gdf = intersect_all_files(gdf, tif_dir, max_workers, all_years=True, country_col=country_col)
         
         output_path = os.path.join(output_dir, f'pop_added_{os.path.basename(voronoi_file)}')
         ensure_output_dir_for_file(output_path)
@@ -334,7 +338,8 @@ def main():
             paths['pop_tif_dir'],
             paths['pop_output_dir'],
             index,
-            max_workers
+            max_workers,
+            country_col=cfg['country_output_column'],
         )
         logging.info("Population data integration completed successfully")
     except Exception as err:

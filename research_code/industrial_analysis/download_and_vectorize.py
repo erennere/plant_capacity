@@ -166,24 +166,51 @@ def vectorize_rasters_parallel(
     return gdfs
 
 
-def merge_geodataframes(gdfs: List[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
-    """Merge multiple GeoDataFrames and dissolve overlaps."""
+def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float = 0.01) -> gpd.GeoDataFrame:
+    """Merge multiple GeoDataFrames, dissolve overlaps, and explode to individual features.
+    
+    Parameters
+    ----------
+    gdfs : List[gpd.GeoDataFrame]
+        List of geodataframes to merge.
+    simplify_tolerance : float
+        Tolerance (in degrees) for geometry simplification. Default 0.01 (~1.1km at equator).
+        Increase if GPKG blob size errors persist. Set to None to skip simplification.
+    
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Merged and exploded geodataframe with individual polygons.
+    """
     if not gdfs:
         raise ValueError("No geodataframes to merge")
     
     logger.info(f"Merging {len(gdfs)} geodataframes...")
     merged = pd.concat(gdfs, ignore_index=True)
     
-    logger.info("Dissolving overlapping geometries...")
-    # Dissolve all geometries into a single multi-part geometry
+    logger.info(f"Concatenated {len(merged)} total polygons")
+    
+    # Simplify early to reduce complexity before dissolve
+    if simplify_tolerance is not None:
+        logger.info(f"Simplifying geometries (early pass) with tolerance {simplify_tolerance}...")
+        merged.geometry = merged.geometry.simplify(tolerance=simplify_tolerance, preserve_topology=True)
+    
+    logger.info("Dissolving overlapping geometries with unary_union...")
+    
+    # Dissolve all geometries into a single union (may be MultiPolygon)
     merged_geom = unary_union(merged.geometry)
     
-    result = gpd.GeoDataFrame(
+    # Create a temporary GeoDataFrame with the merged geometry
+    temp_gdf = gpd.GeoDataFrame(
         {'geometry': [merged_geom], 'category': ['industrial_land']},
         crs=merged.crs
     )
     
-    logger.info(f"Merged geometry with {len(result)} feature(s)")
+    # Explode MultiPolygon/MultiPart geometries into individual parts
+    logger.info("Exploding multipart geometries into individual features...")
+    result = temp_gdf.explode(index_parts=False, ignore_index=True)
+    
+    logger.info(f"Merged and exploded GeoDataFrame with {len(result)} feature(s)")
     return result
 
 
@@ -246,7 +273,7 @@ def _find_raster_dirs(base_dir: str) -> List[str]:
     return raster_dirs
 
 
-def _vectorize_and_merge(raster_dirs: List[str], max_workers: int, min_cells: int) -> gpd.GeoDataFrame:
+def _vectorize_and_merge(raster_dirs: List[str], max_workers: int, min_cells: int, simplify_tolerance: float = 0.01) -> gpd.GeoDataFrame:
     """Vectorize all rasters in *raster_dirs* and dissolve into a single GeoDataFrame."""
     if not raster_dirs:
         raise FileNotFoundError("No raster directories found")
@@ -258,7 +285,7 @@ def _vectorize_and_merge(raster_dirs: List[str], max_workers: int, min_cells: in
         )
     if not gdfs:
         raise ValueError("Failed to vectorize any raster files")
-    return merge_geodataframes(gdfs)
+    return merge_geodataframes(gdfs, simplify_tolerance=simplify_tolerance)
 
 
 def main():
@@ -266,20 +293,20 @@ def main():
     overrides = parse_config_overrides(args=None, argv=None, start_index=1)
     cfg = load_config(**overrides)
 
-    output_path = cfg['paths']['industrial_merged_gpkg']
+    vectorized_path = cfg['paths']['industrial_merged_gpkg']
     overwrite = cfg['industrial_vectorize_overwrite']
     min_cells = cfg['industrial_min_cells']
     persist_rasters = cfg['industrial_persist_rasters']
+    simplify_tolerance = cfg['industrial_simplify_tolerance']
 
     # Fast exit: final enriched output is already up to date.
-    if os.path.exists(output_path) and not overwrite:
+    if os.path.exists(vectorized_path) and not overwrite:
         logger.info(f"Output file exists and overwrite=false. Skipping vectorization.")
         return True
 
     # Intermediate file: merged vectorized polygons (pre-enrichment).
     # Named after min_cells so different thresholds don't clobber each other.
-    industrial_analysis_dir = os.path.dirname(output_path)
-    vectorized_path = os.path.join(industrial_analysis_dir, f"industrial_areas_mp{min_cells}.gpkg")
+    industrial_analysis_dir = os.path.dirname(vectorized_path)
 
     try:
         # ------------------------------------------------------------------ #
@@ -317,12 +344,12 @@ def main():
                     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                         zip_ref.extractall(extract_dir)
                     raster_dirs = _find_raster_dirs(extract_dir)
-                    merged_gdf = _vectorize_and_merge(raster_dirs, cfg['max_workers'], min_cells)
+                    merged_gdf = _vectorize_and_merge(raster_dirs, cfg['max_workers'], min_cells, simplify_tolerance)
 
             if persist_rasters:
                 # _vectorize_and_merge is called outside the with-block for the
                 # persistent-dir branch so the rasters remain accessible.
-                merged_gdf = _vectorize_and_merge(raster_dirs, cfg['max_workers'], min_cells)
+                merged_gdf = _vectorize_and_merge(raster_dirs, cfg['max_workers'], min_cells, simplify_tolerance)
 
             # Save intermediate result so boundary enrichment can be re-run
             # independently without repeating download + vectorization.
@@ -350,18 +377,16 @@ def main():
             cfg['country_output_column'],
         )
 
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        logger.info(f"Writing to {output_path}...")
-        enriched_gdf.to_file(output_path, driver='GPKG', index=False)
-        logger.info(f"Successfully created {output_path}")
+        if os.path.exists(vectorized_path):
+            os.remove(vectorized_path)
+        logger.info(f"Writing to {vectorized_path}...")
+        enriched_gdf.to_file(vectorized_path, driver='GPKG', index=False)
+        logger.info(f"Successfully created {vectorized_path}")
         return True
 
     except Exception as e:
         logger.error(f"Error during vectorization: {e}", exc_info=True)
         return False
-
 
 if __name__ == "__main__":
     success = main()

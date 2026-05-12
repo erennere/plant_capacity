@@ -334,7 +334,7 @@ def prepare_data(cfg):
 
         - ``'gdf_bbox'``   : WWTP site GeoDataFrame enriched with country codes
           and basin identifiers, with buffered geometry and re-indexed site IDs.
-        - ``'watershed_gdf'`` : Basin polygon GeoDataFrame enriched with country
+        - ``'basin_gdf'`` : Basin polygon GeoDataFrame enriched with country
           codes.
         - ``'country_df'``    : Country boundary GeoDataFrame loaded from the
           Overture parquet cache.
@@ -407,22 +407,23 @@ def prepare_data(cfg):
         )
     gdf_bbox.loc[gdf_bbox[country_output_col].isna(), country_output_col] = 'XX'
     
-    # Load watersheds
-    watershed_gdf = gpd.read_file(paths['watershed'], crs='epsg:4326')
-    watershed_gdf = watershed_gdf.drop_duplicates(subset=['HYBAS_ID', 'geometry']).reset_index(drop=True)
-    watershed_gdf['geometry'] = pd.Series(
-        [buffer_geometry(geom) for geom in watershed_gdf['geometry']],
-        index=watershed_gdf.index,
+    # Load basins
+    basin_col = cfg['basin_column_name']
+    basin_gdf = gpd.read_file(paths['watershed'], crs='epsg:4326')
+    basin_gdf = basin_gdf.drop_duplicates(subset=[basin_col, 'geometry']).reset_index(drop=True)
+    basin_gdf['geometry'] = pd.Series(
+        [buffer_geometry(geom) for geom in basin_gdf['geometry']],
+        index=basin_gdf.index,
     )
-    watershed_gdf['basin_area'] = watershed_gdf[['geometry']].to_crs(6933).geometry.area
-    #if 'ISO_2' not in watershed_gdf.columns:
+    basin_gdf['basin_area'] = basin_gdf[['geometry']].to_crs(6933).geometry.area
+    #if 'ISO_2' not in basin_gdf.columns:
     if True:
-        if country_output_col in watershed_gdf.columns:
-            watershed_gdf = watershed_gdf.drop(columns=[country_output_col])
+        if country_output_col in basin_gdf.columns:
+            basin_gdf = basin_gdf.drop(columns=[country_output_col])
         if not os.path.exists(paths['overture']):
             download_overture_maps(paths['overture_s3_url'], paths['overture'])
-        watershed_gdf = intersects_with_country_db(
-            watershed_gdf,
+        basin_gdf = intersects_with_country_db(
+            basin_gdf,
             paths['overture'],
             polygon_country_col=country_boundary_col,
             output_country_col=country_output_col,
@@ -430,12 +431,12 @@ def prepare_data(cfg):
     watershed_gpkg_filepath = os.path.abspath(paths['watershed'].replace('.geojson', '.gpkg'))
     if not os.path.exists(watershed_gpkg_filepath):
         ensure_output_dir_for_file(watershed_gpkg_filepath)
-        watershed_gdf.to_file(watershed_gpkg_filepath, driver='GPKG', index=False)
+        basin_gdf.to_file(watershed_gpkg_filepath, driver='GPKG', index=False)
 
-    # Add watershed information to WWTP
-    basin_col = cfg['basin_column_name']
+    # Add basin information to WWTP
     if basin_col not in gdf_bbox.columns:
-        gdf_bbox = intersect_with_polygon_sindex(gdf_bbox, watershed_gdf, basin_col, concurrency=cfg['sindex_concurrency'])
+        gdf_bbox = intersect_with_polygon_sindex(gdf_bbox, basin_gdf, basin_col, concurrency=cfg['sindex_concurrency'])
+        gdf_bbox = pd.merge(gdf_bbox, basin_gdf[[basin_col, 'basin_area']], on=basin_col, how='left')
         gdf_bbox = drop_duplicates(drop_duplicates(gdf_bbox, site_id_col), 'geometry')
         filename = os.path.join(os.path.dirname(paths['bboxes']), f"expanded_{os.path.basename(paths['bboxes'])}")
         if not os.path.exists(f"{filename}"):    
@@ -452,5 +453,7 @@ def prepare_data(cfg):
     country_df['geometry'] = country_df['geometry'].map(lambda geom: from_wkb(geom) if pd.notna(geom) else None)
     country_df = gpd.GeoDataFrame(country_df, geometry='geometry', crs=4326)
     
-    logger.info(f"Loaded {len(gdf_bbox)} WWTP sites, {len(watershed_gdf)} watersheds, {len(country_df)} countries")
-    return {'gdf_bbox': gdf_bbox, 'watershed_gdf': watershed_gdf, 'country_df': country_df}
+    logger.info(f"Loaded {len(gdf_bbox)} WWTP sites, {len(basin_gdf)} basins, {len(country_df)} countries")
+    return {'gdf_bbox': gdf_bbox, 'basin_gdf': basin_gdf, 'country_df': country_df}
+
+

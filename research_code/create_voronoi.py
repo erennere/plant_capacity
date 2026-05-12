@@ -1560,68 +1560,258 @@ def extract_site_coordinates(df, centroid_points):
 def calculate_buffer(df, weights, *args, **kwargs):
     """
     Calculate per-site buffer lengths based on dynamic or fixed buffering strategy.
-    
+
     Parameters
     ----------
     df : geopandas.GeoDataFrame
-        Input sites. For single-site case, must have length 1.
-        For multi-site case, used to compute nearest-neighbor distances.
+        Input sites. Must contain geometry and optionally
+        ``num_detection_circle``, ``num_detection_rect``, and ``total_area``
+        columns for segmentation-informed buffering.
     weights : numpy.ndarray
-        Weight values for each site (used only in dynamic buffering multi-site case).
+        Normalized weight values for each site (sum=1 within basin).
     *args : tuple
         Optional positional arguments for custom implementations.
     **kwargs : dict
         Configuration values used by the default implementation.
-        Supported keys include ``buffer``, ``dynamic_buffering``,
-        ``min_buffer``, ``max_buffer``, and ``k``.
-    
+
+        buffer : float, default=10000
+            Fallback buffer radius in metres when NND is unavailable.
+        dynamic_buffering : bool, default=True
+            Whether to use per-site dynamic buffer lengths.
+        min_buffer : float, default=1500
+            Absolute floor for any buffer length in metres.
+        max_buffer : float, default=50000
+            Absolute ceiling for any buffer length in metres.
+            When None, derived per-site from ``total_area`` via
+            ``_size_ceiling``.
+        k_min : float, default=0.40
+            Lower bound of the k scaling range.
+        k_max : float, default=0.90
+            Upper bound of the k scaling range.
+        detection_confidence_threshold : int, default=3
+            Number of detections required for full confidence in the
+            sophistication signal. Below this, the density signal
+            dominates progressively.
+
     Returns
     -------
     numpy.ndarray
-        Buffer length for each site in df.
-        
+        Buffer length in metres for each site in df.
+
     Notes
     -----
-    - Single-site case: Returns scalar wrapped in array [buffer_length]
-    - Multi-site dynamic: Derives per-site buffers from nearest-neighbor distances
-    - Multi-site fixed: Returns array of constant buffer values
-    """
-    buffer = kwargs.get('buffer', 10000)
-    dynamic_buffering = kwargs.get('dynamic_buffering', True)
-    min_buffer = kwargs.get('min_buffer', 2000)
-    max_buffer = kwargs.get('max_buffer')
-    k = kwargs.get('k', args[0] if len(args) > 0 else 0.75)
-    if max_buffer is None:
-        max_buffer = min_buffer
+    k is computed per site from two signals blended by detection confidence:
 
-    if len(df) > 1:
-        # Multi-site case: set up weight parameters based on distance function type.
-        if dynamic_buffering:
-            logger.debug(f"Computing dynamic buffer lengths for {len(df)} sites")
-            nnd, _mnd = nearest_neighbor_distances_and_median(df)
-            if len(nnd) == len(df):
-                buffer_lengths = nnd
-            else:
-                logger.warning("NN distance length mismatch (%s vs %s); falling back to fixed buffer defaults", len(nnd), len(df))
-                buffer_lengths = np.full(len(df), buffer, dtype=float)
-            buffer_lengths = np.where(np.isnan(buffer_lengths), buffer, buffer_lengths)
-            buffer_lengths = buffer_lengths * k * np.sqrt(weights)
-            buffer_lengths = np.clip(buffer_lengths, min_buffer, max_buffer)
-            logger.debug(f"Dynamic buffer range: {buffer_lengths.min():.2f} to {buffer_lengths.max():.2f}")
-            return buffer_lengths
-        else:
-            fixed_buffer = float(np.clip(buffer, min_buffer, max_buffer))
-            logger.debug(f"Using fixed buffer length {fixed_buffer} for {len(df)} sites")
-            return np.full(len(df), fixed_buffer, dtype=float)
+        k_density     — log-scaled nearest-neighbor distance.
+                        Isolated plants (large nnd) get higher k.
+        k_sophistication — log-scaled detection count.
+                        Complex, well-instrumented plants get higher k.
+
+    When detection confidence is low (few or no detected structures),
+    k collapses to k_density alone — the safer, data-independent signal.
+
+    Buffer ceiling is derived from ``total_area`` when ``max_buffer`` is
+    None, mapping detected infrastructure area to a physically realistic
+    service radius. Falls back to the basin median area when a site has
+    no detected area.
+
+    """
+
+    # ------------------------------------------------------------------ #
+    # Kwargs                                                               #
+    # ------------------------------------------------------------------ #
+    buffer               = kwargs['buffer']
+    dynamic_buffering    = kwargs['dynamic_buffering']
+    min_buffer           = kwargs['min_buffer']
+    max_buffer_global    = kwargs['max_buffer']
+    k_min                = kwargs['k_min']
+    k_max                = kwargs['k_max']
+    conf_threshold       = kwargs['detection_confidence_threshold']
+    k_value = kwargs.get('k_value', 0.5)
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _size_ceiling(area: float) -> float:
+        """Map detected infrastructure area (m²) to service radius ceiling (m).
+
+        Thresholds are calibrated against typical PE/area ratios for
+        activated-sludge plants. They represent an upper bound, not a
+        target — the buffer formula may produce smaller values.
+
+        Approximate calibration:
+            < 500 m²   ≈ <2 000 PE   — village plant,  gravity only
+            < 2 000 m² ≈ 10 000 PE   — small town
+            < 15 000 m²≈ 100 000 PE  — medium city
+            < 100 000 m²≈1 000 000 PE — large city
+            ≥ 100 000 m²              — mega plant
+
+        Note: thresholds assume European-style infrastructure density.
+        Land-intensive treatment systems (stabilisation ponds) common in
+        the Global South may warrant higher ceilings at equivalent area.
+        """
+        if area < 500:        return  8_000
+        elif area < 2_000:    return 15_000
+        elif area < 15_000:   return 25_000
+        elif area < 100_000:  return 40_000
+        else:                 return 50_000
+
+    def _compute_k(nnd: float, num_circles: int, num_rects: int,
+                   confidence: float) -> float:
+        """Compute per-site k from density and sophistication signals.
+
+        Parameters
+        ----------
+        nnd : float
+            Mean nearest-neighbor distance in metres.
+        num_circles : int
+            Number of detected circular structures (primary capacity signal —
+            treatment tanks, clarifiers, digesters).
+        num_rects : int
+            Number of detected rectangular structures
+        confidence : float
+            Detection confidence in [0, 1]. At 0 the sophistication signal
+            is ignored entirely; at 1 it contributes its full 40% blend
+            weight.
+
+        Returns
+        -------
+        float
+            k value in [k_min, k_max].
+
+        Notes
+        -----
+        Density signal weight (0.60) exceeds sophistication weight (0.40)
+        because nnd is a hard physical constraint — a plant cannot serve
+        people its pipes do not reach regardless of treatment sophistication.
+
+        """
+        # --- Density signal (always active) ---
+        # Log-scaled: plateaus beyond ~60 km so mega-isolated outliers
+        # don't dominate. Normalised to [0, 1].
+        k_density = min(np.log1p(nnd) / np.log1p(60_000), 1.0)
+
+        # --- Sophistication signal (gated by detection confidence) ---
+        weighted_detections = float(num_circles + num_rects)
+        # Log-scaled: plateaus beyond ~10 weighted detections.
+        k_soph = min(np.log1p(weighted_detections) / np.log1p(10), 1.0)
+
+        # --- Confidence-gated blend ---
+        # When confidence == 0  → k = k_density          (pure density)
+        # When confidence == 1  → k = 0.6*k_density + 0.4*k_soph
+        k_raw = k_density + confidence * k_value * (k_soph - k_density)
+
+        # --- Scale to [k_min, k_max] ---
+        return float(k_min + k_raw * (k_max - k_min))
+
+    def _site_detection_counts(row) -> tuple[int, int]:
+        """Extract circle and rect detection counts from a DataFrame row."""
+        circles = int(pd.to_numeric(
+            row.get('num_detection_circle', 0), errors='coerce') or 0)
+        rects   = int(pd.to_numeric(
+            row.get('num_detection_rect',   0), errors='coerce') or 0)
+        return max(circles, 0), max(rects, 0)
+
+    def _detection_confidence(num_circles: int, num_rects: int) -> float:
+        """Confidence in [0,1] based on total weighted detections vs threshold.
+
+        Reaches 1.0 when weighted detections ≥ conf_threshold.
+        Below that it scales linearly so partial segmentation results
+        still contribute proportionally rather than being binary.
+        """
+        weighted = float(num_circles + num_rects)
+        return min(weighted / max(conf_threshold, 1), 1.0)
+
+    # ------------------------------------------------------------------ #
+    # Basin-level fallbacks (computed once, reused per site)              #
+    # ------------------------------------------------------------------ #
+    total_area_series = pd.to_numeric(
+        df.get('basin_area', pd.Series(dtype=float)), errors='coerce'
+    ).fillna(0)
+    positive_areas = total_area_series[total_area_series > 0]
+    basin_median_area = float(positive_areas.median()) if not positive_areas.empty else 2_000
+
+    # ------------------------------------------------------------------ #
+    # FIXED BUFFERING — trivial path                                      #
+    # ------------------------------------------------------------------ #
+    if not dynamic_buffering:
+        ceiling = max_buffer_global if max_buffer_global is not None else 50_000
+        fixed = float(np.clip(buffer, min_buffer, ceiling))
+        logger.debug("Fixed buffer: %.1f m for %d sites", fixed, len(df))
+        return np.full(len(df), fixed, dtype=float)
+
+    # ------------------------------------------------------------------ #
+    # DYNAMIC BUFFERING                                                    #
+    # ------------------------------------------------------------------ #
+
+    # --- Nearest-neighbor distances ---
+    nnd_array, mean_nnd = nearest_neighbor_distances_and_median(df)
+
+    # Per-site mean_2_nnd column as secondary fallback
+    mean_2_nnd_col = pd.to_numeric(
+        df['mean_2_nnd'] if 'mean_2_nnd' in df.columns else pd.Series(np.nan, index=df.index),
+        errors='coerce',
+    ).to_numpy()
+
+    # Determine per-site NND: nnd_array → mean_2_nnd column → buffer
+    if len(nnd_array) == len(df):
+        site_nnds = np.where(np.isnan(nnd_array), mean_2_nnd_col, nnd_array)
+        site_nnds = np.where(np.isnan(site_nnds), buffer, site_nnds)
     else:
-        # Single-site case
-        if dynamic_buffering:
-            buffer_length = float(np.clip(buffer * k, min_buffer, max_buffer))
-            logger.debug(f"Single-site dynamic buffer: {buffer_length}")
-        else:
-            buffer_length = float(np.clip(buffer, min_buffer, max_buffer))
-            logger.debug(f"Single-site fixed buffer: {buffer_length}")
-        return np.array([buffer_length], dtype=float)
+        logger.warning(
+            "NND length mismatch (%d vs %d); falling back to mean_2_nnd column",
+            len(nnd_array), len(df),
+        )
+        site_nnds = np.where(np.isnan(mean_2_nnd_col), buffer, mean_2_nnd_col)
+
+    # ------------------------------------------------------------------ #
+    # SINGLE-SITE case                                                     #
+    # ------------------------------------------------------------------ #
+    if len(df) == 1:
+        row        = df.iloc[0]
+        circles, rects = _site_detection_counts(row)
+        confidence = _detection_confidence(circles, rects)
+        nnd_val    = float(site_nnds[0])
+        k          = _compute_k(nnd_val, circles, rects, confidence)
+
+        area       = float(total_area_series.iloc[0]) if total_area_series.iloc[0] > 0 else basin_median_area
+        ceiling    = max_buffer_global if max_buffer_global is not None else _size_ceiling(area)
+
+        # Single isolated site: use fallback buffer scaled by k as base
+        raw        = buffer * k
+        result     = float(np.clip(raw, min_buffer, ceiling))
+        logger.debug(
+            "Single-site buffer: %.1f m (k=%.3f, circles=%d, rects=%d, confidence=%.2f)",
+            result, k, circles, rects, confidence,
+        )
+        return np.array([result], dtype=float)
+
+    # ------------------------------------------------------------------ #
+    # MULTI-SITE case                                                      #
+    # ------------------------------------------------------------------ #
+    buffer_lengths = np.empty(len(df), dtype=float)
+
+    for i, (_, row) in enumerate(df.iterrows()):
+        circles, rects = _site_detection_counts(row)
+        confidence     = _detection_confidence(circles, rects)
+        nnd_val        = float(site_nnds[i])
+        k              = _compute_k(nnd_val, circles, rects, confidence)
+
+        area    = float(total_area_series.iloc[i]) if total_area_series.iloc[i] > 0 else basin_median_area
+        ceiling = max_buffer_global if max_buffer_global is not None else _size_ceiling(area)
+
+        # Core formula: nnd × k
+        # sqrt(weight) deliberately excluded — weights already act on the
+        # Voronoi distance metric; including them here double-penalises
+        # small plants in dense basins.
+        raw = nnd_val * k
+        buffer_lengths[i] = np.clip(raw, min_buffer, ceiling)
+    logger.debug(
+        "Dynamic buffer range: %.1f – %.1f m (mean=%.1f m) for %d sites",
+        buffer_lengths.min(), buffer_lengths.max(), buffer_lengths.mean(), len(df),
+    )
+    return buffer_lengths
 
 def initialize_voronoi_weights(df, distance_fn, scale_weights, points):
     """
@@ -2720,16 +2910,16 @@ EXAMPLES:
     )(cfg)
 
     gdf_bbox = data['gdf_bbox']
-    watershed_gdf = data['watershed_gdf']
+    basin_gdf = data['basin_gdf']
     country_df = data['country_df']
     
     # Lazily-computed shared data structures
-    dissolved_buffers_WWTP = None
+    dissolved_site_buffers = None
     dissolved_buffers_cities = None
     gdf_0 = None
     gdf_4 = None
     gdf_2 = None
-    watershed_gdf_2 = None
+    basin_gdf_2 = None
     
     # Execute requested approaches
     for approach_id in approaches_to_run:
@@ -2740,20 +2930,20 @@ EXAMPLES:
             # === APPROACH 0: WWTP buffer Voronoi (no watersheds) ===
             if approach_id == '0':
                 logger.info("Starting Approach 0: WWTP buffer Voronoi")
-                if dissolved_buffers_WWTP is None:
-                    dissolved_buffers_WWTP = orchestrate_overlaps(gdf_bbox, cfg['max_workers'], 
+                if dissolved_site_buffers is None:
+                    dissolved_site_buffers = orchestrate_overlaps(gdf_bbox, cfg['max_workers'], 
                                                                  paths_dict['buffers']['WWTP'], cfg['buffer'],
                                                                  country_col=country_output_col)
-                    dissolved_buffers_WWTP = drop_duplicates(drop_duplicates(dissolved_buffers_WWTP, site_id_col), 'geometry')
-                    dissolved_buffers_WWTP['buffer_id'] = np.arange(len(dissolved_buffers_WWTP))
+                    dissolved_site_buffers = drop_duplicates(drop_duplicates(dissolved_site_buffers, site_id_col), 'geometry')
+                    dissolved_site_buffers['buffer_id'] = np.arange(len(dissolved_site_buffers))
                 
                 if gdf_0 is None:
                     gdf_0 = gdf_bbox.copy()
-                    gdf_0 = intersect_with_polygon_sindex(gdf_0, dissolved_buffers_WWTP, 'buffer_id', 
+                    gdf_0 = intersect_with_polygon_sindex(gdf_0, dissolved_site_buffers, 'buffer_id', 
                                                        concurrency=cfg['sindex_concurrency'])
                     gdf_0 = drop_duplicates(drop_duplicates(gdf_0, site_id_col), 'geometry')
                 
-                run_voronoi_approach('0', gdf_0, dissolved_buffers_WWTP, country_df, cfg, cfg['distance_fn'],
+                run_voronoi_approach('0', gdf_0, dissolved_site_buffers, country_df, cfg, cfg['distance_fn'],
                                     paths_dict['voronoi'][path_key], buffer_id_col='buffer_id',
                                     scale_weights=scale_weights, only_round=only_round, buffering=False,
                                     method=cfg['weight_method'])
@@ -2765,10 +2955,10 @@ EXAMPLES:
                 if gdf_2 is None:
                     gdf_2 = gdf_bbox.copy()
                     gdf_2['buffer_id'] = gdf_2['HYBAS_ID']
-                    watershed_gdf_2 = watershed_gdf.copy()
-                    watershed_gdf_2['buffer_id'] = watershed_gdf_2['HYBAS_ID']
+                    basin_gdf_2 = basin_gdf.copy()
+                    basin_gdf_2['buffer_id'] = basin_gdf_2['HYBAS_ID']
                 
-                run_voronoi_approach('1', gdf_2, watershed_gdf_2, country_df, cfg, cfg['distance_fn'],
+                run_voronoi_approach('1', gdf_2, basin_gdf_2, country_df, cfg, cfg['distance_fn'],
                                     paths_dict['voronoi'][path_key], buffer_id_col='buffer_id',
                                     scale_weights=scale_weights, only_round=only_round, buffering=True,
                                     method=cfg['weight_method'])

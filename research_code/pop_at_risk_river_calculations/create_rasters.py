@@ -86,7 +86,7 @@ def geotiff_exists_and_valid(path):
     except Exception:
         return False
     
-def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9, zoom_level=8):
+def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9, zoom_level=8, basin_col='HYBAS_ID'):
     """
     Extracts population islands from WorldPop rasters with strict RAM management.
     Designed for 64GB / 4 processes (16GB per worker).
@@ -168,7 +168,7 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
                 # 3. BASIN PROCESSING
                 for idx in possible_idx:
                     row = hybas_gdf.iloc[idx]
-                    h_id = row.get('HYBAS_ID')
+                    h_id = row.get(basin_col)
 
                     # Create basin mask
                     h_mask = geometry_mask(
@@ -240,7 +240,7 @@ def extract_worldpop_universal(raster_path, hybas_gdf, exclude_gdf, min_pixels=9
                             continue
                         final_rows.append({
                         "geometry": clipped,
-                        "HYBAS_ID": h_id,
+                        basin_col: h_id,
                         "tile": tile,
                         **content["meta"]
                     })
@@ -422,7 +422,7 @@ def polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path):
         logger.exception("Error processing raster %s: %s", raster_path, err)
         return output_path, None, None
 
-def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, output_path, min_pixels=9, zoom_level=8): 
+def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, output_path, min_pixels=9, zoom_level=8, basin_col='HYBAS_ID'): 
     """Process one country raster and return signed-raster stats plus extracted islands.
 
     Parameters
@@ -448,11 +448,11 @@ def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, o
     """
     filepath, sum_pos, sum_neg = polygon_raster_sign_from_gdf(raster_path, polygons_gdf, output_path)
     #gdf = extract_worldpop_optimized_v2(raster_path, polygons_gdf)
-    gdf = extract_worldpop_universal(raster_path, watershed_gdf, polygons_gdf, min_pixels=min_pixels, zoom_level=zoom_level)
+    gdf = extract_worldpop_universal(raster_path, watershed_gdf, polygons_gdf, min_pixels=min_pixels, zoom_level=zoom_level, basin_col=basin_col)
     return filepath, sum_pos, sum_neg, gdf
 
 def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_output_filepath, non_served_outpath, max_workers=4,
-                              min_pixels=9, zoom_level=8):
+                              min_pixels=9, zoom_level=8, country_col='ISO_2', basin_col='HYBAS_ID'):
     """
     Process multiple raster files in parallel, intersecting with polygons
     and creating signed rasters (+ inside polygons, - outside).
@@ -462,7 +462,7 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
     tif_dict : dict
         Dictionary mapping country codes to raster filepaths.
     gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing polygons with 'ISO_2' column.
+        GeoDataFrame containing polygons with a country-code column (see ``country_col``).
     watershed_gdf : geopandas.GeoDataFrame
         Watershed polygons used for island extraction.
     output_dir : str
@@ -510,11 +510,12 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
             future = executor.submit(
                 orchestrate_country_intersection,
                 tif_filepath,
-                gdf[gdf['ISO_2'] == country],
-                watershed_gdf[watershed_gdf['ISO_2'] == country],
+                gdf[gdf[country_col] == country],
+                watershed_gdf[watershed_gdf[country_col] == country],
                 output_filepath,
                 min_pixels=min_pixels,
-                zoom_level=zoom_level
+                zoom_level=zoom_level,
+                basin_col=basin_col,
             )
             future_to_country[future] = country
         # Collect results with a progress bar
@@ -626,7 +627,8 @@ def main():
     logger.info("Loading Voronoi polygons from %s", voronoi_3a_filepath)
 
     gdf = gpd.read_file(voronoi_3a_filepath)
-    tif_dict = find_newest_country_tif_files(gdf['ISO_2'].unique(), tif_dir)
+    country_output_col = cfg['country_output_column']
+    tif_dict = find_newest_country_tif_files(gdf[country_output_col].unique(), tif_dir)
     logger.info("Resolved %s newest country TIFF files", len(tif_dict))
 
     tif_dict = shard_tif_dict(tif_dict, args.job_index, args.total_jobs, seed)
@@ -637,9 +639,8 @@ def main():
         len(tif_dict)
     )
 
-    watershed_gdf = gpd.read_file(cfg['paths']['watershed'], crs='epsg:4326').drop_duplicates(subset=['HYBAS_ID', 'geometry'], keep='first').reset_index(drop=True)
+    watershed_gdf = gpd.read_file(cfg['paths']['watershed'], crs='epsg:4326').drop_duplicates(subset=[cfg['basin_column_name'], 'geometry'], keep='first').reset_index(drop=True)
     country_boundary_col = cfg['country_boundary_column']
-    country_output_col = cfg['country_output_column']
     if country_output_col not in watershed_gdf.columns: 
         logger.warning("Watershed %s missing; running overture enrichment", country_output_col)
         if not os.path.exists(cfg['paths']['overture']):
@@ -654,7 +655,7 @@ def main():
         watershed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
     
     logger.info("Starting country intersection workflow with max_workers=%s", max_workers)
-    orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_tif_dir, csv_output_filepath, non_served_outpath, max_workers, min_pixels=min_pixels, zoom_level=zoom_level)
+    orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_tif_dir, csv_output_filepath, non_served_outpath, max_workers, min_pixels=min_pixels, zoom_level=zoom_level, country_col=country_output_col, basin_col=cfg['basin_column_name'])
 if __name__ == '__main__':
     main()
     

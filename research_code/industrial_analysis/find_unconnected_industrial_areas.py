@@ -66,21 +66,21 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
     basin_col = cfg['basin_column_name']
     if approach_id == '1' and (basin_col not in gdf.columns or gdf[basin_col].isna().all()):
         logger.info(f"Basin information '{basin_col}' missing; attempting to add from watershed intersection...")
-        watershed_gdf = gpd.read_file(
+        basin_gdf = gpd.read_file(
             cfg['paths']['watershed'],
             driver='GPKG'
         )
 
-        if basin_col not in watershed_gdf.columns:
-            raise KeyError(f"Configured basin column '{basin_col}' not found in watershed dataset.")
+        if basin_col not in basin_gdf.columns:
+            raise KeyError(f"Configured basin column '{basin_col}' not found in basin dataset.")
         
-        if gdf.crs != watershed_gdf.crs:
-            watershed_gdf = watershed_gdf.to_crs(gdf.crs)
+        if gdf.crs != basin_gdf.crs:
+            basin_gdf = basin_gdf.to_crs(gdf.crs)
         
-        # Use the same watershed intersection method as industrial vectorization.
+        # Use the same basin intersection method as industrial vectorization.
         gdf = intersect_with_polygon_sindex(
             gdf,
-            watershed_gdf[[basin_col, 'geometry']].copy(),
+            basin_gdf[[basin_col, 'geometry']].copy(),
             basin_col,
             concurrency=cfg['sindex_concurrency'],
         )
@@ -114,7 +114,7 @@ def run_voronoi_for_wwtps(
     cfg: dict,
     approach_id: str,
     wwtps_gdf: gpd.GeoDataFrame,
-    watershed_gdf: gpd.GeoDataFrame,
+    basin_gdf: gpd.GeoDataFrame,
     country_gdf: gpd.GeoDataFrame,
     paths_dict: dict,
     output_path: str,
@@ -144,15 +144,15 @@ def run_voronoi_for_wwtps(
     site_id_col = cfg['site_id_column']
     if basin_col not in wwtps_gdf.columns:
         raise KeyError(f"Expected basin column '{basin_col}' in WWTP dataframe before Voronoi run.")
-    if basin_col not in watershed_gdf.columns:
-        raise KeyError(f"Expected basin column '{basin_col}' in watershed dataframe.")
+    if basin_col not in basin_gdf.columns:
+        raise KeyError(f"Expected basin column '{basin_col}' in basin dataframe.")
 
     scale_weights = cfg['weight_func'] in {'mult', 'add'}
     if approach_id == '1':
         # Match create_voronoi approach 1 setup.
         run_gdf = wwtps_gdf.copy()
         run_gdf['buffer_id'] = run_gdf[basin_col]
-        clipping_gdf = watershed_gdf.copy()
+        clipping_gdf = basin_gdf.copy()
         clipping_gdf['buffer_id'] = clipping_gdf[basin_col]
         buffering = True
     elif approach_id == '0':
@@ -305,7 +305,7 @@ def main():
                 cfg['prepare_data_fn'], prepare_data, 'prepare_data_fn', _pipelines_module,
             )(cfg)
             country_gdf = data['country_df']
-            watershed_gdf = data['watershed_gdf']
+            basin_gdf = data['basin_gdf']
             path_key = f"{selected_approach}_only_round" if only_round and selected_approach in {'0', '1'} else selected_approach
             voronoi_output_path = paths_dict['voronoi'][path_key]
             
@@ -314,7 +314,7 @@ def main():
                 cfg,
                 selected_approach,
                 industrial_wwtps,
-                watershed_gdf,
+                basin_gdf,
                 country_gdf,
                 paths_dict,
                 voronoi_output_path,

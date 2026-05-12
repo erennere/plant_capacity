@@ -26,8 +26,8 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-def find_difference(watershed_gdf, pop_gdf):
-    """Compute geometric difference watershed - population geometry by HYBAS_ID.
+def find_difference(watershed_gdf, pop_gdf, basin_col='HYBAS_ID'):
+    """Compute geometric difference watershed - population geometry by basin ID.
 
     Parameters
     ----------
@@ -35,6 +35,8 @@ def find_difference(watershed_gdf, pop_gdf):
         Watershed polygons for a selected EPSG subset.
     pop_gdf : geopandas.GeoDataFrame
         Population polygons for the same EPSG subset.
+    basin_col : str, default='HYBAS_ID'
+        Column name used to join watershed and population features.
 
     Returns
     -------
@@ -59,8 +61,8 @@ def find_difference(watershed_gdf, pop_gdf):
         ST_AsText(ST_Difference(ST_GEOMFROMTEXT(a.geometry), ST_GEOMFROMTEXT(b.geometry))) as geometry
         FROM watershed_gdf AS a
         LEFT JOIN pop_gdf AS b
-        ON a.HYBAS_ID = b.HYBAS_ID
-        WHERE b.HYBAS_ID IS NOT NULL
+        ON a.{basin_col} = b.{basin_col}
+        WHERE b.{basin_col} IS NOT NULL
         """
         df = conn.execute(query).df()
         df = df[df["geometry"].notna()].copy()
@@ -76,10 +78,10 @@ def find_difference(watershed_gdf, pop_gdf):
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
-def process_epsg_group(epsg, watershed_gdf, pop_gdf):
+def process_epsg_group(epsg, watershed_gdf, pop_gdf, basin_col='HYBAS_ID'):
     """Process one EPSG bucket and return differences in EPSG:4326."""
     subset_pop_gdf = pop_gdf[pop_gdf['epsg'] == epsg]
-    subset_watershed_gdf = watershed_gdf[watershed_gdf['HYBAS_ID'].isin(subset_pop_gdf['HYBAS_ID'].unique())]
+    subset_watershed_gdf = watershed_gdf[watershed_gdf[basin_col].isin(subset_pop_gdf[basin_col].unique())]
 
     if subset_pop_gdf.empty or subset_watershed_gdf.empty:
         logger.info("EPSG %s skipped because one subset is empty", epsg)
@@ -87,12 +89,12 @@ def process_epsg_group(epsg, watershed_gdf, pop_gdf):
 
     subset_pop_gdf = subset_pop_gdf.to_crs(epsg)
     subset_watershed_gdf = subset_watershed_gdf.to_crs(epsg)
-    diff_gdf = find_difference(subset_watershed_gdf, subset_pop_gdf)
+    diff_gdf = find_difference(subset_watershed_gdf, subset_pop_gdf, basin_col=basin_col)
     if diff_gdf is not None:
         diff_gdf = gpd.GeoDataFrame(diff_gdf, geometry='geometry', crs=epsg).to_crs(4326)
     return diff_gdf
 
-def find_differences(watershed_gdf, pop_gdf, max_workers=None, is_parallel=True):
+def find_differences(watershed_gdf, pop_gdf, max_workers=None, is_parallel=True, basin_col='HYBAS_ID'):
     """Compute all differences by grouping inputs in local UTM EPSG zones."""
     pop_local = pop_gdf.copy()
     pop_local['epsg'] = pop_local['geometry'].apply(
@@ -103,7 +105,7 @@ def find_differences(watershed_gdf, pop_gdf, max_workers=None, is_parallel=True)
     if is_parallel:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(process_epsg_group, epsg, watershed_gdf, pop_local): epsg
+                executor.submit(process_epsg_group, epsg, watershed_gdf, pop_local, basin_col): epsg
                 for epsg in pop_local['epsg'].unique()
             }
             for future in as_completed(futures):
@@ -112,7 +114,7 @@ def find_differences(watershed_gdf, pop_gdf, max_workers=None, is_parallel=True)
                     gdf_list.append(result)
     else:
         for epsg in pop_local['epsg'].unique():
-            result = process_epsg_group(epsg, watershed_gdf, pop_local)
+            result = process_epsg_group(epsg, watershed_gdf, pop_local, basin_col)
             if result is not None:
                 gdf_list.append(result)
     
@@ -170,9 +172,9 @@ def main():
     pop_dif_output_dir = cfg['paths']['pop_dif_output_dir']
 
     filenames = sorted([
-        x for x in os.listdir(pop_output_dir)
-        if (('appr_1' in x) or ('appr_3' in x)) and x.endswith('.gpkg')
-    ])
+        x for x in os.listdir(pop_output_dir)])
+       # if (('appr_1' in x) or ('appr_3' in x)) and x.endswith('.gpkg')
+    #])
     if not filenames:
         raise FileNotFoundError(f"No matching input .gpkg files found in {pop_output_dir}")
     if args.index < 0 or args.index >= len(filenames):
@@ -185,8 +187,8 @@ def main():
     watershed_gdf = gpd.read_file(watershed_filepath)
     logger.info("Loaded %s population features and %s watershed features", len(pop_gdf), len(watershed_gdf))
 
-    diff_gdf = find_differences(watershed_gdf, pop_gdf, max_workers=max_workers, is_parallel=args.is_parallel)
-    diff_gdf = intersect_all_files(diff_gdf, tif_dir, max_workers=max_workers)
+    diff_gdf = find_differences(watershed_gdf, pop_gdf, max_workers=max_workers, is_parallel=args.is_parallel, basin_col=cfg['basin_column_name'])
+    diff_gdf = intersect_all_files(diff_gdf, tif_dir, max_workers=max_workers, country_col=cfg['country_output_column'])
     logger.info("Post-intersection features: %s", len(diff_gdf))
     
     if not os.path.exists(pop_dif_output_dir):
