@@ -28,6 +28,11 @@ from shapely.ops import unary_union
 import pandas as pd
 
 try:
+    from shapely import make_valid
+except ImportError:
+    make_valid = None
+
+try:
     from ..starter import load_config, parse_config_overrides
     from ..create_voronoi import intersects_with_country_db, intersect_with_polygon_sindex, download_overture_maps
 except ImportError:
@@ -166,6 +171,25 @@ def vectorize_rasters_parallel(
     return gdfs
 
 
+def _repair_geometry(geom):
+    """Repair invalid geometries before overlay operations."""
+    if geom is None or geom.is_empty:
+        return None
+    if geom.is_valid:
+        return geom
+    if make_valid is not None:
+        repaired = make_valid(geom)
+    else:
+        repaired = geom.buffer(0)
+    if repaired is None or repaired.is_empty:
+        return None
+    if not repaired.is_valid:
+        repaired = repaired.buffer(0)
+    if repaired.is_empty:
+        return None
+    return repaired
+
+
 def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float = 0.01) -> gpd.GeoDataFrame:
     """Merge multiple GeoDataFrames, dissolve overlaps, and explode to individual features.
     
@@ -187,16 +211,29 @@ def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float 
     
     logger.info(f"Merging {len(gdfs)} geodataframes...")
     merged = pd.concat(gdfs, ignore_index=True)
-    
+
     logger.info(f"Concatenated {len(merged)} total polygons")
-    
+
+    logger.info("Repairing invalid geometries before dissolve...")
+    merged["geometry"] = merged.geometry.map(_repair_geometry)
+    merged = merged[merged.geometry.notna() & ~merged.geometry.is_empty].copy()
+    logger.info(f"Retained {len(merged)} valid polygons after repair")
+    if merged.empty:
+        raise ValueError("No valid industrial polygons remain after geometry repair")
+
     # Simplify early to reduce complexity before dissolve
     if simplify_tolerance is not None:
         logger.info(f"Simplifying geometries (early pass) with tolerance {simplify_tolerance}...")
-        merged.geometry = merged.geometry.simplify(tolerance=simplify_tolerance, preserve_topology=True)
-    
+        merged["geometry"] = merged.geometry.simplify(tolerance=simplify_tolerance, preserve_topology=True)
+        logger.info("Repairing geometries after simplification...")
+        merged["geometry"] = merged.geometry.map(_repair_geometry)
+        merged = merged[merged.geometry.notna() & ~merged.geometry.is_empty].copy()
+        logger.info(f"Retained {len(merged)} valid polygons after simplification")
+        if merged.empty:
+            raise ValueError("No valid industrial polygons remain after simplification")
+
     logger.info("Dissolving overlapping geometries with unary_union...")
-    
+
     # Dissolve all geometries into a single union (may be MultiPolygon)
     merged_geom = unary_union(merged.geometry)
     
@@ -247,7 +284,7 @@ def add_boundary_info(
     )
 
     logger.info(f"Adding basin info via create_voronoi.intersect_with_polygon_sindex ({basin_col})...")
-    if enriched.crs != watershed_gdf.crs:
+    if enriched.crs is not None and enriched.crs != watershed_gdf.crs:
         watershed_gdf = watershed_gdf.to_crs(enriched.crs)
     enriched = intersect_with_polygon_sindex(
         enriched,
@@ -307,6 +344,7 @@ def main():
     # Intermediate file: merged vectorized polygons (pre-enrichment).
     # Named after min_cells so different thresholds don't clobber each other.
     industrial_analysis_dir = os.path.dirname(vectorized_path)
+    merged_gdf = None
 
     try:
         # ------------------------------------------------------------------ #
@@ -357,6 +395,8 @@ def main():
             if os.path.exists(vectorized_path):
                 os.remove(vectorized_path)
             logger.info(f"Saving vectorized polygons to {vectorized_path}...")
+            if merged_gdf is None:
+                raise ValueError("Vectorization did not produce any industrial polygons")
             merged_gdf.to_file(vectorized_path, driver='GPKG', index=False)
             logger.info(f"Saved {len(merged_gdf)} feature(s) to {vectorized_path}")
 

@@ -418,4 +418,5 @@ def load_config(
         "industrial_zenodo_url": cfg['params']['industrial_zenodo_url'],
         "industrial_min_cells": cfg['params']['industrial_min_cells'],
         "industrial_persist_rasters": cfg['params']['industrial_persist_rasters'],
+        "industrial_simplify_tolerance": cfg['params']['industrial_simplify_tolerance']
     }
