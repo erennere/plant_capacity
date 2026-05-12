@@ -96,8 +96,8 @@ paths:
 
   # Industrial analysis module outputs
   industrial_raster_persistent_dir: "{data_dir}/industrial_analysis/rasters"  # Used when industrial_persist_rasters=true.
-  industrial_merged_gpkg: "{data_dir}/industrial_analysis/industrial_land_merged_v{version}_lvl{level}_mp{industrial_min_cells}.gpkg"
-  industrial_unconnected_output: "{data_dir}/industrial_results/v{version}/lvl{level}/bf{buffer}/{weight_type}/unconnected_industrial_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}_mp{industrial_min_cells}.gpkg"
+  industrial_merged_filepath: "{data_dir}/industrial_analysis/industrial_land_merged_v{version}_lvl{level}_mp{industrial_min_cells}.gpkg"
+  industrial_unconnected_output: "{data_dir}/industrial_results/v{version}/lvl{level}/bf{buffer}/{weight_type}/unconnected_industrial_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}_mp{industrial_min_cells}.parquet"
 
   interactive_piechart_html_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html"
   static_piechart_filepath: "{data_dir}/{figures_dir}/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png"

@@ -321,7 +321,7 @@ def load_config(
         "industrial_areas_temp_db_path" : f(cfg['paths']['industrial_areas_temp_db_path']),
         "industrial_areas_ohsome_parquet_filepath": f(cfg['paths']['industrial_areas_ohsome_parquet_filepath']),
         "industrial_raster_persistent_dir": f(cfg['paths']['industrial_raster_persistent_dir']),
-        "industrial_merged_gpkg": f(cfg['paths']['industrial_merged_gpkg']),
+        "industrial_merged_filepath": f(cfg['paths']['industrial_merged_filepath']),
         "industrial_unconnected_output": f(cfg['paths']['industrial_unconnected_output']),
         "seg_results_filepath": f(cfg['paths']['seg_results_filepath']),
         "pop_at_risk_output_filepath": f(cfg['paths']['pop_at_risk_output_filepath']),

@@ -330,16 +330,11 @@ def main():
     overrides = parse_config_overrides(args=None, argv=None, start_index=1)
     cfg = load_config(**overrides)
 
-    vectorized_path = cfg['paths']['industrial_merged_gpkg']
+    vectorized_path = cfg['paths']['industrial_merged_filepath']
     overwrite = cfg['industrial_vectorize_overwrite']
     min_cells = cfg['industrial_min_cells']
     persist_rasters = cfg['industrial_persist_rasters']
     simplify_tolerance = cfg['industrial_simplify_tolerance']
-
-    # Fast exit: final enriched output is already up to date.
-    if os.path.exists(vectorized_path) and not overwrite:
-        logger.info(f"Output file exists and overwrite=false. Skipping vectorization.")
-        return True
 
     # Intermediate file: merged vectorized polygons (pre-enrichment).
     # Named after min_cells so different thresholds don't clobber each other.
@@ -352,7 +347,7 @@ def main():
         # ------------------------------------------------------------------ #
         if os.path.exists(vectorized_path) and not overwrite:
             logger.info(f"Loading cached vectorized polygons from {vectorized_path}")
-            merged_gdf = gpd.read_file(vectorized_path)
+            merged_gdf = gpd.read_parquet(vectorized_path)
         else:
             if persist_rasters:
                 # Rasters are kept on disk so future runs can skip download.
@@ -397,7 +392,7 @@ def main():
             logger.info(f"Saving vectorized polygons to {vectorized_path}...")
             if merged_gdf is None:
                 raise ValueError("Vectorization did not produce any industrial polygons")
-            merged_gdf.to_file(vectorized_path, driver='GPKG', index=False)
+            merged_gdf.to_parquet(vectorized_path, index=False)
             logger.info(f"Saved {len(merged_gdf)} feature(s) to {vectorized_path}")
 
         # ------------------------------------------------------------------ #
@@ -420,7 +415,7 @@ def main():
         if os.path.exists(vectorized_path):
             os.remove(vectorized_path)
         logger.info(f"Writing to {vectorized_path}...")
-        enriched_gdf.to_file(vectorized_path, driver='GPKG', index=False)
+        enriched_gdf.to_parquet(vectorized_path, index=False)
         logger.info(f"Successfully created {vectorized_path}")
         return True
 

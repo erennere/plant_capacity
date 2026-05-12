@@ -333,7 +333,7 @@ def main():
             os.remove(output_path)
         
         logger.info(f"Writing {len(unconnected)} unconnected areas to {output_path}...")
-        unconnected.to_file(output_path, driver='GPKG', index=False)
+        unconnected.to_parquet(output_path, index=False)
         logger.info(f"Successfully created {output_path}")
         
         return True
