@@ -9,6 +9,29 @@ import os
 import sys
 import yaml
 
+
+def _normalize_optional_cli_value(value, preserve_empty=False):
+    """Normalize optional CLI values, treating blank strings as omitted by default."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized == "":
+            return "" if preserve_empty else None
+        return normalized
+    return value
+
+
+def _parse_optional_int(value, field_name):
+    """Parse optional integer overrides."""
+    value = _normalize_optional_cli_value(value)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {field_name} '{value}'. Must be an integer.")
+
 def _parse_optional_weight_func(value, field_name="weight_func"):
     """Parse optional weight function mode override.
 
@@ -25,6 +48,7 @@ def _parse_optional_weight_func(value, field_name="weight_func"):
 
 def _parse_optional_bool(value, field_name):
     """Parse optional boolean overrides from common truthy/falsey strings."""
+    value = _normalize_optional_cli_value(value)
     if value is None:
         return None
     if isinstance(value, bool):
@@ -40,6 +64,7 @@ def _parse_optional_bool(value, field_name):
 
 def _parse_optional_float(value, field_name):
     """Parse optional float overrides."""
+    value = _normalize_optional_cli_value(value)
     if value is None:
         return None
     try:
@@ -70,29 +95,27 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
         Optional ``load_config`` overrides keyed by parameter name.
     """
     if args is not None:
-        level = getattr(args, "level", None) or None
-        version = getattr(args, "version", None) or None
-        raw_buffer = getattr(args, "buffer", None)
-        weight_method = getattr(args, "weight_method", None) or None
-        raw_weight_func = getattr(args, "weight_func", None)
-        raw_dynamic_buffering = getattr(args, "dynamic_buffering", None)
-        raw_dynamic_buffer_k = getattr(args, "dynamic_buffer_k", None)
+        level = _normalize_optional_cli_value(getattr(args, "level", None))
+        version = _normalize_optional_cli_value(getattr(args, "version", None))
+        raw_buffer = _normalize_optional_cli_value(getattr(args, "buffer", None))
+        weight_method = _normalize_optional_cli_value(getattr(args, "weight_method", None))
+        raw_weight_func = _normalize_optional_cli_value(getattr(args, "weight_func", None), preserve_empty=True)
+        raw_dynamic_buffering = _normalize_optional_cli_value(getattr(args, "dynamic_buffering", None))
+        raw_dynamic_buffer_k = _normalize_optional_cli_value(getattr(args, "dynamic_buffer_k", None))
     else:
         argv = sys.argv if argv is None else argv
-        level = argv[start_index] if len(argv) > start_index and argv[start_index] else None
-        version = argv[start_index + 1] if len(argv) > start_index + 1 and argv[start_index + 1] else None
-        raw_buffer = argv[start_index + 2] if len(argv) > start_index + 2 and argv[start_index + 2] else None
-        weight_method = argv[start_index + 3] if len(argv) > start_index + 3 and argv[start_index + 3] else None
-        raw_weight_func = argv[start_index + 4] if len(argv) > start_index + 4 and argv[start_index + 4] else None
-        raw_dynamic_buffering = argv[start_index + 5] if len(argv) > start_index + 5 and argv[start_index + 5] else None
-        raw_dynamic_buffer_k = argv[start_index + 6] if len(argv) > start_index + 6 and argv[start_index + 6] else None
+        level = _normalize_optional_cli_value(argv[start_index] if len(argv) > start_index else None)
+        version = _normalize_optional_cli_value(argv[start_index + 1] if len(argv) > start_index + 1 else None)
+        raw_buffer = _normalize_optional_cli_value(argv[start_index + 2] if len(argv) > start_index + 2 else None)
+        weight_method = _normalize_optional_cli_value(argv[start_index + 3] if len(argv) > start_index + 3 else None)
+        raw_weight_func = _normalize_optional_cli_value(
+            argv[start_index + 4] if len(argv) > start_index + 4 else None,
+            preserve_empty=True,
+        )
+        raw_dynamic_buffering = _normalize_optional_cli_value(argv[start_index + 5] if len(argv) > start_index + 5 else None)
+        raw_dynamic_buffer_k = _normalize_optional_cli_value(argv[start_index + 6] if len(argv) > start_index + 6 else None)
 
-    buffer = None
-    if raw_buffer is not None:
-        try:
-            buffer = int(raw_buffer)
-        except (TypeError, ValueError):
-            raise ValueError(f"Invalid buffer '{raw_buffer}'. Must be an integer.")
+    buffer = _parse_optional_int(raw_buffer, "buffer")
 
     weight_func = _parse_optional_weight_func(raw_weight_func, "weight_func")
     dynamic_buffering = _parse_optional_bool(raw_dynamic_buffering, "dynamic_buffering")

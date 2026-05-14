@@ -16,14 +16,14 @@ import logging
 import tempfile
 import zipfile
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import List
 
 import requests
 import geopandas as gpd
 import rasterio
 from rasterio.features import shapes
-from shapely.geometry import shape
+from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 import pandas as pd
 
@@ -34,10 +34,22 @@ except ImportError:
 
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import intersects_with_country_db, intersect_with_polygon_sindex, download_overture_maps
+    from ..create_voronoi import (
+        dissolve_overlapping_geometries_fast,
+        download_overture_maps,
+        estimate_utm_epsg,
+        intersects_with_country_db,
+        intersect_with_polygon_sindex,
+    )
 except ImportError:
     from research_code.starter import load_config, parse_config_overrides
-    from research_code.create_voronoi import intersects_with_country_db, intersect_with_polygon_sindex, download_overture_maps
+    from research_code.create_voronoi import (
+        dissolve_overlapping_geometries_fast,
+        download_overture_maps,
+        estimate_utm_epsg,
+        intersects_with_country_db,
+        intersect_with_polygon_sindex,
+    )
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -190,7 +202,43 @@ def _repair_geometry(geom):
     return repaired
 
 
-def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float = 0.01) -> gpd.GeoDataFrame:
+def _dissolve_by_overlap_groups(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Dissolve original geometries using fast overlap groups from create_voronoi."""
+    if gdf is None or gdf.empty:
+        return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=getattr(gdf, "crs", None))
+
+    working = gdf.reset_index(drop=True).copy()
+    working["some_id"] = working.index.astype(int)
+
+    overlap_groups, _ = dissolve_overlapping_geometries_fast(
+        working[["some_id", "geometry"]].copy(),
+        radius=0,
+        convex=True,
+    )
+
+    group_map = {}
+    for group_index, group in enumerate(overlap_groups):
+        for some_id in group:
+            group_map[int(some_id)] = group_index
+
+    working["group_id"] = working["some_id"].map(group_map)
+    missing_mask = working["group_id"].isna()
+    if missing_mask.any():
+        start = len(overlap_groups)
+        working.loc[missing_mask, "group_id"] = list(range(start, start + int(missing_mask.sum())))
+    working["group_id"] = working["group_id"].astype(int)
+
+    dissolved = working[["group_id", "geometry"]].dissolve(by="group_id").reset_index(drop=True)
+    dissolved["geometry"] = dissolved.geometry.map(_repair_geometry)
+    dissolved = dissolved[dissolved.geometry.notna() & ~dissolved.geometry.is_empty].copy()
+    return gpd.GeoDataFrame(dissolved, geometry="geometry", crs=gdf.crs)
+
+
+def merge_geodataframes(
+    gdfs: List[gpd.GeoDataFrame],
+    simplify_tolerance: float = 0.01,
+    max_workers: int = 8,
+) -> gpd.GeoDataFrame:
     """Merge multiple GeoDataFrames, dissolve overlaps, and explode to individual features.
     
     Parameters
@@ -200,6 +248,8 @@ def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float 
     simplify_tolerance : float
         Tolerance (in degrees) for geometry simplification. Default 0.01 (~1.1km at equator).
         Increase if GPKG blob size errors persist. Set to None to skip simplification.
+    max_workers : int
+        Number of worker processes used for per-UTM dissolve tasks.
     
     Returns
     -------
@@ -210,7 +260,8 @@ def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float 
         raise ValueError("No geodataframes to merge")
     
     logger.info(f"Merging {len(gdfs)} geodataframes...")
-    merged = pd.concat(gdfs, ignore_index=True)
+    target_crs = gdfs[0].crs or "EPSG:4326"
+    merged = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True), geometry="geometry", crs=target_crs)
 
     logger.info(f"Concatenated {len(merged)} total polygons")
 
@@ -232,16 +283,65 @@ def merge_geodataframes(gdfs: List[gpd.GeoDataFrame], simplify_tolerance: float 
         if merged.empty:
             raise ValueError("No valid industrial polygons remain after simplification")
 
-    logger.info("Dissolving overlapping geometries with unary_union...")
+    if merged.crs is None:
+        merged = merged.set_crs("EPSG:4326")
 
-    # Dissolve all geometries into a single union (may be MultiPolygon)
-    merged_geom = unary_union(merged.geometry)
+    merged_wgs84 = merged if merged.crs is not None and merged.crs.to_epsg() == 4326 else merged.to_crs(4326)
+    try:
+        fallback_utm = merged_wgs84.estimate_utm_crs()
+        fallback_epsg = fallback_utm.to_epsg() if fallback_utm is not None else None
+    except Exception as err:
+        logger.warning("Failed to estimate fallback UTM CRS: %s", err)
+        fallback_epsg = None
+    fallback_epsg = fallback_epsg or 3857
+
+    logger.info("Dissolving overlapping geometries by UTM group with spatial indexing...")
+    try:
+        merged_wgs84["utm_group"] = merged_wgs84.apply(
+            lambda row: estimate_utm_epsg(row["geometry"].x, row["geometry"].y)
+            if isinstance(row["geometry"], Point)
+            else estimate_utm_epsg(row["geometry"].centroid.x, row["geometry"].centroid.y),
+            axis=1,
+        )
+    except Exception as err:
+        logger.warning("Failed to assign per-geometry UTM groups: %s. Using fallback EPSG %s.", err, fallback_epsg)
+        merged_wgs84["utm_group"] = fallback_epsg
+
+    utm_group_count = merged_wgs84["utm_group"].nunique(dropna=False)
+    logger.info("Dispatching %d UTM dissolve task(s) with %d worker(s)", utm_group_count, max_workers)
+    grouped_frames = (
+        gpd.GeoDataFrame(subdf.copy(), geometry="geometry", crs=merged_wgs84.crs)
+        for _, subdf in merged_wgs84.groupby("utm_group", sort=False)
+    )
+    pool_size = max(1, int(max_workers))
+    with ProcessPoolExecutor(max_workers=pool_size) as executor:
+        dissolved_groups = tuple(
+            filter(
+                lambda frame: frame is not None and not frame.empty,
+                executor.map(_dissolve_by_overlap_groups, grouped_frames),
+            )
+        )
+
+    if not dissolved_groups:
+        raise ValueError("No valid industrial polygons remain after overlap dissolve")
+
+    merged_reduced = gpd.GeoDataFrame(
+        pd.concat(dissolved_groups, ignore_index=True),
+        geometry="geometry",
+        crs=merged_wgs84.crs,
+    )
+
+    logger.info("Running final union on reduced geometry set...")
+    merged_geom = unary_union(merged_reduced.geometry)
     
     # Create a temporary GeoDataFrame with the merged geometry
     temp_gdf = gpd.GeoDataFrame(
         {'geometry': [merged_geom], 'category': ['industrial_land']},
-        crs=merged.crs
+        crs=merged_reduced.crs
     )
+
+    if target_crs is not None and temp_gdf.crs != target_crs:
+        temp_gdf = temp_gdf.to_crs(target_crs)
     
     # Explode MultiPolygon/MultiPart geometries into individual parts
     logger.info("Exploding multipart geometries into individual features...")
@@ -322,7 +422,7 @@ def _vectorize_and_merge(raster_dirs: List[str], max_workers: int, min_cells: in
         )
     if not gdfs:
         raise ValueError("Failed to vectorize any raster files")
-    return merge_geodataframes(gdfs, simplify_tolerance=simplify_tolerance)
+    return merge_geodataframes(gdfs, simplify_tolerance=simplify_tolerance, max_workers=max_workers)
 
 
 def main():
