@@ -55,6 +55,17 @@ python -m pip install -e .
 
 The package metadata lives in `research_code/pyproject.toml`. The editable install exposes the package as `research_code` and makes all `python -m research_code...` invocations available.
 
+### Running tests
+
+The initial test suite focuses on config parsing, path generation, and deterministic Voronoi helper behavior using small synthetic fixtures under `research_code/tests/`.
+
+```bash
+cd research_code
+python -m pip install -e .[test]
+cd ..
+pytest --tb=short -q
+```
+
 ### Important prerequisite data
 
 The repository assumes that several input files already exist at the configured paths. Commonly required local files include:

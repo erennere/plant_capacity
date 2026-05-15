@@ -36,6 +36,13 @@ dependencies = [
   "hdx-python-api",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "pytest-mock>=3.14",
+]
+
 [tool.setuptools]
 packages = [
   "research_code",

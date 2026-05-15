@@ -73,8 +73,12 @@ def intersect_single_file(gdf, tif_paths, all_years=True):
         else:
             logging.warning(f"Could not extract year from filename: {basename}")
 
+    if not my_dict:
+        logging.warning("No usable raster years were found for the provided TIFF paths")
+        return gdf
+
     # Process each raster year and attach exactextract outputs back onto gdf.
-    last_year = sorted(my_dict.keys())[-1]
+    last_year = max(my_dict.keys())
     for year, tif_path in my_dict.items():
         if not all_years and year != last_year:
             continue
@@ -222,11 +226,11 @@ def intersect_all_files(gdf, tif_dir, max_workers=16, all_years=True, country_co
                     logging.warning(f'an error occurred while retrieving gdfs: {err}')
     if data:
         data = pd.concat(data, ignore_index=True)
-        data = gpd.GeoDataFrame(data, geometry='geometry', crs=4326)
+        data = gpd.GeoDataFrame(data, geometry='geometry', crs=gdf.crs)
         return data
     else:
         logging.warning("No data returned from any country - check raster files and polygon-raster intersection")
-        return gpd.GeoDataFrame()
+        return gdf.iloc[0:0].copy()
     
 def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=16, country_col='ISO_2'):
     """Run the population-intersection workflow for one Voronoi file.
@@ -261,7 +265,7 @@ def orchestrate_intersections(data_dir, tif_dir, output_dir, index, max_workers=
         ]
     )
     
-    if index >= len(voronoi_files):
+    if index < 0 or index >= len(voronoi_files):
         raise IndexError(f"File index {index} out of range (found {len(voronoi_files)} files)")
     
     voronoi_file = voronoi_files[index]
@@ -324,13 +328,17 @@ def main():
             logging.error(f"Missing required path '{path_key}' in configuration")
             sys.exit(1)
     
+    output_dir_exists = os.path.exists(paths["pop_output_dir"])
     os.makedirs(paths["pop_output_dir"], exist_ok=True)
     
     logging.info(f"Configuration loaded: voronoi_dir={paths['voronoi_dir']}, "
                 f"pop_tif_dir={paths['pop_tif_dir']}, max_workers={max_workers}")
     
-    if os.path.exists(paths['pop_output_dir']) and not cfg['pop_voronoi_overwrite']:
-        logging.warning(f"Output directory {paths['pop_output_dir']} already exists and voronoi_overwrite is False. Existing files may be skipped.")
+    if output_dir_exists and not cfg['pop_voronoi_overwrite']:
+        logging.warning(
+            "Output directory %s already exists and pop_voronoi_overwrite is False. Existing files may be skipped.",
+            paths['pop_output_dir'],
+        )
     
     try:
         orchestrate_intersections(

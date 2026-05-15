@@ -63,7 +63,7 @@ def get_stratified_sample(df, target_column, total_n=1000, seed=42):
         extra = remaining_pool.sample(min(len(remaining_pool), shortfall), random_state=seed)
         sampled = pd.concat([sampled, extra])
 
-    return sampled.drop(columns=['temp_grp']).reset_index(drop=True)
+    return sampled.drop(columns=['temp_grp'], errors='ignore').reset_index(drop=True)
 
 
 def sanitize_folder_name(name):

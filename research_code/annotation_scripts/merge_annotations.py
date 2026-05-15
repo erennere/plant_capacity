@@ -82,7 +82,7 @@ def main():
     df['filepath'] = df['image'].apply(lambda x: os.path.join(image_input_dir, x))
 
     points_df = gpd.read_file(cfg['paths']['corrected_all_filepath'])
-    points_df['idx'] = points_df['idx'].astype(int, copy=False)
+    points_df['idx'] = points_df['idx'].astype(int)
 
     # Avoid duplicated *_x/*_y columns on repeated script runs.
     annotation_cols = ['category_number', 'category_name', 'justification']
@@ -91,7 +91,7 @@ def main():
     df['idx'] = df['image'].apply(parse_idx_from_image_name)
     df = df[df['idx'].notna()].copy()
     df['idx'] = df['idx'].astype(int)
-    df.drop(axis=1, inplace=True, columns=['filepath', 'gen_text'])
+    df.drop(columns=['filepath', 'gen_text'], inplace=True)
 
     # Merge parsed annotations onto the geospatial points table.
     merged_df = gpd.GeoDataFrame(pd.merge(points_df, df, on='idx', how='left'), geometry='geometry', crs=points_df.crs)

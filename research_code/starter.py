@@ -20,7 +20,7 @@ def _normalize_optional_cli_value(value, preserve_empty=False):
     if isinstance(value, str):
         normalized = value.strip()
         if normalized == "":
-            return None
+            return "" if preserve_empty else None
         if normalized.lower() in {"none", "nan", "null"}:
             return None
         return normalized
@@ -259,12 +259,18 @@ def load_config(
     dl_dir = cfg["paths"]["dl_dir"]
     figures_dir = cfg["paths"]["figures_dir"]
     
-    weight_type = {
+    weight_type_map = {
         'linear': 'li',
         'square_root': 'sq',
         'logarithmic': 'log',
         'sigmoid': 'sig'
-    }[weight_method]
+    }
+    if weight_method not in weight_type_map:
+        valid_methods = ', '.join(weight_type_map.keys())
+        raise ValueError(
+            f"Invalid weight_method '{weight_method}'. Must be one of: {valid_methods}."
+        )
+    weight_type = weight_type_map[weight_method]
     weight_func_suffix = {
         "mult": "_mult",
         "add": "_add",

@@ -142,6 +142,10 @@ def main():
     input_pattern = cfg['paths']['impact_pop_polygons_outpath'].replace('.gpkg', '_*.gpkg')
     input_files = glob(input_pattern)
     results = None
+
+    if not input_files:
+        logger.warning("No impact polygon files matched pattern %s. Writing empty output.", input_pattern)
+
     for input_file in input_files:
         radius = input_file.split('_')[-1].replace('.gpkg', '')
         logger.info(f"Processing impact polygons for radius {radius} from file {input_file}")
@@ -173,9 +177,15 @@ def main():
             results = tile_groups_gdf
         else:
             tile_groups_gdf = rename_cols(tile_groups_gdf, radius)
-            results = pd.merge(results, tile_groups_gdf[[c for c in tile_groups_gdf.columns if c != 'geometry']], on='tile', how='outer')
+            results = pd.merge(results, tile_groups_gdf, on='tile', how='outer', suffixes=('', '_new'))
+            if 'geometry_new' in results.columns:
+                results['geometry'] = results['geometry'].combine_first(results['geometry_new'])
+                results = results.drop(columns=['geometry_new'])
 
-    results = gpd.GeoDataFrame(results, geometry=results['geometry'], crs=4326)
+    if results is None:
+        results = gpd.GeoDataFrame(columns=['tile', 'geometry'], geometry='geometry', crs=4326)
+    else:
+        results = gpd.GeoDataFrame(results, geometry=results['geometry'], crs=4326)
     ensure_output_dir_for_file(cfg['paths']['pop_at_risk_output_filepath'])
     results.to_parquet(cfg['paths']['pop_at_risk_output_filepath'], engine='pyarrow', index=False)
 

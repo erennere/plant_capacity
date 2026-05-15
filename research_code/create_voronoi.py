@@ -59,6 +59,7 @@ class UnionFind:
             
 import os, re, logging, sys
 from pathlib import Path
+from typing import Any, cast
 from multiprocessing import Pool
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from collections import defaultdict
@@ -682,8 +683,14 @@ def calculate_area(df, only_round=False):
 
     # Build detection-derived capacity proxy once so downstream weighting
     # logic can reuse these fields without recomputing.
-    rect_counts = pd.to_numeric(df.get('num_detection_rect', 0), errors='coerce').fillna(0)
-    circle_counts = pd.to_numeric(df.get('num_detection_circle', 0), errors='coerce').fillna(0)
+    rect_counts = pd.to_numeric(
+        df.get('num_detection_rect', pd.Series(0, index=df.index)),
+        errors='coerce',
+    ).fillna(0)
+    circle_counts = pd.to_numeric(
+        df.get('num_detection_circle', pd.Series(0, index=df.index)),
+        errors='coerce',
+    ).fillna(0)
     num_detections = (rect_counts.astype(int) + circle_counts.astype(int)).clip(lower=0)
     df['num_detections'] = num_detections
     df['capacity_proxy'] = df['total_area'] * np.sqrt(df['num_detections'])
@@ -1043,7 +1050,7 @@ def intersect_with_polygons_parallelized(df, polygons, cols, use_duckdb=False, m
                 data.append(sub_df)
     else:
         for utm in unique_utms:
-            result = func(
+            result = intersect_with_polygons_db(
                 df[df['utm'] == utm].copy(),
                 polygons[polygons['utm'] == utm].copy(),
                 cols,
@@ -2228,7 +2235,7 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         if buffering:
             point_buffer = geom.centroid.buffer(df.iloc[0]['buffer_length'])
             region_geom = region_geom.intersection(point_buffer).buffer(0)  # type: ignore[union-attr, index]
-        region_polygons.iloc[0]['geometry'] = region_geom  # type: ignore[index]
+        region_polygons.at[region_polygons.index[0], 'geometry'] = cast(Any, region_geom)  # type: ignore[index]
 
         # Clip region to actual clipping geometry to ensure it does not exceed bounds
         region_polygons = gpd.clip(region_polygons, actual_clipping_object)  # type: ignore[arg-type]
@@ -2421,10 +2428,18 @@ def create_weights(sub_df, sigma=3, percent_threshold=10, method='linear'):
         
     elif method == 'sigmoid':
         # Normalize to Z-scores so the sigmoid center (0) aligns with the data mean
-        z = (base_values - base_values.mean()) / (base_values.std() + 1e-9)
-        df['weights'] = 1 / (1 + np.exp(-z))
+        base_std = base_values.std()
+        if pd.isna(base_std) or base_std == 0:
+            df['weights'] = pd.Series(1.0, index=df.index, dtype=float)
+        else:
+            z = (base_values - base_values.mean()) / base_std
+            df['weights'] = 1 / (1 + np.exp(-z))
     else: # Default to 'linear'
         df['weights'] = base_values
+    raw_total = df['weights'].sum()
+    if pd.isna(raw_total) or raw_total == 0:
+        df['weights'] = 1.0 / len(df)
+        return df
     # 3. Initial Normalization to sum=1
     df['weights'] = df['weights'] / df['weights'].sum()
     # 4. Outlier Clipping
@@ -2793,6 +2808,43 @@ APPROACH VARIANTS:
 See pipelines.run_voronoi_approach() for parameter documentation.
 """
 
+def _filter_requested_approaches(requested_approaches, cfg, paths_dict, only_round=False):
+    """Return runnable approaches plus skip reasons for existing outputs or disabled features.
+
+    Parameters
+    ----------
+    requested_approaches : list[str]
+        Normalized approach identifiers requested by the caller.
+    cfg : dict
+        Runtime config dictionary from ``starter.load_config``.
+    paths_dict : dict
+        Output-path mapping from ``create_output_paths``.
+    only_round : bool, default=False
+        Whether approaches 0/1 should use the ``*_only_round`` output key.
+
+    Returns
+    -------
+    tuple[list[str], list[str], list[str]]
+        ``(runnable, skipped_existing, skipped_disabled)``.
+    """
+    runnable = []
+    skipped_existing = []
+    skipped_disabled = []
+
+    for approach_id in requested_approaches:
+        if approach_id == '2' and not cfg.get('city_voronoi', False):
+            skipped_disabled.append(approach_id)
+            continue
+
+        path_key = f"{approach_id}_only_round" if only_round and approach_id in {'0', '1'} else approach_id
+        output_path = paths_dict['voronoi'][path_key]
+        if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
+            skipped_existing.append(approach_id)
+        else:
+            runnable.append(approach_id)
+
+    return runnable, skipped_existing, skipped_disabled
+
 ########################### Global Variables ####################################
 if __name__ == '__main__':
     import argparse
@@ -2885,29 +2937,39 @@ EXAMPLES:
     print(f"weight_func={cfg['weight_func']!r}  weight_method={cfg['weight_method']!r}  only_round={only_round}")
     print("=" * 80)
 
-    # Skip approaches whose output already exists.
-    skipped_approaches = []
-    filtered_approaches = []
-    for approach_id in requested_approaches:
-        path_key = f"{approach_id}_only_round" if only_round and approach_id in {'0', '1'} else approach_id
-        output_path = paths_dict['voronoi'][path_key]
-        if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
-            skipped_approaches.append(approach_id)
-        else:
-            filtered_approaches.append(approach_id)
-
-    approaches_to_run = filtered_approaches
+    approaches_to_run, skipped_approaches, skipped_disabled_approaches = _filter_requested_approaches(
+        requested_approaches,
+        cfg,
+        paths_dict,
+        only_round=only_round,
+    )
     if skipped_approaches:
         logger.info(f"Skipping completed approaches (output exists): {', '.join(skipped_approaches)}")
+    if skipped_disabled_approaches:
+        logger.info(
+            "Skipping approach(es) disabled by config (city_voronoi=False): %s",
+            ', '.join(skipped_disabled_approaches),
+        )
 
     if not approaches_to_run:
-        logger.info("All requested approaches already have output files. Nothing to run.")
-        print("All requested approaches already have output files. Nothing to run.")
+        reasons = []
+        if skipped_approaches:
+            reasons.append("output files already exist")
+        if skipped_disabled_approaches:
+            reasons.append("approach 2 requires city_voronoi=true")
+        message = "No requested approaches remain to run"
+        if reasons:
+            message += f" ({'; '.join(reasons)})"
+        logger.info(message)
+        print(message)
         sys.exit(0)
 
     data = _resolve_configured_callable(
         cfg['prepare_data_fn'], prepare_data, 'prepare_data_fn', _pipelines_module,
     )(cfg)
+
+    if not isinstance(data, dict):
+        raise TypeError("prepare_data_fn must return a dict with gdf_bbox, basin_gdf, and country_df")
 
     gdf_bbox = data['gdf_bbox']
     basin_gdf = data['basin_gdf']

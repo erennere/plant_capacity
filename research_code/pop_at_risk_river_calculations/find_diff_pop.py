@@ -166,7 +166,7 @@ def main():
     cfg = load_config(**overrides)
 
     watershed_filepath = cfg['paths']['hydrowaste']
-    max_workers = cfg['params']['max_workers']
+    max_workers = cfg['max_workers']
     pop_output_dir = cfg['paths']['pop_output_dir']
     tif_dir = cfg['paths']['pop_tif_dir']
     pop_dif_output_dir = cfg['paths']['pop_dif_output_dir']

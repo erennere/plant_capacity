@@ -120,6 +120,12 @@ def find_safe_epsg(row):
     
 def find_meter_coordinates(df):
     """Create meter-space geometry WKT per EPSG group for clustering."""
+    if df is None or df.empty:
+        empty = df.copy() if df is not None else gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs=4326)
+        if 'meter_geometry' not in empty.columns:
+            empty['meter_geometry'] = pd.Series(dtype=object)
+        return gpd.GeoDataFrame(empty, crs=4326, geometry='geometry')
+
     gdfs = []
     for epsg in df['epsg'].unique():
         subdf = df[df['epsg'] == epsg].copy()

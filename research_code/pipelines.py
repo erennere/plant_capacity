@@ -389,7 +389,8 @@ def prepare_data(cfg):
     if cfg['remove_industrial']:
         if 'category_number' in gdf_bbox.columns:
             initial_count = len(gdf_bbox)
-            gdf_bbox = gdf_bbox[~gdf_bbox['category_number'].isin(cfg['industrial_category_numbers'])]
+            gdf_bbox = gdf_bbox[~gdf_bbox['category_number'].isin(cfg['industrial_category_numbers'])].copy()
+            gdf_bbox[site_id_col] = np.arange(len(gdf_bbox))
             logger.info(f"Removed {initial_count - len(gdf_bbox)} industrial sites based on category_number")
     
     # Add country codes
