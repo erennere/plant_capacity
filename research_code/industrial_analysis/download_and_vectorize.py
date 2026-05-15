@@ -113,7 +113,7 @@ def vectorize_raster_file(raster_path: str, crs: str = "EPSG:4326", min_cells: i
 
         # Extract shapes from raster (convert pixels to polygons)
         for geom, value in shapes(data, transform=transform):
-            if value > 0:  # Only keep non-zero pixels
+            if value == 1:  # Keep only class-1 industrial cells
                 geom_shape = shape(geom)
                 if geom_shape.area < min_area:
                     continue
