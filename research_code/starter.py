@@ -8,16 +8,21 @@ path template expansion, and parameter initialization.
 import os
 import sys
 import yaml
+import math
 
 
 def _normalize_optional_cli_value(value, preserve_empty=False):
-    """Normalize optional CLI values, treating blank strings as omitted by default."""
+    """Normalize optional CLI values, treating empty/None/NaN/null as omitted."""
     if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
         return None
     if isinstance(value, str):
         normalized = value.strip()
         if normalized == "":
-            return "" if preserve_empty else None
+            return None
+        if normalized.lower() in {"none", "nan", "null"}:
+            return None
         return normalized
     return value
 
