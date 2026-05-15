@@ -42,7 +42,7 @@ logging.basicConfig(
 
 def load_industrial_areas(cfg: dict) -> Optional[gpd.GeoDataFrame]:
     """Load merged industrial areas from GeoPackage."""
-    path = cfg['paths']['industrial_merged_gpkg']
+    path = cfg['paths']['industrial_merged_filepath']
     
     if not os.path.exists(path):
         logger.warning(f"Industrial areas file not found: {path}")
