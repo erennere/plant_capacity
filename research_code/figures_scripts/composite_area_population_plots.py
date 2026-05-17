@@ -51,6 +51,8 @@ def resolve_zonal_sum_column(df, preferred):
 
 def clip_outliers(series, lower_q, upper_q):
     """Drop outliers by quantile clipping for cleaner histograms."""
+    if not (0 <= lower_q < upper_q <= 1):
+        raise ValueError("Quantile bounds must satisfy 0 <= lower_q < upper_q <= 1")
     s = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if s.empty:
         return s

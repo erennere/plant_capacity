@@ -82,6 +82,9 @@ def find_tiles_in_countries(countries_gdf, zoom_level, country_id_col, max_worke
     Returns:
         GeoDataFrame with tiles and their corresponding geometries for all countries.
     """
+    if int(max_workers) < 1:
+        raise ValueError("max_workers must be >= 1")
+
     all_tiles = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(find_tiles_in_a_country, row['geometry'], row[country_id_col], country_id_col, zoom_level) for _, row in countries_gdf.iterrows()]
@@ -106,8 +109,8 @@ def assign_tile_to_df(df, zoom_level, max_workers=4):
     if df.empty:
         return df
 
-    if max_workers < 1:
-        max_workers = 1
+    if int(max_workers) < 1:
+        raise ValueError("max_workers must be >= 1")
 
     r = max(1, len(df) // max_workers)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -134,7 +137,7 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
     zoom_level = int(cfg['zoom_level'])
-    max_workers = 64
+    max_workers = int(cfg.get('annotations', {}).get('max_workers', 64))
     tif_dir = cfg['paths']['pop_tif_dir']
     country_boundary_col = cfg['country_boundary_column']
     country_output_col = cfg['country_output_column']

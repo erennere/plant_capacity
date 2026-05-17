@@ -34,6 +34,8 @@ def assign_to_nearest(gdf_source, gdf_target, threshold=None):
         When ``None``, behavior is unchanged from the previous implementation.
     """
     gdf_source = gdf_source.copy()
+    if gdf_source.crs is None or gdf_target.crs is None:
+        raise ValueError("Both source and target GeoDataFrames must define a CRS")
     source_crs = gdf_source.crs
     gdf_source = gdf_source.to_crs(gdf_target.crs)
     sindex = gdf_target.sindex
@@ -100,6 +102,9 @@ def merge_old(cfg):
     for file in [os.path.join(zip_output_path, f) for f in os.listdir(zip_output_path) if f.endswith('.csv')]:
         data.append(pd.read_csv(file))
 
+    if not data:
+        raise FileNotFoundError(f"No CSV segmentation files found in extracted archive path: {zip_output_path}")
+
     data = pd.concat(data, ignore_index=True)
     data['idx'] = data['File Name'].apply(lambda val: int(val.split('.')[0]))
     data['idx'] = data['idx'].astype(int)
@@ -129,7 +134,16 @@ def merge_new(cfg):
     points_df = gpd.read_file(paths['corrected_all_filepath'])
     points_df['idx'] = points_df['idx'].astype(int)
     seg_results = pd.read_csv(paths['seg_results_filepath'])
-    seg_results['idx'] = seg_results['img_name'].apply(lambda x: int(x.split('.')[0]))
+    if 'img_name' not in seg_results.columns:
+        raise KeyError("seg_results file must include 'img_name' column")
+
+    seg_results['idx'] = pd.to_numeric(
+        seg_results['img_name'].astype(str).str.split('.').str[0],
+        errors='coerce',
+    )
+    if seg_results['idx'].isna().any():
+        raise ValueError("All seg_results img_name values must start with an integer id")
+    seg_results['idx'] = seg_results['idx'].astype(int)
 
     cols = ['num_detection_circle', 'diameters', 'num_detection_rect', 'wwtp_area_rect']
     extra_cols = ['wwtp_area_square', 'num_detection_square']

@@ -107,6 +107,21 @@ def test_assign_to_nearest_respects_distance_threshold():
     assert pd.isna(result.loc[0, "target_name"])
 
 
+def test_assign_to_nearest_requires_defined_crs():
+    gdf_source = gpd.GeoDataFrame(
+        {"src_id": [1], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+    )
+    gdf_target = gpd.GeoDataFrame(
+        {"target_name": ["a"], "geometry": [Point(1, 1)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    with pytest.raises(ValueError, match="CRS"):
+        merge_seg_results.assign_to_nearest(gdf_source, gdf_target)
+
+
 def test_coordinate_corr_locations_wosm_matches_polygon_centroid_within_radius():
     pdf = gpd.GeoDataFrame(
         {
@@ -316,6 +331,54 @@ def test_merge_new_drops_old_segmentation_columns_and_writes(monkeypatch, tmp_pa
     assert captured["write"]["index"] is False
     assert captured["write"]["rows"] == 2
     assert "num_detection_square" not in captured["write"]["columns"]
+
+
+def test_merge_new_requires_img_name_column(monkeypatch, tmp_path):
+    corrected_path = str(tmp_path / "corrected_all.gpkg")
+    seg_csv_path = str(tmp_path / "seg_results.csv")
+    cfg = {
+        "paths": {
+            "corrected_all_filepath": corrected_path,
+            "seg_results_filepath": seg_csv_path,
+        }
+    }
+
+    points_df = gpd.GeoDataFrame(
+        {"idx": [1], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    seg_results = pd.DataFrame({"wrong_col": ["1.png"]})
+
+    monkeypatch.setattr(merge_seg_results.gpd, "read_file", lambda path: points_df.copy())
+    monkeypatch.setattr(merge_seg_results.pd, "read_csv", lambda path: seg_results.copy())
+
+    with pytest.raises(KeyError, match="img_name"):
+        merge_seg_results.merge_new(cfg)
+
+
+def test_merge_new_rejects_non_numeric_img_name_prefix(monkeypatch, tmp_path):
+    corrected_path = str(tmp_path / "corrected_all.gpkg")
+    seg_csv_path = str(tmp_path / "seg_results.csv")
+    cfg = {
+        "paths": {
+            "corrected_all_filepath": corrected_path,
+            "seg_results_filepath": seg_csv_path,
+        }
+    }
+
+    points_df = gpd.GeoDataFrame(
+        {"idx": [1], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    seg_results = pd.DataFrame({"img_name": ["abc.png"]})
+
+    monkeypatch.setattr(merge_seg_results.gpd, "read_file", lambda path: points_df.copy())
+    monkeypatch.setattr(merge_seg_results.pd, "read_csv", lambda path: seg_results.copy())
+
+    with pytest.raises(ValueError, match="integer id"):
+        merge_seg_results.merge_new(cfg)
 
 
 def test_merge_seg_main_dispatches_variants_and_legacy_flag(monkeypatch):

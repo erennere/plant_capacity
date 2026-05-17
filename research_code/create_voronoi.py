@@ -1060,10 +1060,7 @@ def intersect_with_polygons_parallelized(df, polygons, cols, use_duckdb=False, m
             if result is not None:
                 data.append(result)
     data.append(nans)
-    if data:
-        return gpd.GeoDataFrame(pd.concat(data, ignore_index=True), geometry='geometry', crs=4326)
-    else:
-        return gpd.GeoDataFrame(columns=df.columns)
+    return gpd.GeoDataFrame(pd.concat(data, ignore_index=True), geometry='geometry', crs=4326)
 
 def intersects_with_country_db(df, filepath, polygon_country_col='country', output_country_col='ISO_2'):
     """

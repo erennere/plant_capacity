@@ -52,6 +52,17 @@ def test_assign_tile_to_df_explodes_rows_and_clips_to_tile_bounds():
         assert row["geometry"].difference(tile_bbox).area == pytest.approx(0.0)
 
 
+def test_assign_tile_to_df_rejects_non_positive_workers():
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [box(-1.0, -1.0, 1.0, 1.0)]},
+        geometry="geometry",
+        crs=4326,
+    )
+
+    with pytest.raises(ValueError, match="max_workers"):
+        find_pop_in_danger_pop.assign_tile_to_df(gdf, zoom_level=1, max_workers=0)
+
+
 def test_group_tile_population_sums_aggregates_all_zonal_sum_columns():
     df = pd.DataFrame(
         {
@@ -117,6 +128,16 @@ def test_find_tiles_in_countries_collects_parallel_country_results(monkeypatch, 
 
     assert set(result["country"]) == {"DE", "FR"}
     assert set(result["tile"]) == {"DE-seed-4", "FR-seed-4"}
+
+
+def test_find_tiles_in_countries_rejects_non_positive_workers(tiny_country_gdf):
+    with pytest.raises(ValueError, match="max_workers"):
+        find_pop_in_danger_pop.find_tiles_in_countries(
+            tiny_country_gdf,
+            zoom_level=4,
+            country_id_col="country",
+            max_workers=0,
+        )
 
 
 def test_main_preserves_geometry_for_tiles_added_by_later_radii(monkeypatch, mock_cfg, tmp_path):
@@ -222,3 +243,45 @@ def test_main_writes_empty_output_when_no_input_files_match(monkeypatch, mock_cf
     assert saved["final"]["index"] is False
     assert saved["final"]["frame"].empty
     assert "geometry" in saved["final"]["frame"].columns
+
+
+def test_main_uses_configured_annotations_max_workers(monkeypatch, mock_cfg, tmp_path):
+    cfg = mock_cfg
+    cfg["zoom_level"] = 4
+    cfg["annotations"] = {"max_workers": 3}
+    cfg["paths"]["impact_pop_polygons_outpath"] = str(tmp_path / "impact_polygons.gpkg")
+    cfg["paths"]["pop_at_risk_output_filepath"] = str(tmp_path / "pop_at_risk.parquet")
+    cfg["paths"]["pop_tif_dir"] = str(tmp_path / "tifs")
+    cfg["paths"]["overture"] = str(tmp_path / "overture.parquet")
+    cfg["country_boundary_column"] = "country"
+    cfg["country_output_column"] = "ISO_2"
+
+    gdf = gpd.GeoDataFrame({"geometry": [box(0, 0, 1, 1)]}, geometry="geometry", crs=4326)
+    seen = {}
+
+    monkeypatch.setattr(find_pop_in_danger_pop.os, "chdir", lambda path: None)
+    monkeypatch.setattr(find_pop_in_danger_pop, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(find_pop_in_danger_pop, "load_config", lambda **overrides: cfg)
+    monkeypatch.setattr(find_pop_in_danger_pop, "glob", lambda pattern: [str(tmp_path / "impact_polygons_1000.gpkg")])
+    monkeypatch.setattr(find_pop_in_danger_pop.gpd, "read_file", lambda path: gdf.copy())
+    def _assign_tile(frame, zoom_level, max_workers):
+        seen["max_workers"] = max_workers
+        return frame.copy()
+
+    monkeypatch.setattr(find_pop_in_danger_pop, "assign_tile_to_df", _assign_tile)
+    monkeypatch.setattr(find_pop_in_danger_pop, "intersects_with_country_db", lambda frame, *args, **kwargs: frame.assign(ISO_2="DE"))
+    monkeypatch.setattr(find_pop_in_danger_pop, "intersect_all_files", lambda frame, *args, **kwargs: frame.copy())
+    monkeypatch.setattr(find_pop_in_danger_pop, "group_tile_population_sums", lambda frame: pd.DataFrame({"tile": ["0-0-1"], "2020_zonal_sum": [1.0]}))
+    monkeypatch.setattr(find_pop_in_danger_pop, "ensure_output_dir_for_file", lambda path: None)
+
+    original_to_file = gpd.GeoDataFrame.to_file
+    original_to_parquet = gpd.GeoDataFrame.to_parquet
+    try:
+        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", lambda self, *args, **kwargs: None)
+        monkeypatch.setattr(gpd.GeoDataFrame, "to_parquet", lambda self, *args, **kwargs: None)
+        find_pop_in_danger_pop.main()
+    finally:
+        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
+        monkeypatch.setattr(gpd.GeoDataFrame, "to_parquet", original_to_parquet)
+
+    assert seen["max_workers"] == 3

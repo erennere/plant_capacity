@@ -78,6 +78,11 @@ def test_clip_outliers_removes_inf_nan_and_quantile_outliers():
     assert 1000 not in clipped.tolist()
 
 
+def test_clip_outliers_rejects_invalid_quantile_bounds():
+    with pytest.raises(ValueError, match="Quantile bounds"):
+        composite_area_population_plots.clip_outliers(pd.Series([1, 2, 3]), lower_q=0.9, upper_q=0.1)
+
+
 def test_make_category_color_map_is_deterministic_for_unique_categories():
     values = ["B", "A", None, "A"]
 

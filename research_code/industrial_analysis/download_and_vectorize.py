@@ -157,6 +157,9 @@ def vectorize_rasters_parallel(
     list of geopandas.GeoDataFrame
         Vectorized geodataframes.
     """
+    if int(max_workers) < 1:
+        raise ValueError("max_workers must be >= 1")
+
     raster_files = list(Path(raster_dir).glob("*.tif")) + list(Path(raster_dir).glob("*.tiff"))
     
     if not raster_files:
@@ -308,12 +311,19 @@ def merge_geodataframes(
         merged_wgs84["utm_group"] = fallback_epsg
 
     utm_group_count = merged_wgs84["utm_group"].nunique(dropna=False)
-    logger.info("Dispatching %d UTM dissolve task(s) with %d worker(s)", utm_group_count, max_workers)
     grouped_frames = (
         gpd.GeoDataFrame(subdf.copy(), geometry="geometry", crs=merged_wgs84.crs)
         for _, subdf in merged_wgs84.groupby("utm_group", sort=False)
     )
-    pool_size = max(1, int(max_workers))
+    if max_workers is None:
+        pool_size = os.cpu_count() or 1
+    else:
+        try:
+            pool_size = int(max_workers)
+        except (TypeError, ValueError) as err:
+            raise ValueError("max_workers must be a positive integer or None") from err
+    pool_size = max(1, pool_size)
+    logger.info("Dispatching %d UTM dissolve task(s) with %d worker(s)", utm_group_count, pool_size)
     with ProcessPoolExecutor(max_workers=pool_size) as executor:
         dissolved_groups = tuple(
             filter(
@@ -362,6 +372,14 @@ def add_boundary_info(
     country_output_col: str = 'ISO_2',
 ) -> gpd.GeoDataFrame:
     """Add country and basin attributes without clipping industrial geometry."""
+    if industrial_gdf is None or industrial_gdf.empty:
+        empty = industrial_gdf.copy() if industrial_gdf is not None else gpd.GeoDataFrame(geometry=[], crs=getattr(watershed_gdf, "crs", None))
+        if country_output_col not in empty.columns:
+            empty[country_output_col] = pd.Series(dtype="object")
+        if basin_col not in empty.columns:
+            empty[basin_col] = pd.Series(dtype="object")
+        return gpd.GeoDataFrame(empty, geometry="geometry", crs=getattr(empty, "crs", None))
+
     if basin_col not in watershed_gdf.columns:
         raise KeyError(f"Watershed column '{basin_col}' not found in watershed dataset.")
 
@@ -487,12 +505,14 @@ def main():
             # Save intermediate result so boundary enrichment can be re-run
             # independently without repeating download + vectorization.
             os.makedirs(industrial_analysis_dir, exist_ok=True)
-            if os.path.exists(vectorized_path):
-                os.remove(vectorized_path)
             logger.info(f"Saving vectorized polygons to {vectorized_path}...")
             if merged_gdf is None:
                 raise ValueError("Vectorization did not produce any industrial polygons")
-            merged_gdf.to_parquet(vectorized_path, index=False)
+            vectorized_tmp_path = f"{vectorized_path}.tmp"
+            if os.path.exists(vectorized_tmp_path):
+                os.remove(vectorized_tmp_path)
+            merged_gdf.to_parquet(vectorized_tmp_path, index=False)
+            os.replace(vectorized_tmp_path, vectorized_path)
             logger.info(f"Saved {len(merged_gdf)} feature(s) to {vectorized_path}")
 
         # ------------------------------------------------------------------ #
@@ -512,10 +532,12 @@ def main():
             cfg['country_output_column'],
         )
 
-        if os.path.exists(vectorized_path):
-            os.remove(vectorized_path)
         logger.info(f"Writing to {vectorized_path}...")
-        enriched_gdf.to_parquet(vectorized_path, index=False)
+        enriched_tmp_path = f"{vectorized_path}.tmp"
+        if os.path.exists(enriched_tmp_path):
+            os.remove(enriched_tmp_path)
+        enriched_gdf.to_parquet(enriched_tmp_path, index=False)
+        os.replace(enriched_tmp_path, vectorized_path)
         logger.info(f"Successfully created {vectorized_path}")
         return True
 

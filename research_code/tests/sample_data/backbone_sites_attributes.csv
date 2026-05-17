@@ -1,0 +1,7 @@
+WASTE_ID,HYBAS_ID,ISO_2,country,wwtp_area_rect,diameters,num_detection_rect,num_detection_circle,basin_area,mean_2_nnd
+101,9001,DE,DE,[10 5],"[2, 4]",3,1,1500.0,3500.0
+102,9001,DE,DE,[2 3],[3],1,0,1500.0,2500.0
+103,9001,DE,DE,[0],[2],0,1,1500.0,4000.0
+201,9002,FR,FR,[4 2],[4],2,1,2400.0,7000.0
+202,9002,FR,FR,[6],"[2, 2]",1,2,2400.0,6500.0
+203,9002,FR,FR,[1 1],[1],0,1,2400.0,7500.0

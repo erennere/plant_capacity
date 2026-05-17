@@ -23,8 +23,15 @@ def main():
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(**overrides)
 
+    if 'figures' not in cfg or 'approach' not in cfg['figures']:
+        raise KeyError("Missing figures.approach in config")
     approach = str(cfg['figures']['approach'])
-    input_filepath = create_pop_output_paths(cfg)['voronoi'][approach]
+
+    output_paths = create_pop_output_paths(cfg)
+    voronoi_map = output_paths.get('voronoi', {}) if isinstance(output_paths, dict) else {}
+    if approach not in voronoi_map:
+        raise KeyError(f"No Voronoi output path configured for approach '{approach}'")
+    input_filepath = voronoi_map[approach]
     gdf = gpd.read_file(input_filepath, columns=['geometry', 'total_area', 'round_area'])
     gdf['geometry'] = gdf.geometry.apply(lambda geom: geom.centroid if pd.notna(geom) else None)
     ensure_output_dir_for_file(cfg['paths']['leaflet_geojson_filepath'])

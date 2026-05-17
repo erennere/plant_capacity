@@ -173,6 +173,9 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
     ndi_dict = {}
     HW_comp_dict = {}
     gdf['indx'] = range(len(gdf))
+    if 'QUAL_POP' not in gdf.columns:
+        gdf['QUAL_POP'] = '1.0'
+
     verified = 'single'
     if 'unver' in filename:
         verified = False
@@ -237,6 +240,10 @@ def main():
     cfg = load_config(**overrides)
     ver_dir = cfg['paths']['verification_dir']
     plots_dir = cfg['paths']['hw_plots_dir']
+    if not os.path.isdir(ver_dir):
+        logger.warning("Verification directory not found: %s", ver_dir)
+        return
+
     pop_filepaths = [os.path.join(ver_dir, f) for f in os.listdir(ver_dir) if f.endswith('.gpkg')]
     plot_args = {
     'dpi' : 300,
@@ -249,7 +256,7 @@ def main():
     for filepath in pop_filepaths:
         filename = os.path.basename(filepath)
         params = extract_voronoi_parameters(filepath)
-        approach = params['approach']
+        approach = params.get('approach') if isinstance(params, dict) else None
         gdf = gpd.read_file(filepath)
         orchestrate_single(gdf, approach, plot_args, plots_dir, filename, pop_col)
 

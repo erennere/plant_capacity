@@ -22,12 +22,15 @@ def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg
     """Extract readable geospatial files from zip archives and merge them."""
     zip_dir = Path(zip_dir)
     output_path = Path(output_path)
+    if not zip_dir.exists() or not zip_dir.is_dir():
+        raise FileNotFoundError(f"Zip directory not found: {zip_dir}")
     output_path.mkdir(parents=True, exist_ok=True)
 
     merged_frames = []
 
     for zip_file in zip_dir.glob("*.zip"):
         print(f"Processing {zip_file.name}")
+        added_from_zip = False
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
 
@@ -48,9 +51,12 @@ def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg
                         print(f"Opened: {filepath.name}")
 
                         merged_frames.append(gdf)
+                        added_from_zip = True
                         break  # Stop after successfully reading one file per zip
                     except Exception:
                         continue
+                if added_from_zip:
+                    break
 
     if merged_frames:
         merged_gdf = gpd.GeoDataFrame(
@@ -78,10 +84,10 @@ def main():
         level = level.replace('lvl', '')
         level_overrides = {
             "level": level,
-            "version": overrides["version"],
-            "buffer": overrides["buffer"],
-            "weight_method": overrides["weight_method"],
-            "weight_func": overrides["weight_func"],
+            "version": overrides.get("version"),
+            "buffer": overrides.get("buffer"),
+            "weight_method": overrides.get("weight_method"),
+            "weight_func": overrides.get("weight_func"),
         }
         cfg = load_config(**level_overrides)
         extract_and_merge_geodata(

@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 def _robust_bounds(values, positive_only=False, quantile_range=(0.02, 0.98), iqr_factor=1.5):
     """Estimate robust plotting bounds by combining quantile and IQR filtering."""
-    clean = pd.to_numeric(values, errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
+    # Normalize arbitrary array-like inputs so replace/dropna are always available.
+    clean = pd.Series(pd.to_numeric(values, errors='coerce')).replace([np.inf, -np.inf], np.nan).dropna()
     if positive_only:
         clean = clean[clean > 0]
 

@@ -41,6 +41,9 @@ def assign_hybas_id_by_length(lines_gdf, poly_gdf, id_col='HYBAS_ID'):
     geopandas.GeoDataFrame
         Input lines with assigned basin IDs.
     """
+    if id_col not in poly_gdf.columns:
+        raise KeyError(f"Polygon column '{id_col}' not found")
+
     if lines_gdf.empty or poly_gdf.empty:
         logger.info("Skipping assignment because one input GeoDataFrame is empty")
         return lines_gdf
@@ -93,7 +96,7 @@ def extract_first_digit(df, source_col, new_col='first_digit'):
     """Extract the first character of `source_col` into `new_col`."""
     df[new_col] = (
         df[source_col]
-        .astype(str)
+        .astype('string')
         .str.strip()
         .str[0]
     )
@@ -122,11 +125,14 @@ def orchestrate_intersections(hybas_gdf, rivers_gdf, hybas_col, hyshed_col, new_
     geopandas.GeoDataFrame
         River segments with assigned basin IDs.
     """
+    if int(max_workers) < 1:
+        raise ValueError("max_workers must be >= 1")
+
     # 1. Extract digits
     rivers_gdf = extract_first_digit(rivers_gdf, hyshed_col, new_col)
     hybas_gdf = extract_first_digit(hybas_gdf, hybas_col, new_col)
 
-    continents = [c for c in rivers_gdf[new_col].unique() if c != 'n'] # Avoid 'nan' strings
+    continents = rivers_gdf[new_col].dropna().unique().tolist()
     gdfs = []
     
     logger.info("Submitting tasks for %s regions", len(continents))

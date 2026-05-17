@@ -41,7 +41,10 @@ def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None
 
 def calculate_size(value, min_value, max_value, min_size, max_size):
     """Map a numeric value to a marker size within a configured range."""
-    if value <= 0: return min_size
+    if value <= 0:
+        return min_size
+    if max_value <= min_value:
+        return min_size
     return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
 
 

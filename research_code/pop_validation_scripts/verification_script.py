@@ -14,6 +14,13 @@ except ImportError:
 
 def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS_ID'):
     """Mark each row with verification flags derived from basin-level validity rates."""
+    if watershed_col not in gdf.columns:
+        raise KeyError(f"Missing watershed column '{watershed_col}'")
+    if 'total_area' not in gdf.columns:
+        raise KeyError("Missing required column 'total_area'")
+    if not 0 <= float(percent_verification) <= 1:
+        raise ValueError("percent_verification must be within [0, 1]")
+
     gdf = gdf.copy()
     gdf['is_single_points'] = (
         gdf.groupby(watershed_col)[watershed_col].transform('size') == 1

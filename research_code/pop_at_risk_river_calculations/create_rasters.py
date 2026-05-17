@@ -483,6 +483,9 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
     dict[str, bool]
         Mapping from country code to success flag.
     """
+    if int(max_workers) < 1:
+        raise ValueError("max_workers must be >= 1")
+
     logger.info("Starting orchestration for %s countries", len(tif_dict))
     results = {}
 
@@ -529,7 +532,10 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
 
                 if gdf is not None and not gdf.empty:
                     gdf['country'] = country
-                    if gdf.crs != 4326:
+                    if gdf.crs is None:
+                        logger.warning("[%s] Extracted islands missing CRS; assuming EPSG:4326", country)
+                        gdf = gdf.set_crs(4326, allow_override=True)
+                    elif gdf.crs.to_epsg() != 4326:
                         gdf = gdf.to_crs(4326)
                     gdf['geometry'] = gdf.geometry.apply(to_wkt)                
                 elif gdf is None:
@@ -639,7 +645,13 @@ def main():
         len(tif_dict)
     )
 
-    watershed_gdf = gpd.read_file(cfg['paths']['watershed'], crs='epsg:4326').drop_duplicates(subset=[cfg['basin_column_name'], 'geometry'], keep='first').reset_index(drop=True)
+    watershed_gdf = gpd.read_file(cfg['paths']['watershed'])
+    if watershed_gdf.crs is None:
+        raise ValueError("Watershed dataset must include CRS metadata")
+    watershed_gdf = watershed_gdf.to_crs('EPSG:4326').drop_duplicates(
+        subset=[cfg['basin_column_name'], 'geometry'],
+        keep='first',
+    ).reset_index(drop=True)
     country_boundary_col = cfg['country_boundary_column']
     if country_output_col not in watershed_gdf.columns: 
         logger.warning("Watershed %s missing; running overture enrichment", country_output_col)

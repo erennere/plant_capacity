@@ -173,6 +173,10 @@ def main():
     cfg = load_config(**overrides)
     ver_dir = cfg['paths']['verification_dir']
     plots_dir = cfg['paths']['eu_plots_dir']
+    if not os.path.isdir(ver_dir):
+        logger.warning("Verification directory not found: %s", ver_dir)
+        return
+
     pop_filepaths = [os.path.join(ver_dir, f) for f in os.listdir(ver_dir) if f.endswith('.gpkg')]
     plot_args = {
     'dpi' : 300,
@@ -190,13 +194,15 @@ def main():
     organic_m_column = 'uwwCapacity'
 
     ref_file = gpd.read_file(ref_filepath)
+    if organic_m_column not in ref_file.columns:
+        raise KeyError(f"Reference column '{organic_m_column}' not found in EU reference layer")
     ref_file = ref_file.to_crs(utm)
     ref_file[pop_col] = factor*ref_file[organic_m_column]
 
     for filepath in pop_filepaths:
         filename = os.path.basename(filepath)
         params = extract_voronoi_parameters(filepath)
-        approach = params['approach']
+        approach = params.get('approach') if isinstance(params, dict) else None
         gdf = gpd.read_file(filepath)
         gdf = assign_to_nearest(gdf, ref_file, threshold)
         gdf = gdf[gdf[organic_m_column].notna()].reset_index(drop=True)

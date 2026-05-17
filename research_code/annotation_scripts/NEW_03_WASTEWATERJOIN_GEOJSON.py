@@ -60,6 +60,10 @@ def load_geodata(path):
         # Rename the column
         df = df.rename(columns={'geom': 'geometry'})
 
+    # FIX [C-1]: fail fast with a clear contract error when geometry input column is missing.
+    if 'geometry' not in df.columns:
+        raise ValueError("Input parquet must contain either 'geometry' or 'geom' column")
+
     # Convert to GeoDataFrame; GeoPandas may auto-convert Arrow binary
     df['geometry'] = df['geometry'].map(from_wkb_modified)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs=4326)
@@ -450,6 +454,10 @@ def merge_bboxes_sql(
         # 1️⃣ Parallelize GeoJSON to Parquet conversion
         logging.info(f"🔄 Converting {len(files)} GeoJSON files to Parquet (max_workers={max_workers})...")
         temp_parquet_files = parallel_convert_geojsons(files, temp_parquet_dir, max_workers=max_workers, overwrite=overwrite)
+        # FIX [F-2]: guard against empty conversion output to avoid downstream SQL assumptions.
+        if not temp_parquet_files:
+            logging.error("No parquet files were generated from input GeoJSON files")
+            return
         logging.info(f"✅ Converted all files. Starting merge...")
         
         # 2️⃣ Merge Parquets with parallel schema discovery and unified table creation
@@ -471,7 +479,11 @@ def merge_bboxes_sql(
         if conn is not None:
             conn.close()
         if temp_file is not None and os.path.exists(temp_file):
-            os.remove(temp_file)
+            try:
+                # FIX [F-1]: avoid masking the primary failure when temp-file cleanup fails.
+                os.remove(temp_file)
+            except Exception as err:
+                logging.warning("Failed to remove temporary DuckDB file %s: %s", temp_file, err)
         # Note: temp_parquet_dir is kept for potential reuse; delete if cleanup is needed
 
 
@@ -582,8 +594,12 @@ if __name__ == "__main__":
             for future in futures:
                 future.result()
         
-    main(
-        input_path=output_filepath,
-        output_path=output_path,
-        distance_threshold=0.02,
-    )
+    # FIX [D-1]: only execute downstream clustering when merged polygon parquet exists.
+    if os.path.exists(output_filepath):
+        main(
+            input_path=output_filepath,
+            output_path=output_path,
+            distance_threshold=0.02,
+        )
+    else:
+        logging.warning("Skipping clustering because merged polygon parquet was not produced: %s", output_filepath)

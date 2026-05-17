@@ -33,6 +33,11 @@ def test_vectorize_rasters_parallel_returns_empty_when_no_rasters(tmp_path):
     assert result == []
 
 
+def test_vectorize_rasters_parallel_rejects_non_positive_workers(tmp_path):
+    with pytest.raises(ValueError, match="max_workers"):
+        download_and_vectorize.vectorize_rasters_parallel(str(tmp_path), max_workers=0)
+
+
 def test_vectorize_and_merge_raises_when_no_raster_dirs():
     with pytest.raises(FileNotFoundError, match="No raster directories found"):
         download_and_vectorize._vectorize_and_merge([], max_workers=1, min_cells=10)
@@ -43,6 +48,17 @@ def test_vectorize_and_merge_raises_when_vectorization_produces_no_outputs(monke
 
     with pytest.raises(ValueError, match="Failed to vectorize any raster files"):
         download_and_vectorize._vectorize_and_merge(["/tmp/rasters"], max_workers=1, min_cells=10)
+
+
+def test_merge_geodataframes_rejects_invalid_max_workers():
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [Point(0, 0).buffer(0.01)], "value": [1]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    with pytest.raises(ValueError, match="max_workers"):
+        download_and_vectorize.merge_geodataframes([gdf], max_workers="invalid")
 
 
 def test_main_uses_cached_vectorized_polygons_and_writes_enriched_result(monkeypatch, tmp_path):
@@ -67,7 +83,7 @@ def test_main_uses_cached_vectorized_polygons_and_writes_enriched_result(monkeyp
         "country_output_column": "ISO_2",
         "industrial_zenodo_url": "https://example.com/industrial.zip",
     }
-    captured = {"removed": [], "writes": []}
+    captured = {"removed": [], "writes": [], "replaced": []}
     state = {"vectorized_exists": True}
 
     merged_gdf = gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, geometry="geometry", crs="EPSG:4326")
@@ -102,6 +118,7 @@ def test_main_uses_cached_vectorized_polygons_and_writes_enriched_result(monkeyp
             state["vectorized_exists"] = False
 
     monkeypatch.setattr(download_and_vectorize.os, "remove", fake_remove)
+    monkeypatch.setattr(download_and_vectorize.os, "replace", lambda src, dst: captured["replaced"].append((src, dst)))
 
     original_to_parquet = gpd.GeoDataFrame.to_parquet
 
@@ -115,8 +132,43 @@ def test_main_uses_cached_vectorized_polygons_and_writes_enriched_result(monkeyp
         monkeypatch.setattr(gpd.GeoDataFrame, "to_parquet", original_to_parquet)
 
     assert result is True
-    assert captured["removed"] == [vectorized_path]
-    assert captured["writes"] == [{"path": vectorized_path, "index": False, "rows": 1, "columns": ["HYBAS_ID", "ISO_2", "geometry"]}]
+    assert captured["removed"] == []
+    assert captured["writes"] == [
+        {
+            "path": f"{vectorized_path}.tmp",
+            "index": False,
+            "rows": 1,
+            "columns": ["HYBAS_ID", "ISO_2", "geometry"],
+        }
+    ]
+    assert captured["replaced"] == [(f"{vectorized_path}.tmp", vectorized_path)]
+
+
+def test_add_boundary_info_empty_input_short_circuits(monkeypatch):
+    industrial = gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326")
+    watershed = gpd.GeoDataFrame(
+        {"HYBAS_ID": [1], "geometry": [Point(0, 0).buffer(1)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    monkeypatch.setattr(download_and_vectorize, "intersects_with_country_db", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("country helper should not run")))
+    monkeypatch.setattr(download_and_vectorize, "intersect_with_polygon_sindex", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("basin helper should not run")))
+
+    out = download_and_vectorize.add_boundary_info(
+        industrial,
+        watershed,
+        overture_path="unused.parquet",
+        overture_s3_url="s3://unused",
+        basin_col="HYBAS_ID",
+        sindex_concurrency=False,
+        country_boundary_col="country",
+        country_output_col="ISO_2",
+    )
+
+    assert out.empty
+    assert "ISO_2" in out.columns
+    assert "HYBAS_ID" in out.columns
 
 
 def test_main_returns_false_when_boundary_enrichment_fails(monkeypatch, tmp_path):

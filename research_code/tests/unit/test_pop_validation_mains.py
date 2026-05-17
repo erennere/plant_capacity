@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pytest
 from shapely.geometry import Point
@@ -67,6 +68,39 @@ def test_verification_main_writes_ver_unver_and_single_outputs(monkeypatch, tmp_
     assert all(w["driver"] == "GPKG" and w["index"] is False for w in captured["writes"])
 
 
+def test_find_verification_watersheds_rejects_invalid_threshold():
+    gdf = gpd.GeoDataFrame(
+        {
+            "HYBAS_ID": [101, 101],
+            "total_area": [10.0, 0.0],
+            "geometry": [Point(0, 0), Point(1, 1)],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    with pytest.raises(ValueError, match="percent_verification"):
+        verification_script.find_verification_watersheds(gdf, 1.5)
+
+
+def test_find_verification_watersheds_requires_columns():
+    gdf_missing_total_area = gpd.GeoDataFrame(
+        {"HYBAS_ID": [101], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    with pytest.raises(KeyError, match="total_area"):
+        verification_script.find_verification_watersheds(gdf_missing_total_area, 0.5)
+
+    gdf_missing_hybas = gpd.GeoDataFrame(
+        {"total_area": [1.0], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    with pytest.raises(KeyError, match="HYBAS_ID"):
+        verification_script.find_verification_watersheds(gdf_missing_hybas, 0.5)
+
+
 def test_hw_comparison_main_dispatches_only_gpkg_files(monkeypatch, tmp_path):
     ver_dir = str(tmp_path / "verification")
     plots_dir = str(tmp_path / "plots")
@@ -92,6 +126,7 @@ def test_hw_comparison_main_dispatches_only_gpkg_files(monkeypatch, tmp_path):
     monkeypatch.setattr(hw_comparison.os, "chdir", lambda path: None)
     monkeypatch.setattr(hw_comparison, "parse_config_overrides", lambda start_index=1: {})
     monkeypatch.setattr(hw_comparison, "load_config", lambda **overrides: cfg)
+    monkeypatch.setattr(hw_comparison.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(hw_comparison.os, "listdir", lambda path: ["a.gpkg", "notes.txt"])
     monkeypatch.setattr(hw_comparison.gpd, "read_file", lambda path: gdf.copy())
     monkeypatch.setattr(hw_comparison, "extract_voronoi_parameters", lambda filepath: {"approach": "1"})
@@ -124,8 +159,30 @@ def test_hw_comparison_main_dispatches_only_gpkg_files(monkeypatch, tmp_path):
     ]
 
 
+def test_hw_comparison_main_returns_when_verification_dir_missing(monkeypatch, tmp_path):
+    cfg = {
+        "paths": {
+            "verification_dir": str(tmp_path / "missing_verification"),
+            "hw_plots_dir": str(tmp_path / "plots"),
+        }
+    }
+
+    monkeypatch.setattr(hw_comparison.os, "chdir", lambda path: None)
+    monkeypatch.setattr(hw_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(hw_comparison, "load_config", lambda **overrides: cfg)
+    monkeypatch.setattr(hw_comparison.os.path, "isdir", lambda path: False)
+    monkeypatch.setattr(
+        hw_comparison.gpd,
+        "read_file",
+        lambda path: (_ for _ in ()).throw(AssertionError("read_file should not run when verification dir is missing")),
+    )
+
+    hw_comparison.main()
+
+
 def test_eu_comparison_main_assigns_nearest_filters_and_dispatches(monkeypatch, tmp_path):
     ver_dir = str(tmp_path / "verification")
+    os.makedirs(ver_dir, exist_ok=True)
     plots_dir = str(tmp_path / "plots")
     ref_path = str(tmp_path / "eu_ref.gpkg")
     cfg = {
@@ -158,6 +215,7 @@ def test_eu_comparison_main_assigns_nearest_filters_and_dispatches(monkeypatch, 
     monkeypatch.setattr(eu_comparison.os, "chdir", lambda path: None)
     monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda start_index=1: {})
     monkeypatch.setattr(eu_comparison, "load_config", lambda **overrides: cfg)
+    monkeypatch.setattr(eu_comparison.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(eu_comparison.os, "listdir", lambda path: ["eu_case.gpkg", "ignore.txt"])
 
     def fake_read_file(path):
@@ -200,6 +258,58 @@ def test_eu_comparison_main_assigns_nearest_filters_and_dispatches(monkeypatch, 
         "pop_col": "POP_SERVED_EU",
         "save": True,
     }
+
+
+def test_eu_comparison_main_returns_when_verification_dir_missing(monkeypatch, tmp_path):
+    cfg = {
+        "paths": {
+            "verification_dir": str(tmp_path / "missing_verification"),
+            "eu_plots_dir": str(tmp_path / "plots"),
+            "eu_ref_filepath": str(tmp_path / "eu_ref.gpkg"),
+        },
+        "threshold": 500,
+    }
+
+    monkeypatch.setattr(eu_comparison.os, "chdir", lambda path: None)
+    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(eu_comparison, "load_config", lambda **overrides: cfg)
+    monkeypatch.setattr(eu_comparison.os.path, "isdir", lambda path: False)
+    monkeypatch.setattr(
+        eu_comparison.gpd,
+        "read_file",
+        lambda path: (_ for _ in ()).throw(AssertionError("read_file should not be called when verification dir is missing")),
+    )
+
+    eu_comparison.main()
+
+
+def test_eu_comparison_main_requires_reference_capacity_column(monkeypatch, tmp_path):
+    ver_dir = str(tmp_path / "verification")
+    os.makedirs(ver_dir, exist_ok=True)
+    cfg = {
+        "paths": {
+            "verification_dir": ver_dir,
+            "eu_plots_dir": str(tmp_path / "plots"),
+            "eu_ref_filepath": str(tmp_path / "eu_ref.gpkg"),
+        },
+        "threshold": 500,
+    }
+
+    ref_gdf = gpd.GeoDataFrame(
+        {"other_col": [1.0], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    monkeypatch.setattr(eu_comparison.os, "chdir", lambda path: None)
+    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(eu_comparison, "load_config", lambda **overrides: cfg)
+    monkeypatch.setattr(eu_comparison.os.path, "isdir", lambda path: True)
+    monkeypatch.setattr(eu_comparison.os, "listdir", lambda path: [])
+    monkeypatch.setattr(eu_comparison.gpd, "read_file", lambda path: ref_gdf.copy())
+
+    with pytest.raises(KeyError, match="uwwCapacity"):
+        eu_comparison.main()
 
 
 def test_hw_orchestrate_single_skips_2014_and_filters_quality(monkeypatch, tmp_path):
@@ -250,6 +360,42 @@ def test_hw_orchestrate_single_skips_2014_and_filters_quality(monkeypatch, tmp_p
     assert captured["calls"][0]["cols"] == ["2015_HW_comp", "2015_NDI"]
     assert captured["calls"][0]["ndi_na"] == 1
     assert captured["calls"][0]["hw_na"] == 1
+
+
+def test_hw_orchestrate_single_defaults_qual_pop_when_missing(monkeypatch, tmp_path):
+    output_dir = str(tmp_path / "plots")
+    captured = []
+
+    gdf = gpd.GeoDataFrame(
+        {
+            "POP_SERVED": [100.0, 50.0],
+            "2018_zonal_sum": [110.0, 40.0],
+            "geometry": [Point(0, 0), Point(1, 1)],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    monkeypatch.setattr(hw_comparison.os.path, "exists", lambda path: False)
+    monkeypatch.setattr(hw_comparison.os, "makedirs", lambda path, exist_ok=False: None)
+    monkeypatch.setattr(
+        hw_comparison,
+        "composite_histogram",
+        lambda data, my_dict, title, **kwargs: captured.append(data.copy()),
+    )
+
+    hw_comparison.orchestrate_single(
+        gdf,
+        approach="1",
+        plot_args={"save": True, "dpi": 72, "bins": 10, "fontsize": 10, "small_fontsize": 8, "lower_quantile": 0.01},
+        output_dir=output_dir,
+        filename="single_case.gpkg",
+        pop_col="POP_SERVED",
+    )
+
+    assert len(captured) == 2
+    assert "2018_NDI" in captured[0].columns
+    assert "2018_HW_comp" in captured[0].columns
 
 
 def test_eu_orchestrate_single_builds_year_metrics_and_verified_title(monkeypatch, tmp_path):
@@ -327,7 +473,37 @@ def test_eu_composite_histogram_handles_missing_column_without_crashing(monkeypa
     df = pd.DataFrame({"other_col": [1, 2]})
     my_dict = {2021: "missing_metric"}
 
+    class _Ax:
+        def set_title(self, *_args, **_kwargs):
+            return None
+
+        def set_yticklabels(self, *_args, **_kwargs):
+            return None
+
+        def set_ylabel(self, *_args, **_kwargs):
+            return None
+
+        def set_xlabel(self, *_args, **_kwargs):
+            return None
+
+        def grid(self, *_args, **_kwargs):
+            return None
+
+        def legend(self, *_args, **_kwargs):
+            return None
+
+    class _Fig:
+        def suptitle(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(
+        eu_comparison.plt,
+        "subplots",
+        lambda *args, **kwargs: (_Fig(), np.array([[_Ax() for _ in range(5)] for _ in range(2)])),
+    )
+    monkeypatch.setattr(eu_comparison.plt, "tight_layout", lambda *args, **kwargs: None)
     monkeypatch.setattr(eu_comparison.plt, "show", lambda: None)
+    monkeypatch.setattr(eu_comparison.plt, "close", lambda *args, **kwargs: None)
 
     eu_comparison.composite_histogram(
         df,
