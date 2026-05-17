@@ -1,5 +1,40 @@
 # plant_capacity
 
+The repository is a pipeline which I have developed over a year. The initial idea was to see whether one could use AI to increase gaps in data regarding Waste Waster Treatment Plants (WWTPs) globally, for instance w.r.t the population being served, the type of WWTP (residential, industrial, mix usage, etc.). The idea was that one could probably approximate the service area of a WWTP by Voronoi triangulations provided that the coverage of WWTP is adaquate so that WWTPs do not errenously extend to the areas which are served by other uncovered WWTP, not available in the WWTP dataset. 
+
+A reliable dataset with WWTP locations are needed and given the global scope of this project; this is, however easier said than done. HydroWASTE has published a global WWTP dataset which covers around 59K points (AI check this please, add reference). A drawback of their work is however, is that, in some cases the points are not located where the WWTP should be, but where it discharges. To this end, Paul (John Hopkins University, find him and add reference) used ML to scan the given WWTP location within a radius and if found, assigned it as the new geometry of the given WWTP. I have scanned the OpenStreetMap database for the remaining locations within 5 km radius and assigned the OSM geometry if there were any turnouts in OSM, otherwise the location was discarded. A similar approach was taken regarding the WWTP locations from European dataset (AI, add references). Extra points were also added wrt the United States, Canada, Germany and Thailand.
+
+However, using Voronoi tesselation to estimate service areas does not take river topology into consideration. It is costly to transport water across different watersheds. Hence, it makes sense to assign a WWTP to a watershed and then do the analysis across such basins. Watershed basins come in different levels though. The level is, hence a free parameter and will affect how the results are. The higher the level, more WWTPs are grouped together leading to a smoothing out of differences. The lower the level, the bigger the individual differences and the WWTPs stop interacting with each other. The repo allows different levels which can be changed either via the config or overridden in runtime. These can be downloaded from HydroBASIN (add context here, references) as zip files. The zip files for a level 'X' should be put under 'data/hydroshed_river_levels/lvl{x}'. 
+
+There are 3 different approaches which can be used. However the leading idea is the same. Voronoi cells are created for each buffer and corresponding points individually. 
+- Approach 1 builds buffers around WWTPs and then group and dissolve intersecting buffers with another. This dissolved buffer will serve as the 'basin' for the WWTPs therein.
+- Approach 2 groups WWTPs based on some buffer layer. Since this is a WWTP related repo, the buffers are watershed boundaries. However, the code itself is general enough to be adapted into a different domain (replace watershed with admin boundaries, WWTP data with health infrastructure and define and pass your own functions as to how buffer and weight creation works wrt. your data speficifics and Voila, health infrastructure estimation). 
+- Approach 3 groups WWTPs based on their city identification. This approach has been suggested while discussing how best to relate WWWTPs and Voronoi cells. It works the other way around. Cities are buffered, the population inside is divided between WWTPs therein using Voronoi cells. Not actively used in the repo, though the functionality is there, if need be. 
+
+Even though using watersheds as buffers should increase accuracy, Voronoi triangulation treats all locations evenly which does not reflect the actual differences between WWTPs. A WWTP which has more treatment area should have more influence. A possible solution is to provide a custom distance function which changes with weights. I could not find a readily available implementation of weighted Voronoi, so I have implemented it myself. To make things computationally easier, the code creates and xy-plane with resolution 'n_steps' meters between points and then checks whether the point falls within whose area of influence. There are three different distance functions: 
+- 1. Euclidean distance without weights
+- 2. Multiplicative euclidean distance, the distance is scaled by weights (the higher the weight, the smaller the distance)
+- 3. Additive euclidean distance, weights are scaled by the mean distance between locations in the buffer to have some units and then subtracted from the distance. 
+
+Furthermore, the weights are normalized across the same buffer. The function which calculates the weights from ML-related tags such as the number of ponds and the total treatment pond area, can be changed. To encode both information, the function takes 'total_area*sqrt(number of ponds)'. Then based on the chosen 'weight_func' (check this AI), the results are transformed based on (fill this and explain them):
+	- linear: no change
+	- square root: 
+	- some thing
+	- some thing   
+
+A result of Voronoi triangulation is that it splits the given are completely between different locations. This might, depending on the size of the basin/dissolved buffer, could lead to locations getting improportionally big areas, say when the basin is big and/or there are no other facilities in the vicinity. To overcome this, an extra clipping is done after the cell creation. The clipping geometry is just a buffer around the location. This idea corresponds to the original HydroWASTE approach something. As one might notice, this is a free parameter. There are two main approaches which can be customized: 
+	- 1. static buffering: a custom buffer will be applied consistenly across all locations
+	- 2. dynamic buffering: the buffer should depend on the conditions of each individual location such as size
+
+the dynamic buffering cam be turned via config (add which tag here and how) or via overriding it in runtime (add how). If static buffering is 
+ 
+
+
+
+
+
+
+
 `plant_capacity` is a geospatial analysis pipeline for wastewater treatment plant (WWTP) service-area modelling, population attribution, downstream risk analysis, industrial-coverage diagnostics, validation, and sensitivity analysis. The repository combines harmonized WWTP point data, watershed boundaries, optional annotation-derived weighting inputs, WorldPop rasters, HydroSHEDS-derived river products, and industrial land rasters into a reproducible workflow designed for local bash execution and SLURM-based batch runs.
 
 The codebase is not a model-training repository. Segmentation outputs, annotation model outputs, and other machine-generated products are treated as upstream inputs. The repository itself focuses on geospatial data preparation, weighted Voronoi service-area generation, raster-vector analysis, diagnostics, and reporting.
