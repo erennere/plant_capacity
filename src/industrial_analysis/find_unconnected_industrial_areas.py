@@ -4,7 +4,7 @@ Identify unconnected industrial areas not served by any WWTP.
 
 This script:
 1. Loads merged industrial land use data and WWTP locations.
-2. Filters WTTPs to those with industrial or mixed usage.
+2. Filters WTTPs to those with industrial usage.
 3. Creates Voronoi service areas for those WTTPs.
 4. Identifies industrial areas NOT overlapping any WWTP service area.
 5. Saves unconnected areas to GeoPackage.
@@ -30,7 +30,6 @@ try:
         prepare_data,
         create_output_paths,
         _resolve_configured_callable,
-        build_industrial_or_mixed_mask,
     )
     from ..create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 except ImportError:
@@ -41,7 +40,6 @@ except ImportError:
         prepare_data,
         create_output_paths,
         _resolve_configured_callable,
-        build_industrial_or_mixed_mask,
     )
     from src.create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 
@@ -102,24 +100,20 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
 
 
 def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Filter WTTPs to those with industrial or mixed usage."""
+    """Filter WTTPs to those with industrial usage."""
     industrial_categories = cfg['industrial_category_numbers']
-    mixed_keywords = cfg['mixed_use_category_keywords']
-    
+    mix_use_categories = cfg['mix_use_categories']
     if not industrial_categories:
         logger.warning("No industrial categories configured; using all WTTPs")
         return wwtps_gdf
     
     logger.info(f"Filtering WTTPs by industrial categories: {industrial_categories}")
-    
-    mask = build_industrial_or_mixed_mask(
-        wwtps_gdf['category_number'],
-        industrial_categories,
-        mixed_keywords,
-    )
+    industrial_as_str = {str(c) for c in industrial_categories}
+    mix_use_as_str = {str(c) for c in mix_use_categories}
+    mask = wwtps_gdf['category_number'].astype(str).isin(industrial_as_str.union(mix_use_as_str))
     
     filtered = wwtps_gdf[mask].copy()
-    logger.info(f"Filtered to {len(filtered)} industrial/mixed WTTPs (from {len(wwtps_gdf)} total)")
+    logger.info(f"Filtered to {len(filtered)} industrial WTTPs (from {len(wwtps_gdf)} total)")
     
     return filtered
 
@@ -308,10 +302,10 @@ def main():
             logger.error("No WTTPs available; cannot proceed")
             return False
         
-        # Filter to industrial/mixed WTTPs
+        # Filter to industrial WTTPs
         industrial_wwtps = filter_industrial_wwtps(cfg, wwtps_gdf)
         if industrial_wwtps.empty:
-            logger.warning("No industrial/mixed WTTPs after filtering")
+            logger.warning("No industrial WTTPs after filtering")
             unconnected = industrial_gdf.copy()
         else:
             # Load preprocessed watershed + country data

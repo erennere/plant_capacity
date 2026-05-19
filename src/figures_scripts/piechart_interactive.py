@@ -14,11 +14,11 @@ import math
 
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..pipelines import create_pop_output_paths, build_industrial_or_mixed_mask
+    from ..pipelines import create_pop_output_paths
     from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from src.starter import load_config, parse_config_overrides
-    from src.pipelines import create_pop_output_paths, build_industrial_or_mixed_mask
+    from src.pipelines import create_pop_output_paths
     from src.create_voronoi import ensure_output_dir_for_file
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
@@ -152,11 +152,8 @@ def main():
     
     # Clean population for Voronoi tooltips
     pop_gdf[agg_col] = pop_gdf[agg_col].fillna(0).round(0)
-    pop_gdf[ind_col] = build_industrial_or_mixed_mask(
-        pop_gdf['category_number'],
-        cfg['industrial_category_numbers'],
-        cfg['mixed_use_category_keywords'],
-    )
+    industrial_categories = {str(c) for c in cfg['industrial_category_numbers']}
+    pop_gdf[ind_col] = pop_gdf['category_number'].astype(str).isin(industrial_categories)
 
     pop_df_no_geom = pop_gdf.drop('geometry', axis=1)
     agg_ds = []

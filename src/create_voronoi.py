@@ -98,19 +98,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _load_create_voronoi_default(key, fallback):
-    """Load one default value from create_voronoi config without CLI overrides."""
-    try:
-        try:
-            from .starter import load_config
-        except ImportError:
-            from starter import load_config
-        cfg = load_config(script_name="create_voronoi")
-        return cfg[key]
-    except Exception:
-        return fallback
-
-
 def geometry_contains_points(geometry, points):
     """Return a boolean mask for points contained in geometry.
 
@@ -1171,7 +1158,7 @@ def intersects_with_country_db(df, filepath, polygon_country_col='country', outp
 # SECTION 7: BUFFER & GEOMETRY DISSOLUTION
 ################################################################################
 
-def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=None):
+def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=50000):
     """
     Dissolve overlapping polygon geometries into unified regions.
     
@@ -1187,9 +1174,8 @@ def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=N
     convex : bool, default=False
         Whether to use bounding boxes of original geometries instead of centroid
         buffers.
-    recursion_lim : int | None, default=None
-        Recursion limit used by the depth-first traversal. When ``None``,
-        resolves from ``create_voronoi.recursion_lim`` in config.
+    recursion_lim : int, default=50000
+        Recursion limit used by the depth-first traversal.
 
     Returns
     -------
@@ -1203,9 +1189,7 @@ def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=N
     latitude/longitude grouping before connected-component merging.
     """
     import sys
-    if recursion_lim is None:
-        recursion_lim = int(_load_create_voronoi_default('recursion_lim', 50000))
-    sys.setrecursionlimit(recursion_lim)
+    sys.setrecursionlimit(int(recursion_lim))
     if subdf is None or subdf.empty:
         logger.warning("Input subdf is empty")
         return None

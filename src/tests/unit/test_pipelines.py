@@ -273,7 +273,6 @@ def test_prepare_data_uses_final_geometry_and_filters_industrial_sites(monkeypat
         "basin_column_name": "HYBAS_ID",
         "remove_industrial": True,
         "industrial_category_numbers": ["3"],
-        "mixed_use_category_keywords": ["mix"],
         "sindex_concurrency": False,
     }
 
@@ -336,10 +335,10 @@ def test_prepare_data_uses_final_geometry_and_filters_industrial_sites(monkeypat
     result = pipelines.prepare_data(cfg)
 
     gdf_bbox = result["gdf_bbox"].sort_values("WASTE_ID").reset_index(drop=True)
-    assert gdf_bbox["WASTE_ID"].tolist() == [0]
-    assert gdf_bbox["old_WASTE_ID"].tolist() == [10]
-    assert gdf_bbox["geometry"].tolist() == [final_points[0]]
-    assert gdf_bbox["ISO_2"].tolist() == ["DE"]
+    assert gdf_bbox["WASTE_ID"].tolist() == [0, 1]
+    assert gdf_bbox["old_WASTE_ID"].tolist() == [10, 30]
+    assert gdf_bbox["geometry"].tolist() == [final_points[0], final_points[2]]
+    assert gdf_bbox["ISO_2"].tolist() == ["DE", "DE"]
     assert "final_geometry" not in gdf_bbox.columns
     assert gdf_bbox["WKT_WWTP"].notna().all()
     assert result["basin_gdf"]["basin_area"].gt(0).all()
@@ -364,7 +363,6 @@ def test_prepare_data_csv_mode_downloads_overture_once_and_exports_expanded_outp
         "basin_column_name": "HYBAS_ID",
         "remove_industrial": False,
         "industrial_category_numbers": ["3"],
-        "mixed_use_category_keywords": ["mix"],
         "sindex_concurrency": True,
     }
     state = {

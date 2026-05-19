@@ -87,6 +87,16 @@ download_bing_annotate:
     image_size_px: 3072
     zoom_level: 17
     base_z17_resolution: 1.1943285669555664
+    max_workers: 64
+    georeferenced: false
+    fontsize: 24
+    dpi: 72
+    target_size_px: 1024
+    request_timeout_seconds: 15
+    random_image_rgb: [0, 0, 0]
+    mercator_tile_size_px: 256
+    imagery_reference_tile_size_px: 512
+    earth_radius_m: 6378137
     bing_imagery_url: 'https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial'
     bing_api_key: 'de60014913a0464f83eec298da249356'
   paths:
@@ -179,7 +189,6 @@ create_voronoi:
   cv2_true: false
   city_voronoi: false
   industrial_category_numbers: []
-  mixed_use_category_keywords: ['mix']
   csv_files: false
   duckdb_cond: false
   sindex_concurrency: true
@@ -406,7 +415,7 @@ find_unconnected_industrial_areas:
   detection_confidence_threshold: null
   industrial_min_cells: null
   industrial_category_numbers: []
-  mixed_use_category_keywords: null
+  mix_use_categories: []
   industrial_unconnected_overwrite: false
   scipy_true: null
   cv2_true: null
@@ -517,7 +526,6 @@ piechart_figure:
   dynamic_buffer_k: null
   zonal_sum_default_column: null
   industrial_category_numbers: null
-  mixed_use_category_keywords: null
   figures:
     approach: null
   paths:
@@ -540,7 +548,6 @@ piechart_interactive:
   dynamic_buffer_k: null
   zonal_sum_default_column: null
   industrial_category_numbers: null
-  mixed_use_category_keywords: null
   figures:
     approach: null
   paths:

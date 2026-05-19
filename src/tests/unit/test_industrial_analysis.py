@@ -38,6 +38,7 @@ def _industrial_cfg_defaults(request):
     cfg.setdefault("detection_confidence_threshold", 3)
     cfg.setdefault("industrial_min_cells", 100)
     cfg.setdefault("industrial_category_numbers", [])
+    cfg.setdefault("mix_use_categories", [])
     cfg.setdefault("industrial_unconnected_overwrite", False)
     cfg.setdefault("scipy_true", False)
     cfg.setdefault("cv2_true", False)
@@ -58,13 +59,13 @@ def _industrial_cfg_defaults(request):
     paths.setdefault("overture_s3_url", "s3://example/overture")
 
 
-def test_filter_industrial_wwtps_keeps_matching_categories_and_mix(mock_cfg, tiny_points_gdf):
+def test_filter_industrial_wwtps_keeps_only_matching_categories(mock_cfg, tiny_points_gdf):
     cfg = mock_cfg
     cfg["industrial_category_numbers"] = ["1", "4"]
 
     result = find_unconnected_industrial_areas.filter_industrial_wwtps(cfg, tiny_points_gdf)
 
-    assert set(result["WASTE_ID"]) == {1, 2, 5, 6}
+    assert set(result["WASTE_ID"]) == {1, 6}
 
 
 def test_find_unconnected_areas_returns_only_polygons_outside_service_regions():

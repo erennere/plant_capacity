@@ -1,8 +1,24 @@
 # Global-WWTP-Service-Zones-and-Risk-Pipeline
 
-The repository is a pipeline developed to explore whether AI can fill data gaps regarding Wastewater Treatment Plants (WWTPs) globally, for example the population served and the type of WWTP (residential, industrial, mixed-use, etc.). The core idea is to approximate WWTP service areas via Voronoi tessellations, provided that WWTP coverage is adequate enough that cells do not erroneously extend into areas served by uncovered WWTPs absent from the dataset.
+The repository is a pipeline developed to explore whether AI can fill data gaps regarding Wastewater Treatment Plants (WWTPs) globally, for example the population served and the type of WWTP (residential, industrial, etc.). The core idea is to approximate WWTP service areas via Voronoi tessellations, provided that WWTP coverage is adequate enough that cells do not erroneously extend into areas served by uncovered WWTPs absent from the dataset.
 
 WWTPs are not just point infrastructure in this project: they are spatial service units whose catchments can be approximated, refined, and compared against reference datasets. This pipeline is designed to run at multi-country scale and combines correction, harmonization, Voronoi allocation, population attribution, river-linked risk propagation, validation, industrial coverage analysis, and reporting. Most runtime behavior is controlled from `src/config.yaml`, with shell wrappers providing reproducible local and SLURM entry points.
+
+## Table of Contents
+
+- [Data Sources](#data-sources)
+- [Approaches](#approaches)
+- [Weighted Voronoi Tessellation](#weighted-voronoi-tessellation)
+- [Clipping / Buffering](#clipping--buffering)
+- [Analyses](#analyses)
+- [What This Repository Contains](#what-this-repository-contains)
+- [Canonical Script Run Order](#canonical-script-run-order)
+- [Project Data Flow](#project-data-flow)
+- [Environment Creation](#environment-creation)
+- [Starter Data Files You Need Before Running](#starter-data-files-you-need-before-running)
+- [Configuration Parameters You Usually Need To Change](#configuration-parameters-you-usually-need-to-change)
+- [What Is Missing Or External To The Repository](#what-is-missing-or-external-to-the-repository)
+- [Section Documentation](#section-documentation)
 
 ## Data Sources
 
@@ -98,7 +114,7 @@ This branch propagates organic material from unserved settlements downstream.
 The workflow identifies non-served population outside WWTP service areas, assigns river segments to basins, links non-served polygons to nearby rivers, propagates organic load downstream until concentration falls below `impact_polygons_pop_params.c_limit`, and then intersects the resulting impact corridors with WorldPOP.
 
 ### Industrial Area Analysis
-For this analysis, a 10 m industrial land dataset from Zenodo is downloaded and vectorized. Industrial areas are assigned to watersheds and compared against Voronoi coverage generated from industrial or mixed-use WWTPs selected through the annotation-derived category fields. Industrial areas not served by any such WWTP are identified and reported.
+For this analysis, a 10 m industrial land dataset from Zenodo is downloaded and vectorized. Industrial areas are assigned to watersheds and compared against Voronoi coverage generated from industrial WWTPs selected through the annotation-derived category fields. Industrial areas not served by any such WWTP are identified and reported.
 
 The remaining sections shift from method to use: they first show how the repository is organised, then outline the standard execution order and end-to-end data flow, and finally summarise the setup and configuration details needed to run the workflow.
 
@@ -278,7 +294,6 @@ The defaults are a mix of portable relative paths and environment-specific clust
 | `find_intersection_river.x_distance` | Controls maximum river-match distance for non-served polygons |
 | `impact_polygons_pop.impact_polygons_pop_params.*` | Controls downstream organic-load propagation |
 | `find_unconnected_industrial_areas.industrial_category_numbers` | Controls which annotation categories are treated as industrial WWTPs |
-| `find_unconnected_industrial_areas.mixed_use_category_keywords` | Controls which category labels are treated as mixed-use matches |
 
 `src/starter.py` resolves values in canonical YAML order. Earlier sections define shared values and later sections inherit them with `null`. Positional CLI overrides always take precedence over the resolved config.
 

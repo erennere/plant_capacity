@@ -13,7 +13,7 @@
 | `Known Issues / TODOs` | Flags current caveats and limitations |
 
 ## What This Module Does
-This module measures which industrial land areas are not covered by industrial or mixed WWTP service regions. It downloads and vectorizes industrial land rasters, enriches them with watershed and country context, and then compares them to the industrial-filtered Voronoi outputs.
+This module measures which industrial land areas are not covered by industrial WWTP service regions. It downloads and vectorizes industrial land rasters, enriches them with watershed and country context, and then compares them to the industrial-filtered Voronoi outputs.
 
 ## How It Fits In
 It runs after the main Voronoi and population stages, but it uses the same configurable Voronoi machinery with industrial WWTP categories. Its outputs feed the industrial coverage analysis branch and the reporting layers that summarize uncovered industrial polygons.
@@ -51,7 +51,7 @@ A successful run writes the merged industrial layer and the unconnected-industri
 
 ## Smart Behaviors
 - `download_and_vectorize.py` caches rasters when `industrial_persist_rasters=true` and can reuse the merged industrial GeoPackage when overwrite is disabled.
-- `find_unconnected_industrial_areas.py` uses `industrial_category_numbers` together with `mixed_use_category_keywords` to include both explicit industrial labels and mixed-use category text matches.
+- `find_unconnected_industrial_areas.py` uses `industrial_category_numbers` to restrict the Voronoi branch to industrial WWTPs.
 - Both scripts accept the same positional override layout used by the rest of the pipeline.
 
 Delete the industrial output directory or enable the overwrite flags to force a rerun.
@@ -65,7 +65,6 @@ Delete the industrial output directory or enable the overwrite flags to force a 
 | `download_and_vectorize.industrial_simplify_tolerance` | `0.001` | Geometry simplification tolerance |
 | `download_and_vectorize.industrial_vectorize_overwrite` | `false` | Overwrite vectorized outputs |
 | `find_unconnected_industrial_areas.industrial_category_numbers` | `[]` | Numeric filter for industrial WWTP categories |
-| `find_unconnected_industrial_areas.mixed_use_category_keywords` | `['mix']` | Token list for mixed-use category matching |
 | `find_unconnected_industrial_areas.industrial_unconnected_overwrite` | `false` | Overwrite unconnected outputs |
 | `find_unconnected_industrial_areas.paths.industrial_unconnected_output` | template | Unconnected industrial parquet |
 

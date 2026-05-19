@@ -83,6 +83,10 @@ DPI = 72
 EARTH_RADIUS = 6378137
 WORLD_WIDTH = 2 * math.pi * EARTH_RADIUS  # ~40075016.685
 TARGET_SIZE = [1024, 1024]
+REQUEST_TIMEOUT_SECONDS = 15
+RANDOM_IMAGE_RGB = (0, 0, 0)
+WEB_MERCATOR_TILE_SIZE = 256
+IMAGERY_REFERENCE_TILE_SIZE = 512
 
 transformer = Transformer.from_crs(
     "EPSG:4326", "EPSG:3857", always_xy=True
@@ -96,13 +100,13 @@ def download_bing_image(center_lon, center_lat):
         f"?mapSize={IMAGE_SIZE[0]},{IMAGE_SIZE[1]}"
         f"&key={BING_API_KEY}"
     )
-    r = requests.get(url, timeout=15)
+    r = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
     r.raise_for_status()
     return Image.open(BytesIO(r.content)).convert("RGB")
 
 def download_random_image(center_lon, center_lat):
     """Return a dummy black image with the same dimensions as production tiles."""
-    return Image.new("RGB", IMAGE_SIZE, (0, 0, 0))
+    return Image.new("RGB", IMAGE_SIZE, RANDOM_IMAGE_RGB)
 
 def get_image(idx, images_dir):
     """Load a pre-generated source image for one annotation index."""
@@ -127,7 +131,7 @@ def mercator_to_pixel(x, y, cx, cy, IMAGE_SIZE, wrap=True):
     # Since Maxar Zoom 17 typically refers to the 512px tile scale, 
     # we use 512 as the divisor if your imagery was pulled as 512px tiles.
     # However, standard Web Mercator math uses 256 as the base unit:
-    res = BASE_Z17_RES * (256 / 512) # This gives ~0.597 m/px (Native Maxar Z17)
+    res = BASE_Z17_RES * (WEB_MERCATOR_TILE_SIZE / IMAGERY_REFERENCE_TILE_SIZE)
     
     # 3. Calculate distance from center
     dx = x - cx
@@ -135,10 +139,9 @@ def mercator_to_pixel(x, y, cx, cy, IMAGE_SIZE, wrap=True):
 
     # 4. Handle World Wrap (The "International Date Line" logic)
     if wrap:
-        WORLD_CIRCUMFERENCE = 40075016.68557849
-        half_world = WORLD_CIRCUMFERENCE / 2
-        if dx > half_world: dx -= WORLD_CIRCUMFERENCE
-        elif dx < -half_world: dx += WORLD_CIRCUMFERENCE
+        half_world = WORLD_WIDTH / 2
+        if dx > half_world: dx -= WORLD_WIDTH
+        elif dx < -half_world: dx += WORLD_WIDTH
 
     # 5. Map to Pixel Space
     # (Distance / Resolution) + (Center of the 3072px frame)
@@ -150,9 +153,8 @@ def mercator_to_pixel(x, y, cx, cy, IMAGE_SIZE, wrap=True):
 def image_bounds_mercator(center_lon, center_lat):
     """Return approximate Web-Mercator bounds for the configured output image."""
     cx, cy = transformer.transform(center_lon, center_lat)
-    cx, cy = center_lon, center_lat
 
-    initial_res = 2 * math.pi * 6378137 / 256
+    initial_res = 2 * math.pi * EARTH_RADIUS / WEB_MERCATOR_TILE_SIZE
     res = initial_res / (2 ** ZOOM_LEVEL)
 
     half_w = IMAGE_SIZE[0] * res / 2
@@ -498,6 +500,22 @@ if __name__ == "__main__":
     BASE_Z17_RES = float(annotations_cfg["base_z17_resolution"])
     BING_IMAGERY_URL = annotations_cfg["bing_imagery_url"]
     BING_API_KEY = annotations_cfg["bing_api_key"] or BING_API_KEY
+    MAX_WORKERS = int(annotations_cfg["max_workers"])
+    GEOREFERENCED = bool(annotations_cfg["georeferenced"])
+    FONTSIZE = int(annotations_cfg["fontsize"])
+    DPI = int(annotations_cfg["dpi"])
+    target_size_px = int(annotations_cfg["target_size_px"])
+    TARGET_SIZE = [target_size_px, target_size_px]
+    REQUEST_TIMEOUT_SECONDS = float(annotations_cfg["request_timeout_seconds"])
+    rgb = annotations_cfg["random_image_rgb"]
+    if isinstance(rgb, (list, tuple)) and len(rgb) == 3:
+        RANDOM_IMAGE_RGB = tuple(int(v) for v in rgb)
+    else:
+        raise ValueError("annotations.random_image_rgb must be a 3-element list or tuple")
+    WEB_MERCATOR_TILE_SIZE = int(annotations_cfg["mercator_tile_size_px"])
+    IMAGERY_REFERENCE_TILE_SIZE = int(annotations_cfg["imagery_reference_tile_size_px"])
+    EARTH_RADIUS = float(annotations_cfg["earth_radius_m"])
+    WORLD_WIDTH = 2 * math.pi * EARTH_RADIUS
 
     images_dir = cfg["paths"]["annotations_images_dir"]
     grid_filedir = cfg["paths"]["annotations_grid_dir"]

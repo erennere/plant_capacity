@@ -310,7 +310,6 @@ def test_piechart_interactive_main_end_to_end(tmp_path, monkeypatch):
         "min_total_size": 10000,
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [10],
-        "mixed_use_category_keywords": ["mix"],
         "paths": {
             "country_boundaries_filepath": str(boundaries_fp),
             "raster_country_stats_filepath": str(stats_fp),
@@ -359,7 +358,6 @@ def test_piechart_interactive_main_raises_for_missing_stats_file(tmp_path, monke
         "min_total_size": 10000,
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [10],
-        "mixed_use_category_keywords": ["mix"],
         "paths": {
             "country_boundaries_filepath": str(boundaries_fp),
             "raster_country_stats_filepath": str(tmp_path / "missing.csv"),

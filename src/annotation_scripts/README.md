@@ -104,7 +104,17 @@ Delete the grid, annotation, or merged outputs to force a rerun of the correspon
 | `annotations_inspection.annotations.random_seed` | `42` | QA sampling seed |
 | `download_bing_annotate.annotations.zoom_level` | `17` | Imagery zoom level |
 | `download_bing_annotate.annotations.image_size_px` | `3072` | Requested imagery width/height in pixels |
+| `download_bing_annotate.annotations.max_workers` | `64` | Parallel bbox annotation worker count |
+| `download_bing_annotate.annotations.request_timeout_seconds` | `15` | HTTP timeout for imagery downloads |
+| `download_bing_annotate.annotations.random_image_rgb` | `[0,0,0]` | Fill color used by random-image fallback |
+| `download_bing_annotate.annotations.georeferenced` | `false` | Write georeferenced GeoTIFF output instead of resized PNG |
+| `download_bing_annotate.annotations.fontsize` | `24` | Label font size in rendered outputs |
+| `download_bing_annotate.annotations.dpi` | `72` | PNG save DPI |
+| `download_bing_annotate.annotations.target_size_px` | `1024` | Final PNG output width/height |
 | `download_bing_annotate.annotations.bing_imagery_url` | Bing endpoint | Base URL for imagery requests |
+| `download_bing_annotate.annotations.earth_radius_m` | `6378137` | Earth radius used for Mercator math |
+| `download_bing_annotate.annotations.mercator_tile_size_px` | `256` | Web-Mercator base tile size |
+| `download_bing_annotate.annotations.imagery_reference_tile_size_px` | `512` | Imagery provider native tile size used in pixel scaling |
 | `download_bing_annotate.paths.annotations_images_dir` | ⚠️ path | Source imagery directory |
 | `download_bing_annotate.paths.annotated_images_output_dir` | ⚠️ path | Annotated image output directory |
 | `merge_annotations.paths.annotations_results_filepath` | ⚠️ path | Annotation results CSV |

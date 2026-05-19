@@ -27,7 +27,6 @@ exclusively in ``config.yaml``.
 """
 
 import os
-import re
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -37,24 +36,6 @@ import logging
 from scipy.spatial import cKDTree
 
 logger = logging.getLogger(__name__)
-
-
-def build_industrial_or_mixed_mask(category_series, industrial_categories=None, mixed_keywords=None):
-    """Return a boolean mask for industrial or mixed-use category labels."""
-    if category_series is None:
-        return pd.Series(dtype=bool)
-
-    cat_as_str = category_series.astype(str)
-    industrial_as_str = {str(c) for c in (industrial_categories or [])}
-    mixed_tokens = [str(tok).strip().lower() for tok in (mixed_keywords or []) if str(tok).strip()]
-
-    industrial_mask = cat_as_str.isin(industrial_as_str)
-    if not mixed_tokens:
-        return industrial_mask
-
-    pattern = "|".join(re.escape(tok) for tok in mixed_tokens)
-    mixed_mask = cat_as_str.str.lower().str.contains(pattern, na=False)
-    return industrial_mask | mixed_mask
 
 
 def _compute_mean_2_nnd_web_mercator(gdf):
@@ -411,15 +392,12 @@ def prepare_data(cfg):
     if cfg['remove_industrial']:
         if 'category_number' in gdf_bbox.columns:
             initial_count = len(gdf_bbox)
-            industrial_mask = build_industrial_or_mixed_mask(
-                gdf_bbox['category_number'],
-                cfg['industrial_category_numbers'],
-                cfg['mixed_use_category_keywords'],
-            )
+            industrial_categories = {str(c) for c in cfg['industrial_category_numbers']}
+            industrial_mask = gdf_bbox['category_number'].astype(str).isin(industrial_categories)
             gdf_bbox = gdf_bbox[~industrial_mask].copy()
             gdf_bbox[site_id_col] = np.arange(len(gdf_bbox))
             logger.info(
-                "Removed %s industrial/mixed sites based on category_number",
+                "Removed %s industrial sites based on category_number",
                 initial_count - len(gdf_bbox),
             )
     

@@ -71,7 +71,6 @@ The full parameter tables now live in the relevant module READMEs. This file kee
 | `impact_polygons_pop.impact_polygons_pop_params.org_per_pop` | `60.0` | Organic load per person |
 | `piechart_figure.min_total_size` | `50000000` | Minimum size threshold for pie-chart country inclusion |
 | `piechart_interactive.min_total_size` | `50000000` | Minimum size threshold for interactive pie-map country inclusion |
-| `find_unconnected_industrial_areas.mixed_use_category_keywords` | `['mix']` | Mixed-use token matching for industrial filtering |
 | `download_and_vectorize.industrial_zenodo_url` | Zenodo URL | Industrial raster source |
 
 Module-specific settings are documented in the corresponding README files under `src/`.

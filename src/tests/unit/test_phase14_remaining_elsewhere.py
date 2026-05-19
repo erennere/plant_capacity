@@ -108,7 +108,6 @@ def test_piechart_figure_main_smoke(monkeypatch, tmp_path):
         },
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [9],
-        "mixed_use_category_keywords": ["mix"],
     }
 
     boundaries = gpd.GeoDataFrame(
@@ -331,6 +330,16 @@ def test_download_bing_main_smoke(monkeypatch, tmp_path):
             "base_z17_resolution": 1.1943285669555664,
             "bing_imagery_url": "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial",
             "bing_api_key": "dummy",
+            "max_workers": 1,
+            "georeferenced": False,
+            "fontsize": 24,
+            "dpi": 300,
+            "target_size_px": 1024,
+            "request_timeout_seconds": 10,
+            "random_image_rgb": [255, 255, 255],
+            "mercator_tile_size_px": 256,
+            "imagery_reference_tile_size_px": 3072,
+            "earth_radius_m": 6378137,
         },
         "paths": {
             "annotations_images_dir": str(images_dir),
