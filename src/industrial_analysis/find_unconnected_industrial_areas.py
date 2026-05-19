@@ -104,7 +104,7 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
 def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Filter WTTPs to those with industrial or mixed usage."""
     industrial_categories = cfg['industrial_category_numbers']
-    mixed_keywords = cfg.get('mixed_use_category_keywords')
+    mixed_keywords = cfg['mixed_use_category_keywords']
     
     if not industrial_categories:
         logger.warning("No industrial categories configured; using all WTTPs")

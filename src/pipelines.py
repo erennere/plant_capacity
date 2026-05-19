@@ -413,8 +413,8 @@ def prepare_data(cfg):
             initial_count = len(gdf_bbox)
             industrial_mask = build_industrial_or_mixed_mask(
                 gdf_bbox['category_number'],
-                cfg.get('industrial_category_numbers'),
-                cfg.get('mixed_use_category_keywords'),
+                cfg['industrial_category_numbers'],
+                cfg['mixed_use_category_keywords'],
             )
             gdf_bbox = gdf_bbox[~industrial_mask].copy()
             gdf_bbox[site_id_col] = np.arange(len(gdf_bbox))

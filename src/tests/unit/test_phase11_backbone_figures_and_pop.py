@@ -381,8 +381,18 @@ def test_download_pop_process_all_and_main(monkeypatch, tmp_path):
     assert len(calls) == 2
 
     monkeypatch.setattr(dp, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(dp, "load_config", lambda **kwargs: {"paths": {"pop_dir": str(tmp_path)}})
-    monkeypatch.setattr(dp, "get_urls", lambda: {"a": ["u"], "b": ["u"], "c": ["u"], "d": ["u"]})
+    monkeypatch.setattr(
+        dp,
+        "load_config",
+        lambda **kwargs: {
+            "paths": {"pop_dir": str(tmp_path)},
+            "start_year": 2015,
+            "end_year": 2024,
+            "worldpop_2014_url_template": "tpl2014",
+            "worldpop_yearly_url_template": "tplyear",
+        },
+    )
+    monkeypatch.setattr(dp, "get_urls", lambda **kwargs: {"a": ["u"], "b": ["u"], "c": ["u"], "d": ["u"]})
     monkeypatch.setattr(dp, "process_all_countries", lambda country_urls, res, max_workers, data_dir: calls.append((len(country_urls), res, max_workers, data_dir)))
 
     dp.main(res=90, max_workers=1)

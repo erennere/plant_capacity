@@ -638,15 +638,12 @@ def main(res=30, max_workers=8):
     data_dir = os.path.abspath(cfg["paths"]["pop_dir"])
     
     logging.info('Retrieving population data URLs')
-    if any(k in cfg for k in ('start_year', 'end_year', 'worldpop_2014_url_template', 'worldpop_yearly_url_template')):
-        country_urls = get_urls(
-            start_year=cfg.get('start_year', 2015),
-            end_year=cfg.get('end_year', 2024),
-            worldpop_2014_template=cfg.get('worldpop_2014_url_template'),
-            worldpop_yearly_template=cfg.get('worldpop_yearly_url_template'),
-        )
-    else:
-        country_urls = get_urls()
+    country_urls = get_urls(
+        start_year=cfg['start_year'],
+        end_year=cfg['end_year'],
+        worldpop_2014_template=cfg['worldpop_2014_url_template'],
+        worldpop_yearly_template=cfg['worldpop_yearly_url_template'],
+    )
     country_urls = {k: v for k, v in country_urls.items() if k in list(country_urls.keys())[0:3]}
     
     logging.info(f'Processing {len(country_urls)} countries with {max_workers} workers')

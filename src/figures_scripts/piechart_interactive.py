@@ -139,7 +139,7 @@ def main():
 
     pop_col, ind_col = 'population_served_index', 'IND/RES'
     tag1, tag2, agg_t = 'round_area', 'wwtp_area_rect_2', 'sum'
-    min_total_size = float(cfg.get('min_total_size', 5e7))
+    min_total_size = float(cfg['min_total_size'])
 
     # Load and Prepare Data
     boundaries = gpd.read_file(boundaries_fp).to_crs("EPSG:4326")
@@ -155,7 +155,7 @@ def main():
     pop_gdf[ind_col] = build_industrial_or_mixed_mask(
         pop_gdf['category_number'],
         cfg['industrial_category_numbers'],
-        cfg.get('mixed_use_category_keywords'),
+        cfg['mixed_use_category_keywords'],
     )
 
     pop_df_no_geom = pop_gdf.drop('geometry', axis=1)

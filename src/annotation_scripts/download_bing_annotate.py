@@ -487,17 +487,17 @@ if __name__ == "__main__":
     cfg = load_config(script_name="download_bing_annotate", **overrides)
     logging.info("Configuration loaded")
 
-    annotations_cfg = cfg.get("annotations", {})
-    CELL_SIZE = int(annotations_cfg.get("cell_size", CELL_SIZE))
-    FACTOR = float(annotations_cfg.get("factor", FACTOR))
-    image_size_px = int(annotations_cfg.get("image_size_px", IMAGE_SIZE[0]))
+    annotations_cfg = cfg["annotations"]
+    CELL_SIZE = int(annotations_cfg["cell_size"])
+    FACTOR = float(annotations_cfg["factor"])
+    image_size_px = int(annotations_cfg["image_size_px"])
     IMAGE_SIZE = [image_size_px, image_size_px]
-    ZOOM_LEVEL = int(annotations_cfg.get("zoom_level", ZOOM_LEVEL))
+    ZOOM_LEVEL = int(annotations_cfg["zoom_level"])
     RES_X = RESOLUTIONS[ZOOM_LEVEL]
     RES_Y = RESOLUTIONS[ZOOM_LEVEL]
-    BASE_Z17_RES = float(annotations_cfg.get("base_z17_resolution", BASE_Z17_RES))
-    BING_IMAGERY_URL = annotations_cfg.get("bing_imagery_url", BING_IMAGERY_URL)
-    BING_API_KEY = annotations_cfg.get("bing_api_key", BING_API_KEY) or BING_API_KEY
+    BASE_Z17_RES = float(annotations_cfg["base_z17_resolution"])
+    BING_IMAGERY_URL = annotations_cfg["bing_imagery_url"]
+    BING_API_KEY = annotations_cfg["bing_api_key"] or BING_API_KEY
 
     images_dir = cfg["paths"]["annotations_images_dir"]
     grid_filedir = cfg["paths"]["annotations_grid_dir"]

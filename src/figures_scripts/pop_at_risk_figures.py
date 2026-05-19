@@ -271,7 +271,7 @@ def main():
     zoom_level = int(cfg['zoom_level'])
     needed_cols = ['tile', 'pop_sum']
     pop_threshold = 100
-    save_dpi = int(cfg.get('save_dpi', 1000))
+    save_dpi = int(cfg['save_dpi'])
 
     pop_at_risk_path = cfg['paths']['pop_at_risk_output_filepath']
     pop_at_risk_gdf = gpd.read_parquet(pop_at_risk_path)

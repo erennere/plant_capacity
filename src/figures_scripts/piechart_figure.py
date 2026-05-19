@@ -207,7 +207,7 @@ def main():
     industrial_col = 'IND/RES'
     tag1 = 'round_area'
     tag2 = 'wwtp_area_rect_2'
-    min_total_size = float(cfg.get('min_total_size', 5e7))
+    min_total_size = float(cfg['min_total_size'])
     scale = 'linear'
     agg_type = 'sum'
 
@@ -231,7 +231,7 @@ def main():
     pop_gdf[industrial_col] = build_industrial_or_mixed_mask(
         pop_gdf['category_number'],
         cfg['industrial_category_numbers'],
-        cfg.get('mixed_use_category_keywords'),
+        cfg['mixed_use_category_keywords'],
     )
 
     if not os.path.exists(stats_filepath):

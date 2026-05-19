@@ -100,6 +100,7 @@ def test_piechart_figure_main_smoke(monkeypatch, tmp_path):
 
     cfg = {
         "figures": {"approach": "0"},
+        "min_total_size": 10000,
         "paths": {
             "country_boundaries_filepath": str(boundaries_fp),
             "raster_country_stats_filepath": str(stats_fp),
@@ -107,6 +108,7 @@ def test_piechart_figure_main_smoke(monkeypatch, tmp_path):
         },
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [9],
+        "mixed_use_category_keywords": ["mix"],
     }
 
     boundaries = gpd.GeoDataFrame(
@@ -321,6 +323,15 @@ def test_download_bing_main_smoke(monkeypatch, tmp_path):
         d.mkdir(parents=True, exist_ok=True)
 
     cfg = {
+        "annotations": {
+            "cell_size": 3072,
+            "factor": 1.194,
+            "image_size_px": 3072,
+            "zoom_level": 17,
+            "base_z17_resolution": 1.1943285669555664,
+            "bing_imagery_url": "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial",
+            "bing_api_key": "dummy",
+        },
         "paths": {
             "annotations_images_dir": str(images_dir),
             "annotations_grid_dir": str(grid_dir),
@@ -541,7 +552,13 @@ def test_download_pop_process_single_country_and_pool_branches(monkeypatch, tmp_
 
 
 def test_download_pop_main_smoke(monkeypatch, tmp_path):
-    cfg = {"paths": {"pop_dir": str(tmp_path / "pop")}}
+    cfg = {
+        "paths": {"pop_dir": str(tmp_path / "pop")},
+        "start_year": 2015,
+        "end_year": 2024,
+        "worldpop_2014_url_template": "tpl2014",
+        "worldpop_yearly_url_template": "tplyear",
+    }
 
     monkeypatch.setattr(dp.os, "chdir", lambda path: None)
     monkeypatch.setattr(dp, "parse_config_overrides", lambda start_index=1: {})
@@ -549,7 +566,7 @@ def test_download_pop_main_smoke(monkeypatch, tmp_path):
     monkeypatch.setattr(
         dp,
         "get_urls",
-        lambda: {
+        lambda **kwargs: {
             "deu": ["u1"],
             "fra": ["u2"],
             "usa": ["u3"],
@@ -1046,7 +1063,15 @@ def test_new02_elements_timer_and_find_bbox_branches(monkeypatch):
 
 def test_new02_main_smoke_paths(monkeypatch, tmp_path):
     cfg = {
-        "annotations": {"overwrite": False, "retries": 1, "max_workers": 1},
+        "annotations": {
+            "overwrite": False,
+            "retries": 1,
+            "max_workers": 1,
+            "overpass_urls": [
+                "https://overpass.kumi.systems/api/interpreter",
+            ],
+            "overpass_pause_seconds": 0.1,
+        },
         "paths": {
             "corrected_all_filepath": str(tmp_path / "all.gpkg"),
             "annotations_grid_dir": str(tmp_path / "grid"),
@@ -1167,6 +1192,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
 
     # Main smoke path
     cfg = {
+        "x_distance": 5000,
         "paths": {
             "non_served_above_threshold_outpath": str(tmp_path / "poly.gpkg"),
             "rivershed_output_path": str(tmp_path / "rivers.gpkg"),
@@ -1209,6 +1235,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
 
 def test_find_intersection_main_raises_when_missing_crs(monkeypatch, tmp_path):
     cfg = {
+        "x_distance": 5000,
         "paths": {
             "non_served_above_threshold_outpath": str(tmp_path / "poly.gpkg"),
             "rivershed_output_path": str(tmp_path / "rivers.gpkg"),
@@ -1235,6 +1262,7 @@ def test_find_intersection_main_raises_when_missing_crs(monkeypatch, tmp_path):
 
 def test_find_intersection_main_rejects_non_positive_workers(monkeypatch, tmp_path):
     cfg = {
+        "x_distance": 5000,
         "paths": {
             "non_served_above_threshold_outpath": str(tmp_path / "poly.gpkg"),
             "rivershed_output_path": str(tmp_path / "rivers.gpkg"),

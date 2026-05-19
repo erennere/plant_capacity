@@ -106,7 +106,7 @@ def _load_create_voronoi_default(key, fallback):
         except ImportError:
             from starter import load_config
         cfg = load_config(script_name="create_voronoi")
-        return cfg.get(key, fallback)
+        return cfg[key]
     except Exception:
         return fallback
 

@@ -240,8 +240,8 @@ def main():
     global urls
     overwrite = cfg["annotations"]["overwrite"]
     retrials = int(cfg["annotations"]["retries"])
-    urls = list(cfg["annotations"].get("overpass_urls", urls))
-    pause_seconds = float(cfg["annotations"].get("overpass_pause_seconds", pause_seconds))
+    urls = list(cfg["annotations"]["overpass_urls"])
+    pause_seconds = float(cfg["annotations"]["overpass_pause_seconds"])
 
     points_path = cfg["paths"]["corrected_all_filepath"]
 
