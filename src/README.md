@@ -1,0 +1,189 @@
+# src
+
+## Sections
+| Section | Purpose |
+| --- | --- |
+| `Module Overview` | Explains what lives in `src` and how the package is meant to be used |
+| `Starter Files In This Package` | Points to the files most readers should open first |
+| `Configuration at a Glance` | Highlights the shared settings that shape most runs |
+| `Shared Override Convention` | Shows how the shell wrappers pass runtime overrides |
+| `Core Root-Level Pipeline Scripts` | Explains the three key top-level scripts in more detail |
+| `Section Guide` | Directs the reader to the stage-specific READMEs |
+
+## Module Overview
+`src/` is the executable heart of the project. Shell wrappers provide reproducible entry points and scheduler compatibility, while the Python modules hold the actual processing logic. Most scripts read `config.yaml` through `starter.py`, so the normal way to change paths or parameters is to edit config rather than code.
+
+## Starter Files In This Package
+
+| File | Role | When you use it |
+| --- | --- | --- |
+| `config.yaml` | Canonical workflow configuration | before any run |
+| `starter.py` | Shared config resolver and positional override parser | when tracing how values are inherited |
+| `combine_watersheds.sh` | Watershed preparation launcher | before basin-aware Voronoi and risk stages |
+| `create_voronoi.sh` | Main Voronoi launcher | for service-area generation |
+| `add_pop.sh` | Population attachment launcher | after Voronoi generation |
+| `download_pop.sh` | WorldPOP download launcher | before population attachment |
+
+The launchers inside the stage folders are documented in the corresponding module READMEs.
+
+## Configuration at a Glance
+The full parameter tables now live in the relevant module READMEs. This file keeps the global, cross-stage settings that matter before you run anything.
+
+| Setting | Default | Where it matters |
+| --- | --- | --- |
+| `correct_locations_w_OSM.rad` | `5000` | OSM fallback correction radius for the first merge stage |
+| `merge_seg_results.legacy_merge` | `true` | Whether the legacy segmentation branch runs during merge |
+| `create_voronoi.weight_method` | `logarithmic` | Global weighting transform for Voronoi stages |
+| `create_voronoi.weight_func` | `mult` | Global weighted-distance mode for Voronoi stages |
+| `create_voronoi.dynamic_buffering` | `true` | Enables per-site dynamic buffers |
+| `create_voronoi.dynamic_buffer_k` | `0.5` | Dynamic-buffer scaling factor |
+| `create_voronoi.execution.mode` | `sequential` | Launcher mode for the Voronoi stage |
+| `create_rasters.annotations.default_mode` | `sequential` | Launcher mode for raster preparation |
+| `create_rasters.zoom_level` | `8` | Tile zoom used in raster/risk stages |
+| `find_unserved_pop.figures.pop_threshold` | `1000` | Threshold for non-served population filtering |
+| `impact_polygons_pop.impact_polygons_pop_params.c_limit` | `5.0` | Downstream concentration threshold |
+| `impact_polygons_pop.impact_polygons_pop_params.org_per_pop` | `60.0` | Organic load per person |
+| `download_and_vectorize.industrial_zenodo_url` | Zenodo URL | Industrial raster source |
+
+Module-specific settings are documented in the corresponding README files under `src/`.
+
+## Shared Override Convention
+
+Most shell launchers accept the same positional override layout:
+
+```bash
+[level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
+```
+
+`starter.py` resolves these overrides after YAML inheritance. Earlier sections in `config.yaml` define shared values; later sections inherit them with `null`; explicit CLI values win over both.
+
+## Core Root-Level Pipeline Scripts
+
+Three of the most important production scripts sit directly under `src/` rather than inside a subpackage. They are documented here because they are central to the workflow and are often the first scripts a reader looks for.
+
+| Script | Python module | What it does | Main inputs | Main outputs | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `download_pop.sh` | `src.download_pop` | Downloads and prepares WorldPOP population inputs used later by `add_pop.py` and the risk workflow | `download_pop.paths.pop_dir` and shared config overrides | population rasters under `data/population` | Installs the package in editable mode, logs to `logs/pop_run.log`, and supports the shared positional override layout |
+| `create_voronoi.sh` | `src.create_voronoi` | Runs the weighted Voronoi service-area stage across the configured approaches | canonical merged WWTP layer, watershed inputs, weighting settings, buffering settings | Voronoi GeoPackages under `create_voronoi.paths.voronoi_dir` and buffer outputs under `create_voronoi.paths.buffers_dir` | Supports `array`, `sequential`, and `parallel` execution modes via `create_voronoi.execution.mode` |
+| `add_pop.sh` | `src.add_pop` | Intersects Voronoi outputs with population rasters and writes population-enriched service areas | one Voronoi file index, Voronoi outputs, population rasters | population-enriched GeoPackages under `add_pop.paths.pop_output_dir` | Runs either as a local single-index job or as a SLURM array task |
+
+### `download_pop`
+`download_pop.sh` is the population-ingest entry point. Run it after the source WWTP and watershed inputs are in place and before `add_pop.sh`. Its job is to build the population raster store consumed by later stages.
+
+Workflow:
+- Build WorldPop download URLs for all countries and years used by the project.
+- Download archives or GeoTIFF files into the configured population directory.
+- Extract compressed assets into per-country folders.
+- If a country is delivered as CSV rather than TIFF, rasterize the point data to GeoTIFF.
+- Mosaic multiple tiles into one country-level raster when needed.
+
+Important outputs:
+- `download_pop.paths.pop_dir/zipped`
+- `download_pop.paths.pop_dir/unzipped`
+- `download_pop.paths.pop_dir/rasterized`
+- `download_pop.paths.pop_dir/merged`
+
+Important behavior:
+- The module uses `get_urls()` as the default URL source and keeps the HDX-based helper as a fallback path rather than the main workflow.
+- CSV-based country inputs are projected to an estimated local UTM CRS for rasterization and then reprojected back to `EPSG:4326`.
+- The shell wrapper reinstalls the package in editable mode before execution and writes a consolidated run log to `logs/pop_run.log`.
+
+Key config:
+- `download_pop.paths.pop_dir`
+
+Typical run:
+```bash
+bash download_pop.sh
+```
+
+### `create_voronoi`
+`create_voronoi.sh` is the central service-area launcher in the repository. It resolves `create_voronoi.execution.mode` from config and then executes one or more of the three supported approaches: WWTP-only Voronoi, watershed-aware Voronoi, and the city-based branch.
+
+Approaches:
+- `0`: WWTP Voronoi without watershed grouping.
+- `1`: WWTP Voronoi with watershed-aware grouping and clipping.
+- `2`: city-based Voronoi.
+
+Workflow:
+- Load the resolved configuration through `starter.py`.
+- Build output paths from the current parameter combination.
+- Select the requested approaches or default to all three.
+- Skip completed approaches when outputs already exist and overwrite is disabled.
+- Prepare grouped inputs, compute weights, generate weighted Voronoi regions, resolve overlaps, and clip results to the relevant basin or country boundary.
+
+Execution modes:
+- `sequential`: run all selected approaches one after another.
+- `array`: run one approach per SLURM array task.
+- `parallel`: run the approaches concurrently in the background.
+
+Key controls:
+- `create_voronoi.level`
+- `create_voronoi.buffer`
+- `create_voronoi.weight_method`
+- `create_voronoi.weight_func`
+- `create_voronoi.dynamic_buffering`
+- `create_voronoi.dynamic_buffer_k`
+- `create_voronoi.execution.mode`
+- `create_voronoi.n_points`
+- `create_voronoi.threshold`
+- `create_voronoi.calculate_area_fn`
+- `create_voronoi.calculate_buffer_fn`
+- `create_voronoi.prepare_data_fn`
+
+CLI details:
+- Supports `--approach` to run only selected approaches.
+- Supports `--only_round` to switch to the round-area weighting path.
+- Supports `--verbose` for more detailed logging.
+
+Typical runs:
+```bash
+bash create_voronoi.sh
+python -m src.create_voronoi --approach 1 --verbose
+python -m src.create_voronoi 8 2 15000 square_root mult true 0.75
+```
+
+### `add_pop`
+`add_pop.sh` is the population-attachment bridge between geometric service areas and downstream analysis. It takes a Voronoi layer index, opens the configured rasters, and writes population-enriched service-area outputs to `add_pop.paths.pop_output_dir`.
+
+Workflow:
+- Select one Voronoi GeoPackage by zero-based index.
+- Load the layer and read the country code column configured for the project.
+- Resolve the available population rasters for each country represented in that file.
+- Use `exactextract` to compute zonal statistics for every polygon.
+- Add year-specific `*_zonal_sum` and `*_zonal_std` columns to the GeoPackage.
+- Write the enriched result as `pop_added_<original_filename>.gpkg`.
+
+Important behavior:
+- The script expects the first positional argument to be the Voronoi file index; config overrides start after that index.
+- It can run locally for a single index or in SLURM array mode via `SLURM_ARRAY_TASK_ID`.
+- It processes all discovered raster years by default and restores the original CRS before writing outputs.
+- When `pop_voronoi_overwrite` is false, existing output directories are preserved and the script warns that files may be skipped.
+
+Key config:
+- `add_pop.add_pop_max_workers`
+- `add_pop.country_output_column`
+- `add_pop.pop_voronoi_overwrite`
+- `add_pop.paths.voronoi_dir`
+- `add_pop.paths.pop_tif_dir`
+- `add_pop.paths.pop_output_dir`
+
+Typical runs:
+```bash
+bash add_pop.sh 0
+sbatch add_pop.sh
+```
+
+These outputs are the direct inputs for validation, non-served population calculation, figure generation, and downstream risk propagation.
+
+## Section Guide
+The stage-specific READMEs carry the detailed script descriptions, execution diagrams, configuration tables, and practical notes for each part of the pipeline.
+
+| Stage | What it covers | Canonical launcher(s) | README |
+| --- | --- | --- | --- |
+| Data merge | Builds the canonical WWTP dataset | `data_merge/combine_locations.sh` | `src/data_merge/README.md` |
+| Annotation | Builds grid, OSM, image, and label context | `annotation_scripts/grid_generation_and_osm_extract.sh`, `annotation_scripts/run_download_bing_annotate_array.sh`, `annotation_scripts/merge_annotations.sh` | `src/annotation_scripts/README.md` |
+| Population and risk | Creates risk intermediates and population-at-risk outputs | `pop_at_risk_river_calculations/create_rasters.sh`, `pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh`, `pop_at_risk_river_calculations/find_pop_in_danger_pop.sh` | `src/pop_at_risk_river_calculations/README.md` |
+| Figures and exports | Produces GeoJSON, plots, and report assets | `figures_scripts/convert_voronoi_to_geojson_for_map.sh`, `figures_scripts/composite_area_population_plots.sh`, `figures_scripts/pop_at_risk_figures.sh` | `src/figures_scripts/README.md` |
+| Validation | Compares outputs to HydroWASTE and EU references | `pop_validation_scripts/comparison.sh` | `src/pop_validation_scripts/README.md` |
+| Sensitivity analysis | Runs parameter sweeps and comparison summaries | `sensitivity_analysis_scripts/create_voronoi_param_sweep.sh`, `sensitivity_analysis_scripts/add_pop_param_sweep.sh`, `sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh` | `src/sensitivity_analysis_scripts/README.md` |
+| Industrial analysis | Quantifies industrial land not covered by eligible WWTPs | `industrial_analysis/industrial_analysis.sh` | `src/industrial_analysis/README.md` |

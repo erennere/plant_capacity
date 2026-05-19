@@ -1,0 +1,105 @@
+"""Merge watershed archive contents into a single GeoPackage layer.
+
+The script scans a directory of zip archives, extracts the first readable
+geospatial layer from each archive, concatenates the results, and writes a
+combined watershed dataset for the configured level.
+"""
+
+import os
+import zipfile
+import tempfile
+from pathlib import Path
+import geopandas as gpd
+import pandas as pd
+try:
+    from .starter import load_config, parse_config_overrides
+    from .create_voronoi import ensure_output_dir_for_file
+except ImportError:  # Support running as a top-level script
+    from starter import load_config, parse_config_overrides
+    from create_voronoi import ensure_output_dir_for_file
+
+def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg"):
+    """Extract readable geospatial files from zip archives and merge them."""
+    zip_dir = Path(zip_dir)
+    output_path = Path(output_path)
+    if not zip_dir.exists() or not zip_dir.is_dir():
+        raise FileNotFoundError(f"Zip directory not found: {zip_dir}")
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    merged_frames = []
+
+    for zip_file in zip_dir.glob("*.zip"):
+        print(f"Processing {zip_file.name}")
+        added_from_zip = False
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            try:
+                with zipfile.ZipFile(zip_file, 'r') as z:
+                    z.extractall(tmpdir)
+            except zipfile.BadZipFile:
+                print(f"Skipping bad zip file: {zip_file}")
+                continue
+
+            # Walk through extracted contents to find geographic files
+            for root, dirs, files in os.walk(tmpdir):
+                for file in files:
+                    filepath = Path(root) / file
+                    try:
+                        # Try reading with geopandas
+                        gdf = gpd.read_file(filepath)
+                        print(f"Opened: {filepath.name}")
+
+                        merged_frames.append(gdf)
+                        added_from_zip = True
+                        break  # Stop after successfully reading one file per zip
+                    except Exception:
+                        continue
+                if added_from_zip:
+                    break
+
+    if merged_frames:
+        merged_gdf = gpd.GeoDataFrame(
+            pd.concat(merged_frames, ignore_index=True),
+            geometry="geometry",
+            crs=merged_frames[0].crs,
+        )
+        out_file = output_path / output_filename
+        ensure_output_dir_for_file(out_file)
+        merged_gdf.to_file(os.path.abspath(out_file), driver="GPKG")
+        print(f"\n✅ Merged GeoDataFrame written to {out_file}")
+    else:
+        print("\n⚠️ No valid geospatial files found.")
+
+def main():
+    """Load config overrides and build the configured combined watershed layer."""
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    overrides = parse_config_overrides(start_index=1)
+    cfg = load_config(script_name="combine_watersheds", **overrides)
+    levels_root = os.path.dirname(cfg["paths"]["watersheds_zip_dir"])
+    if not os.path.isdir(levels_root):
+        raise FileNotFoundError(f"Watershed levels root not found: {levels_root}")
+
+    levels = [k for k in os.listdir(levels_root)
+              if os.path.isdir(os.path.join(levels_root, k))]
+    for level in levels:
+        if not level.startswith('lvl'):
+            continue
+        level = level.replace('lvl', '')
+        level_overrides = {
+            "level": level,
+            "version": overrides["version"],
+            "buffer": overrides["buffer"],
+            "weight_method": overrides["weight_method"],
+            "weight_func": overrides["weight_func"],
+        }
+        cfg = load_config(script_name="combine_watersheds", **level_overrides)
+        extract_and_merge_geodata(
+            cfg["paths"]["watersheds_zip_dir"],
+            os.path.dirname(cfg['paths']['watershed']),
+            output_filename=os.path.basename(cfg['paths']['watershed'])
+        )
+
+if __name__ == '__main__':
+    main()
+

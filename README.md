@@ -1,1034 +1,304 @@
-# plant_capacity
+# Global-WWTP-Service-Zones-and-Risk-Pipeline
 
-wwtp-service-pipeline
-The repository is a pipeline developed to explore whether AI can fill data gaps regarding Wastewater Treatment Plants (WWTPs) globally — e.g., the population served, the type of WWTP (residential, industrial, mixed-use, etc.). The core idea is to approximate WWTP service areas via Voronoi tessellations, provided that WWTP coverage is adequate enough that cells don't erroneously extend into areas served by uncovered WWTPs absent from the dataset.
+The repository is a pipeline developed to explore whether AI can fill data gaps regarding Wastewater Treatment Plants (WWTPs) globally, for example the population served and the type of WWTP (residential, industrial, mixed-use, etc.). The core idea is to approximate WWTP service areas via Voronoi tessellations, provided that WWTP coverage is adequate enough that cells do not erroneously extend into areas served by uncovered WWTPs absent from the dataset.
 
-Data Sources
-Primary WWTP Dataset: HydroWASTE
-HydroWASTE is a spatially explicit global database of 58,502 WWTPs and their characteristics, developed by combining national and regional datasets with auxiliary information to derive or complete missing attributes including population served, effluent flow rate, and treatment level. Hydrosheds
+WWTPs are not just point infrastructure in this project: they are spatial service units whose catchments can be approximated, refined, and compared against reference datasets. This pipeline is designed to run at multi-country scale and combines correction, harmonization, Voronoi allocation, population attribution, river-linked risk propagation, validation, industrial coverage analysis, and reporting. Most runtime behavior is controlled from `src/config.yaml`, with shell wrappers providing reproducible local and SLURM entry points.
 
-Reference: Ehalt Macedo, H., Lehner, B., Nicell, J., Grill, G., Li, J., Limtong, A., Shakya, R. (2022). Distribution and characteristics of wastewater treatment plants within the global river network. Earth System Science Data, 14(2): 559–577. https://doi.org/10.5194/essd-14-559-2022
+## Data Sources
 
-A drawback of HydroWASTE is that some points represent the discharge location rather than the WWTP itself. To address this, [TODO: Paul, Johns Hopkins — agent to find full name and citation] used ML to scan the given WWTP location within a radius and, if a WWTP was found, assigned it as the corrected geometry. The remaining locations were scanned in OpenStreetMap within a 5 km radius; OSM geometry was assigned if found, otherwise the location was discarded.
-European Dataset: Waterbase-UWWTD
-A similar location-correction approach was applied to the European dataset. The Waterbase-UWWTD (Urban Waste Water Treatment Directive) dataset, provided by the European Environment Agency (EEA), includes data on individual WWTPs and collecting systems: their localisation, capacity and actual load treated, type of treatment, and aggregated performance data (23,983 plant records). European Environment Agency
+### Primary WWTP Dataset: HydroWASTE
+HydroWASTE is a spatially explicit global database of 58,502 WWTPs and their characteristics, developed by combining national and regional datasets with auxiliary information to derive or complete missing attributes including population served, effluent flow rate, and treatment level.
 
-Reference: European Environment Agency. Waterbase – UWWTD: Urban Waste Water Treatment Directive – reported data. https://www.eea.europa.eu/data-and-maps/data/waterbase-uwwtd-urban-waste-water-treatment-directive
+Reference:
+Ehalt Macedo, H., Lehner, B., Nicell, J., Grill, G., Li, J., Limtong, A., Shakya, R. (2022). Distribution and characteristics of wastewater treatment plants within the global river network. Earth System Science Data, 14(2): 559-577. https://doi.org/10.5194/essd-14-559-2022
+
+A drawback of HydroWASTE is that some points represent the discharge location rather than the WWTP itself. To address this, the repository uses a pre-corrected file configured as `correct_locations_w_OSM.paths.paul_corrected_filepath` in `src/config.yaml`.
+
+The remaining locations are scanned in OpenStreetMap within a 5 km radius (`correct_locations_w_OSM.rad = 5000`). OSM geometry is assigned if found, otherwise the location is discarded.
+
+### European Dataset: Waterbase-UWWTD
+A similar location-correction approach is applied to the European dataset. The Waterbase-UWWTD (Urban Waste Water Treatment Directive) dataset, provided by the European Environment Agency (EEA), includes data on individual WWTPs and collecting systems: their localisation, capacity and actual load treated, type of treatment, and aggregated performance data.
+
+Reference:
+European Environment Agency. Waterbase - UWWTD: Urban Waste Water Treatment Directive - reported data. https://www.eea.europa.eu/data-and-maps/data/waterbase-uwwtd-urban-waste-water-treatment-directive
 
 Extra points were also added for the United States, Canada, Germany, and Thailand.
 
-Watershed Basins: HydroBASINS / HydroSHEDS
-Using Voronoi tessellation alone does not account for river topology — it is costly to transport water across different watersheds, so WWTPs are assigned to watershed basins before analysis. HydroSHEDS is a mapping product providing hydrographic information for regional and global-scale applications in a consistent format, offering geo-referenced datasets at various scales including river networks, watershed boundaries, drainage directions, and flow accumulations; it is based on elevation data obtained in 2000 by NASA's Shuttle Radar Topography Mission (SRTM). The HydroBASINS product provides polygons of nested, hierarchical watersheds ranging from level 1 (coarse) to level 12 (detailed), using Pfafstetter codes. Google
+### Watershed Basins: HydroBASINS / HydroSHEDS
+Using Voronoi tessellation alone does not account for river topology. It is costly to transport water across different watersheds, so WWTPs are assigned to watershed basins before analysis.
 
-Reference: Lehner, B., Grill, G. (2013). Global river hydrography and network routing: baseline data and new approaches to study the world's large river systems. Hydrological Processes, 27(15): 2171–2186. https://doi.org/10.1002/hyp.9740
-HydroBASINS Technical Documentation: https://data.hydrosheds.org/file/technical-documentation/HydroBASINS_TechDoc_v1c.pdf
+HydroSHEDS is a mapping product providing hydrographic information for regional and global-scale applications in a consistent format, offering geo-referenced datasets at various scales including river networks, watershed boundaries, drainage directions, and flow accumulations; it is based on elevation data obtained in 2000 by NASA's Shuttle Radar Topography Mission (SRTM). HydroBASINS provides polygons of nested, hierarchical watersheds ranging from level 1 to level 12, using Pfafstetter codes.
 
-HydroBASIN zip files for a level X should be placed under data/hydroshed_river_levels/lvl{X}. The level is a free parameter: higher levels group more WWTPs together (smoothing differences), while lower levels increase individual differences and reduce inter-WWTP interaction.
+Reference:
+Lehner, B., Grill, G. (2013). Global river hydrography and network routing: baseline data and new approaches to study the world's large river systems. Hydrological Processes, 27(15): 2171-2186. https://doi.org/10.1002/hyp.9740
 
-Approaches
+HydroBASINS Technical Documentation:
+https://data.hydrosheds.org/file/technical-documentation/HydroBASINS_TechDoc_v1c.pdf
+
+HydroBASIN zip files for a level `X` should be placed under `data/hydroshed_river_levels/lvl{X}`. The level is a free parameter: higher levels group more WWTPs together, while lower levels increase individual differences and reduce inter-WWTP interaction.
+
+### Population Data: WorldPOP
+WorldPOP 100 m rasters from 2014 to 2024 are downloaded and saved per country. Each Voronoi cell is intersected with the raster to obtain population estimates.
+
+## Approaches
+
 Three approaches are implemented. In all cases, Voronoi cells are created for each buffer and set of points individually.
 
-Approach 1 builds buffers around WWTPs, then groups and dissolves intersecting buffers. The dissolved buffer serves as the "basin" for the WWTPs therein.
-Approach 2 groups WWTPs based on a buffer layer — in this repo, watershed boundaries from HydroBASINS. The code is general enough for other domains (e.g., replace watersheds with admin boundaries and WWTPs with health infrastructure).
-Approach 3 groups WWTPs based on city identification. Cities are buffered; the population inside is divided among WWTPs within using Voronoi cells. Not actively used, but the functionality exists.
+- Approach 1 builds buffers around WWTPs, then groups and dissolves intersecting buffers. The dissolved buffer serves as the basin for the WWTPs therein.
+- Approach 2 groups WWTPs based on a buffer layer, in this repository watershed boundaries from HydroBASINS.
+- Approach 3 groups WWTPs based on city identification. Cities are buffered; the population inside is divided among WWTPs within using Voronoi cells. It exists in the codebase but is not the main production path.
 
+Although the present application is wastewater infrastructure, the methodological structure is not specific to WWTPs. The framework can be transferred to other infrastructure domains whenever the analytical problem is to approximate a service area, allocate an exposed or served population, and compare competing facilities under spatial constraints. In practical terms, such a transfer usually requires changing five elements rather than redesigning the whole pipeline: the point layer representing service-providing sites, the boundary or grouping layer that constrains plausible service exchange, the weighting proxy that represents relative service capacity or attractiveness, the population or exposure surface being allocated, and the validation dataset used to assess realism.
 
-Weighted Voronoi Tessellation
-Standard Voronoi tessellation treats all locations equally, which doesn't reflect real differences between WWTPs. A custom weighted distance function is implemented. The code creates an xy-plane with resolution n_steps meters between points and checks which area of influence each point falls into. Three distance functions are available:
+For example, the same workflow could be adapted to hospitals, schools, health posts, fire stations, solid-waste facilities, warehouses, or other distributed service infrastructure. In a healthcare setting, WWTP points would be replaced by hospital or clinic locations, watershed boundaries could be replaced by administrative regions, catchments, travel sheds, or road-constrained service zones, and the weighting term could be derived from bed count, staffing, floor area, or treatment capacity instead of lagoon area or pond count. In an education setting, facilities could be schools, the population surface could be school-age population rather than total population, and validation could be performed against enrolment or district planning data. The same logic applies to emergency response, logistics, and other networked public-service systems: the geometry engine remains similar, while the domain-specific meaning of sites, constraints, and weights changes.
 
-Euclidean distance — no weights
-Multiplicative Euclidean — distance scaled by weights (higher weight → smaller effective distance)
-Additive Euclidean — weights scaled by mean inter-location distance within the buffer, then subtracted from distance
+The important methodological point is that the repository separates the generic allocation machinery from the domain-specific inputs. The Voronoi engine, buffering logic, weighting transforms, and downstream population intersection are reusable components; what changes from one application to another is the interpretation of the inputs and the choice of constraint layer. This is why the repository exposes configurable hooks such as `create_voronoi.calculate_area_fn`, `create_voronoi.calculate_buffer_fn`, and `create_voronoi.prepare_data_fn`: they allow the same spatial allocation framework to be retuned for alternative service systems without rewriting the core geometry pipeline.
 
-Weights are normalized within each buffer and computed from ML-derived tags (number of ponds, total treatment pond area) as total_area * sqrt(number_of_ponds).
-Weight transformation functions (weight_func): [TODO: agent to verify the exact config tag and fill in the complete list of transforms — linear, square root, and remaining options]
+## Weighted Voronoi Tessellation
 
-Clipping / Buffering
-To avoid disproportionately large Voronoi cells (especially in sparse areas), cells are clipped to a buffer around each location after creation. Two approaches:
+Standard Voronoi tessellation treats all locations equally, which does not reflect real differences between WWTPs. A custom weighted distance function is implemented. The code creates an xy-plane with resolution `n_steps` meters between points and checks which area of influence each point falls into.
 
-Static buffering: A fixed buffer applied uniformly across all locations. To use, disable dynamic buffering in config. The buffer parameter overrides the value in config.yaml at runtime.
-Dynamic buffering: The buffer scales per location based on its size. Enabled/disabled via config. [TODO: agent to add the exact config tag]. When dynamic buffering is on, the buffer parameter is interpreted as the k value, relating WWTP size and mean neighbour distance (MND): buffer = k * MND (e.g., k=0.5 means the buffer is half the mean distance to neighbouring WWTPs).
+Three distance functions are available:
+- Euclidean distance.
+- Multiplicative Euclidean.
+- Additive Euclidean.
 
-The sweeping analysis allows sensitivity analysis across combinations of model parameters. [TODO: agent to add which functions govern weight and buffer calculation and how to pass custom ones]
+Weights are normalized within each buffer and computed from ML-derived tags such as the number of ponds and total treatment pond area, combined as `total_area * sqrt(number_of_ponds)`.
 
-Annotation Pipeline
-Before Voronoi tessellation, an annotation step must be run. Given corrected WWTP locations, satellite images are downloaded at a specified zoom tile level and fed to an ML model to segment treatment facilities. OSM tags in the vicinity (e.g., industrial, landuse) are downloaded and used to annotate images for contextualising WWTP type (residential, industrial, mixed-use).
-The annotation scripts:
+Weight transformation functions are controlled by `create_voronoi.weight_method` and currently supported values are:
+- `linear`
+- `square_root`
+- `logarithmic`
+- `sigmoid`
 
-Create grids around WWTPs
-Download OSM info from the server
-Georeference images and overlay OSM tags
+## Clipping / Buffering
 
-Satellite imagery (Maxar) is not downloaded by the scripts — its location must be provided in config.yaml. Images are mapped to WWTPs using the row number as index: 1533.png = WWTP at row 1533; the corresponding annotated image is bbox_1533.png.
-[TODO: agent to specify which scripts and which config parameters (e.g., image directory) need to be set]
-final_merge.py ([TODO: agent to confirm filename]) merges segmentation and annotation results with the data source. A legacy_merge option exists — disable it unless you have data from an earlier run using a different satellite provider (BING).
-To restrict Voronoi tessellation to residential/mixed-use WWTPs only, modify the category tags in config.yaml. [TODO: agent to add the category number and mixed-use class tag names]
+To avoid disproportionately large Voronoi cells, especially in sparse areas, cells are clipped to a buffer around each location after creation.
 
-Population Data: WorldPOP
-WorldPOP 100m rasters from 2014 to 2024 are downloaded and saved per country. Each Voronoi cell is intersected with the raster to obtain population estimates.
-The sweeping script [TODO: agent to add script name] allows multiple configurations to be run in one pass for sensitivity analysis across parameters [TODO: agent to list which parameters].
+- Static buffering: disable dynamic buffering with `create_voronoi.dynamic_buffering: false`. The positional `buffer` argument overrides the config value at runtime.
+- Dynamic buffering: enable with `create_voronoi.dynamic_buffering: true`. The scale factor is `create_voronoi.dynamic_buffer_k`.
 
-Analyses
-Three types of analyses are available:
-1. Population Validation
-Compares calculated population estimates against:
+The sweep analysis scripts support sensitivity analysis across combinations of model parameters. The configurable hooks that govern those runs are `create_voronoi.calculate_area_fn`, `create_voronoi.calculate_buffer_fn`, and `create_voronoi.prepare_data_fn`, which are resolved at runtime through `src/pipelines.py`.
 
-HydroWASTE — using only locations where QUAL_POP == 1 (from official sources)
-European data (Waterbase-UWWTD) — which reports PE (Population Equivalent): the number of people the plant is designed to serve, not actual population figures
+## Analyses
+
+### Population Validation
+Calculated population estimates are compared against HydroWASTE, using only locations where `QUAL_POP == 1` from official sources, and against European Waterbase-UWWTD data, which reports Population Equivalent rather than actual observed population.
 
 Three validation tiers are differentiated:
+- Basins with a single WWTP.
+- Basins with multiple sources where at least a threshold fraction of plants appear in both datasets.
+- Basins with multiple sources regardless of threshold coverage.
 
-Basins with a single WWTP
-Basins with multiple sources where at least threshold% of plants appear in both the validation and source data (e.g., basin with 5 plants at 80% threshold requires 4 matches)
-Basins with multiple sources regardless of threshold% coverage
+For both datasets, a Normalized Difference Index and a linear regression are produced.
 
-For both datasets, a Normalized Difference Index (NDI) and a linear regression are produced.
-2. Population at Risk
-Propagates organic material from unserved settlements (larger than x people [TODO: agent to add parameter name]) downstream. Steps:
+### Population at Risk
+This branch propagates organic material from unserved settlements downstream.
 
-Identify unserved populations by summing WorldPOP raster cells outside any WWTP service area
-Intersect HydroSHED rivers with HydroBASINS to assign rivers to basins
-For each unserved settlement, find rivers within x metres [TODO: agent to add parameter name] in the same basin
-If multiple rivers exist, identify the highest downstream junction and propagate organic load downstream until concentration falls below [TODO: threshold parameter]
-Organic load per person: [TODO: agent to add value/parameter], multiplied by settlement size; decay modelled with an exponential function using HydroSHED discharge data and parameters [TODO: agent to list]
-For areas above the concentration threshold [TODO: value], two river-corridor buffers [TODO: widths] are applied; zoom tile level [TODO: level] is used; geometries are intersected with WorldPOP to count people at risk, then aggregated per tile
+The workflow identifies non-served population outside WWTP service areas, assigns river segments to basins, links non-served polygons to nearby rivers, propagates organic load downstream until concentration falls below `impact_polygons_pop_params.c_limit`, and then intersects the resulting impact corridors with WorldPOP.
 
-3. Industrial Area Analysis
-HydroSHEDS provides river topology and watershed data used for basin assignment. For this analysis: World Wildlife Fund
+### Industrial Area Analysis
+For this analysis, a 10 m industrial land dataset from Zenodo is downloaded and vectorized. Industrial areas are assigned to watersheds and compared against Voronoi coverage generated from industrial or mixed-use WWTPs selected through the annotation-derived category fields. Industrial areas not served by any such WWTP are identified and reported.
 
-10m resolution industrial area data across [TODO: agent to add reference — "1000 cities" dataset] is downloaded and vectorized
-Vectorized industrial areas are intersected with HydroBASIN polygons to assign each to a watershed
-Voronoi tessellation is applied using only industrial WWTPs (industrial or mixed-use)
-Industrial areas not served by any such WWTP are identified and documented
+The remaining sections shift from method to use: they first show how the repository is organised, then outline the standard execution order and end-to-end data flow, and finally summarise the setup and configuration details needed to run the workflow.
 
+## What This Repository Contains
 
+The repository is organized around one canonical processing chain and several optional analysis or reporting branches.
 
-
-`plant_capacity` is a geospatial analysis pipeline for wastewater treatment plant (WWTP) service-area modelling, population attribution, downstream risk analysis, industrial-coverage diagnostics, validation, and sensitivity analysis. The repository combines harmonized WWTP point data, watershed boundaries, optional annotation-derived weighting inputs, WorldPop rasters, HydroSHEDS-derived river products, and industrial land rasters into a reproducible workflow designed for local bash execution and SLURM-based batch runs.
-
-The codebase is not a model-training repository. Segmentation outputs, annotation model outputs, and other machine-generated products are treated as upstream inputs. The repository itself focuses on geospatial data preparation, weighted Voronoi service-area generation, raster-vector analysis, diagnostics, and reporting.
-
-## Overview
-
-### Core outputs
-
-| Output family | Description | Primary producers |
+| Area | Location | Purpose |
 | --- | --- | --- |
-| Harmonized WWTP datasets | Corrected and merged point datasets assembled from HydroWaste, OSM-assisted corrections, segmentation outputs, and country-specific inputs | `data_merge/combine_locations.sh`, `final_data_merge.py` |
-| Watershed base layers | Combined HydroBASIN-style watershed layers per configured level | `combine_watersheds.sh`, `combine_watersheds.py` |
-| Voronoi service areas | Weighted or unweighted service polygons for multiple approaches | `create_voronoi.sh`, `create_voronoi.py` |
-| Population-enriched Voronoi layers | Voronoi polygons with yearly zonal population statistics | `add_pop.sh`, `add_pop.py` |
-| Non-served and risk layers | Non-served population areas, river-linked impact polygons, and population-at-risk outputs | `create_rasters.sh`, `pop_differences_and_impact_polygons.sh`, `find_pop_in_danger_pop.sh` |
-| Industrial analysis products | Vectorized industrial polygons and industrial areas outside industrial or mixed WWTP coverage | `industrial_analysis.sh`, industrial analysis modules |
-| Validation products | Verification subsets and HydroWaste or EU comparison diagnostics | `comparison.sh`, validation scripts |
-| Figures and map outputs | Static figures, interactive HTML maps, and lightweight GeoJSON exports | figure scripts under `research_code/figures_scripts` |
-| Sweep diagnostics | Parameter-combination outputs and cross-run sensitivity summaries | `sensitivity_analysis_scripts` |
+| Runtime configuration | `src/config.yaml` | Global parameter and path control |
+| Config resolver | `src/starter.py` | Resolves inherited config values and positional overrides |
+| Main technical index | `src/README.md` | Stage index and cross-stage settings |
+| Merge stage | `src/data_merge/` | Build the canonical WWTP dataset |
+| Annotation stage | `src/annotation_scripts/` | Generate grids, OSM context, and annotation merges |
+| Voronoi stage | `src/create_voronoi.py`, `src/create_voronoi.sh` | Create service areas |
+| Population stage | `src/add_pop.py`, `src/add_pop.sh` | Attach WorldPOP counts to service areas |
+| Risk stage | `src/pop_at_risk_river_calculations/` | Compute non-served population and downstream risk |
+| Validation stage | `src/pop_validation_scripts/` | Compare outputs against HydroWASTE and Waterbase-UWWTD |
+| Industrial stage | `src/industrial_analysis/` | Measure industrial land not covered by eligible WWTPs |
+| Figures stage | `src/figures_scripts/` | Build maps, plots, and publication outputs |
+| Sweep stage | `src/sensitivity_analysis_scripts/` | Run parameter sweeps and compare results |
 
-### Workflow summary
+Each major processing directory has its own README that explains the role of the stage, the purpose of each script, the local data flow, and the configuration settings that matter for that part of the pipeline.
 
-| Order | Stage | Main purpose | Primary scripts |
-| --- | --- | --- | --- |
-| 1 | Data merging and harmonization | Build the canonical WWTP point dataset | `data_merge/combine_locations.sh` |
-| 2 | Watershed preparation | Merge watershed archives into reusable basin layers | `combine_watersheds.sh` |
-| 3 | Annotation and weighting preparation | Build grids, extract OSM context, render annotation assets, merge annotation outputs | `annotation_scripts/*.sh` |
-| 4 | Voronoi generation | Produce service-area polygons for one or more approaches | `create_voronoi.sh`, `create_voronoi.py` |
-| 5 | Population enrichment | Intersect Voronoi outputs with country population rasters | `add_pop.sh`, `add_pop.py` |
-| 6 | Risk and river-impact analysis | Build non-served layers, attach river topology, propagate impact downstream | `pop_at_risk_river_calculations/*.sh` |
-| 7 | Industrial analysis | Vectorize industrial land and measure uncovered industrial areas | `industrial_analysis/industrial_analysis.sh` |
-| 8 | Validation and communication | Compare against references, generate figures, and analyze parameter sensitivity | validation, figure, and sensitivity scripts |
+## Canonical Script Run Order
 
-## Installation And Environment
+The standard end-to-end order is the following.
 
-### Recommended environment
+1. `src/data_merge/combine_locations.sh`
+2. `src/combine_watersheds.sh`
+3. `src/annotation_scripts/grid_generation_and_osm_extract.sh`
+4. `src/annotation_scripts/run_download_bing_annotate_array.sh`
+5. `src/annotation_scripts/merge_annotations.sh`
+6. `src/download_pop.sh`
+7. `src/create_voronoi.sh`
+8. `src/add_pop.sh`
+9. `src/pop_at_risk_river_calculations/create_rasters.sh`
+10. `src/pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh`
+11. `src/pop_at_risk_river_calculations/find_pop_in_danger_pop.sh`
+12. `src/pop_validation_scripts/comparison.sh`
+13. `src/industrial_analysis/industrial_analysis.sh`
+14. `src/figures_scripts/convert_voronoi_to_geojson_for_map.sh`
+15. `src/figures_scripts/composite_area_population_plots.sh`
+16. `src/figures_scripts/pop_at_risk_figures.sh`
 
-| Component | Requirement |
-| --- | --- |
-| Python | `>=3.9` |
-| Execution shell | Bash-compatible shell for wrappers; local or SLURM execution |
-| Packaging | Editable install from `research_code/` |
-| Core dependency classes | `geopandas`, `shapely`, `rasterio`, `exactextract`, `duckdb`, `matplotlib`, `folium`, `cartopy`, `networkx`, `opencv-python`, `scipy`, `PyYAML` |
+The sensitivity-analysis launchers under `src/sensitivity_analysis_scripts/` are optional and sit outside the canonical production run.
 
-### Initial setup
+## Project Data Flow
 
-Run from the repository root:
+```mermaid
+graph TD
+	A[(HydroWASTE and country additions)] --> B[combine_locations.sh]
+	B --> C[(Canonical merged WWTP layer)]
+
+	D[(HydroBASINS zip archives)] --> E[combine_watersheds.sh]
+	E --> F[(Combined watershed layers)]
+
+	C --> G[grid_generation_and_osm_extract.sh]
+	G --> H[(annotation grids and OSM context)]
+	H --> I[run_download_bing_annotate_array.sh]
+	I --> J[(annotated imagery)]
+	J --> K[merge_annotations.sh]
+	K --> L[(annotation-enriched WWTP layer)]
+
+	M[(WorldPOP rasters)] --> N[download_pop.sh]
+	L --> O[create_voronoi.sh]
+	F --> O
+	O --> P[(Voronoi service areas)]
+	N --> Q[(population raster store)]
+	P --> R[add_pop.sh]
+	Q --> R
+	R --> S[(population-enriched Voronoi layers)]
+
+	S --> T[create_rasters.sh]
+	T --> U[pop_differences_and_impact_polygons.sh]
+	F --> U
+	V[(HydroRIVERS)] --> U
+	U --> W[find_pop_in_danger_pop.sh]
+	W --> X[(population-at-risk outputs)]
+
+	S --> Y[comparison.sh]
+	Y --> Z[(validation outputs)]
+
+	L --> AA[industrial_analysis.sh]
+	F --> AA
+	AA --> AB[(industrial coverage outputs)]
+
+	P --> AC[convert_voronoi_to_geojson_for_map.sh]
+	S --> AD[composite_area_population_plots.sh]
+	X --> AE[pop_at_risk_figures.sh]
+	Z --> AD
+	X --> AD
+```
+
+## Environment Creation
+
+The Python package metadata lives in `src/pyproject.toml`. A minimal local environment can be created from the repository root.
+
+### PowerShell
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ./src
+```
+
+### Bash
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ./src
+```
+
+To install the test dependencies as well:
 
 ```bash
-cd research_code
-python -m pip install -e .
+python -m pip install -e "./src[test]"
 ```
 
-The package metadata lives in `research_code/pyproject.toml`. The editable install exposes the package as `research_code` and makes all `python -m research_code...` invocations available.
+Practical prerequisites:
+- Python 3.9 or newer.
+- A shell that can run the repository wrappers. Most canonical entry points are `.sh` launchers.
+- Access to the geospatial inputs under `data/`.
+- Optional SLURM access if you intend to use the cluster-oriented wrappers.
 
-### Running tests
+## Starter Files You Need Before Running
 
-The initial test suite focuses on config parsing, path generation, and deterministic Voronoi helper behavior using small synthetic fixtures under `research_code/tests/`.
+These are the files a new user should look at first.
+
+| File | Why it matters | What you typically change |
+| --- | --- | --- |
+| `src/config.yaml` | Primary runtime configuration | local paths, version, level, buffer, weighting, execution mode |
+| `src/starter.py` | Shared config resolver for positional overrides | usually not edited; useful to understand inheritance and CLI precedence |
+| `src/README.md` | Technical map of the executable package | use as the index into per-stage documentation |
+| `src/data_merge/combine_locations.sh` | First canonical launcher | start here when building the WWTP base layer |
+| `src/combine_watersheds.sh` | Watershed preparation launcher | run before basin-constrained Voronoi or river-risk work |
+| `src/annotation_scripts/*.sh` | Annotation preparation and merge launchers | use when annotation-enriched categories are needed |
+| `src/download_pop.sh` | Population download launcher | prepares WorldPOP inputs |
+| `src/create_voronoi.sh` | Main service-area launcher | generates WWTP Voronoi outputs |
+| `src/add_pop.sh` | Population attachment launcher | produces population-enriched service areas |
+| `src/pop_at_risk_river_calculations/*.sh` | Risk chain launchers | compute non-served and downstream-risk outputs |
+| `src/pop_validation_scripts/comparison.sh` | Validation launcher | runs HydroWASTE and EU comparisons |
+| `src/industrial_analysis/industrial_analysis.sh` | Industrial coverage launcher | runs the industrial branch |
+| `src/figures_scripts/*.sh` | Reporting launchers | turns outputs into maps and figures |
+
+## Configuration Parameters You Usually Need To Change
+
+The defaults are a mix of portable relative paths and environment-specific cluster paths. Before a local run, check at least the following keys.
+
+| Config key | Why you may need to change it |
+| --- | --- |
+| `merge_seg_results.paths.seg_results_filepath` | Defaults to a cluster-only segmentation CSV path |
+| `download_bing_annotate.paths.annotations_images_dir` | Defaults to a cluster-only imagery directory |
+| `download_bing_annotate.paths.annotated_images_output_dir` | Defaults to a cluster-only annotated-image directory |
+| `merge_annotations.paths.annotations_results_filepath` | Defaults to a cluster-only annotation results CSV |
+| `annotations_inspection.paths.annotations_verf_image_outpath_dir` | Defaults to a cluster-only QA output directory |
+| `correct_locations_w_OSM.paths.paul_corrected_filepath` | Must point to the corrected HydroWASTE source you actually have |
+| `combine_watersheds.paths.watersheds_zip_dir` | Must match where the HydroBASINS zip files were placed |
+| `create_voronoi.level` | Controls HydroBASINS granularity |
+| `create_voronoi.buffer` | Controls static clip radius when dynamic buffering is off |
+| `create_voronoi.weight_method` | Controls weight transformation |
+| `create_voronoi.weight_func` | Controls multiplicative vs additive weighted distance |
+| `create_voronoi.dynamic_buffering` | Switches between static and dynamic clipping |
+| `create_voronoi.dynamic_buffer_k` | Controls dynamic buffer scaling |
+| `create_rasters.zoom_level` | Controls raster/tile resolution used in the risk workflow |
+| `find_unserved_pop.figures.pop_threshold` | Controls thresholding of non-served population polygons |
+| `impact_polygons_pop.impact_polygons_pop_params.*` | Controls downstream organic-load propagation |
+| `find_unconnected_industrial_areas.industrial_category_numbers` | Controls which annotation categories are treated as industrial WWTPs |
+
+`src/starter.py` resolves values in canonical YAML order. Earlier sections define shared values and later sections inherit them with `null`. Positional CLI overrides always take precedence over the resolved config.
+
+The canonical shared override order used across the wrappers is:
 
 ```bash
-cd research_code
-python -m pip install -e .[test]
-cd ..
-pytest --tb=short -q
-```
-
-### Important prerequisite data
-
-The repository assumes that several input files already exist at the configured paths. Commonly required local files include:
-
-- `data/bboxes.csv`
-- `data/cities.csv`
-- `data/cleaned_hydrowaste.csv`
-- `data/wastewater_plant.geojson`
-- `data/boundaries/ne_110m_admin_0_countries.shp` and its sidecars
-- `data/extra_points/UWWTD_TreatmentPlants.gpkg`
-- `data/extra_points/Canada_14_03_2025.csv`
-- `data/extra_points/US_mapped_data_final.csv`
-- `data/extra_points/Germany_Hydra_waste_geospatial_corrected.geojson`
-
-Several high-value inputs are machine-specific or mount-specific in the default configuration, including:
-
-- `paths.seg_results_filepath`
-- `paths.annotations_images_dir`
-- `paths.annotations_results_filepath`
-
-Verify these paths in `research_code/config.yaml` before running the full workflow.
-
-## Repository Structure
-
-### Top-level layout
-
-| Path | Purpose | Role in pipeline |
-| --- | --- | --- |
-| `data/` | Raw inputs, intermediates, and generated outputs | Stores almost all configured inputs and outputs |
-| `research_code/` | Executable package, shell wrappers, and configuration | Main implementation surface |
-| `REPOSITORY_INVENTORY.md` | Repository inventory generated from code inspection | Supplemental internal documentation |
-| `README.md` | Root project documentation | High-level entrypoint for users and developers |
-
-### `data/`
-
-This directory is the repository's data root. Most path templates in `research_code/config.yaml` resolve into subdirectories below `data/`.
-
-| Subpath | Purpose |
-| --- | --- |
-| `data/boundaries/` | Country boundary shapefile components used for enrichment and clipping |
-| `data/DL_results/` | Segmentation-related artifacts referenced by legacy and current merge flows |
-| `data/extra_points/` | Country-specific WWTP source datasets used during final data merge |
-| `data/final_data_source/` | Additional final source layers referenced by merge and analysis stages |
-| `data/figures/` | Generated figures and interactive HTML exports |
-
-### `research_code/`
-
-This directory contains the Python package, orchestration wrappers, and shared runtime configuration.
-
-#### Core orchestration files
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions or classes | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/starter.py` | Central configuration loading and CLI override parsing | Shared across all stages | Input: `config.yaml` plus optional CLI overrides. Output: flattened runtime configuration dictionary with resolved paths and runtime flags | `parse_config_overrides`, `load_config` | Imported by nearly every executable module | Imported, not typically run standalone | `level`, `version`, `buffer`, `weight_method`, `weight_func`, `dynamic_buffering`, `dynamic_buffer_k`; all YAML sections |
-| `research_code/pipelines.py` | Shared orchestration helpers for Voronoi and output-path management | Shared across Voronoi, figures, industrial analysis, and raster-risk stages | Input: loaded config and GeoDataFrames. Output: output paths, prepared datasets, Voronoi results | `_resolve_configured_callable`, `create_output_paths`, `create_pop_output_paths`, `prepare_data`, `run_voronoi_approach` | Imported by `create_voronoi.py`, industrial analysis, figures, and sensitivity scripts | Imported, not typically run standalone | `prepare_data_fn`, `calculate_area_fn`, `calculate_buffer_fn`, output path templates, country and basin column names |
-| `research_code/combine_watersheds.py` | Extract and merge readable geospatial layers from watershed zip archives | Watershed preparation | Input: configured watershed zip directory. Output: combined watershed GeoPackage | `extract_and_merge_geodata`, `main` | `combine_watersheds.sh` | `python -m research_code.combine_watersheds [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `paths.watersheds_zip_dir`, `paths.watershed`, shared positional overrides |
-| `research_code/download_pop.py` | Download, unzip, rasterize, and mosaic population data | Population input preparation | Input: WorldPop or HDX URLs. Output: country population rasters in configured population directories | `get_iso_codes`, `get_urls`, `download_save_and_unzip_pop`, `rasterize_csv`, `mosaic_large_rasters`, `process_all_countries`, `main` | `download_pop.sh` | `python -m research_code.download_pop [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `paths.pop_dir`, `paths.pop_tif_dir`, `params.max_workers`, shared positional overrides |
-| `research_code/create_voronoi.py` | Main weighted Voronoi generation entrypoint for approaches 0, 1, and 2 | Service-area generation | Inputs: corrected WWTP datasets, watershed or country layers, weighting controls. Outputs: Voronoi GeoPackages and optional buffer layers | `UnionFind`, `orchestrate_voronoi_weights`, `calculate_area`, `calculate_buffer`, `default_distance_additive`, `default_distance_multiplicative`, `main` | `create_voronoi.sh`, sensitivity scripts, industrial analysis reuse | `python -m research_code.create_voronoi [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k] [--approach 0 1 2] [--only_round] [--verbose]` | `params.buffer`, `params.dynamic_buffering`, `params.dynamic_buffer_k`, `params.weight_method`, `params.weight_func`, `params.calculate_area_fn`, `params.calculate_buffer_fn`, `params.prepare_data_fn`, `execution.mode` |
-| `research_code/add_pop.py` | Intersect Voronoi polygons with country population rasters and attach yearly zonal statistics | Population enrichment | Inputs: one Voronoi GeoPackage and configured population TIFF directories. Outputs: one population-enriched Voronoi GeoPackage | `intersect_single_file`, `find_country_tif_files`, `intersect_all_files`, `orchestrate_intersections`, `main` | `add_pop.sh`, `add_pop_param_sweep.sh` | `python -m research_code.add_pop <index> [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | leading file index, `paths.pop_tif_dir`, `paths.voronoi_dir`, `paths.pop_output_dir`, `params.add_pop_max_workers`, shared positional overrides |
-
-### `research_code/data_merge/`
-
-This directory constructs the canonical WWTP dataset used by all downstream modelling stages.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/data_merge/correct_locations_w_OSM.py` | Correct WWTP geometries using nearby OSM candidates and rule-based geometry selection | Data harmonization | Inputs: HydroWaste-like points, OSM-derived candidates, correction radius. Outputs: corrected point geometries | `corr_locations_wOSM`, `coordinate_corr_locations_wOSM`, `create_corrected_geom`, `main` | `data_merge/combine_locations.sh` | `python -m research_code.data_merge.correct_locations_w_OSM [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `params.rad`, `paths.hydrowaste`, OSM and country enrichment paths, shared positional overrides |
-| `research_code/data_merge/merge_seg_results.py` | Merge segmentation outputs into corrected WWTP geospatial datasets | Data harmonization | Inputs: segmentation CSV or zipped tile outputs plus corrected WWTP layers. Outputs: segmentation-enriched WWTP layers | `assign_to_nearest`, `merge_old`, `merge_new`, `parse_args`, `main` | `data_merge/combine_locations.sh` | `python -m research_code.data_merge.merge_seg_results [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k] --variant {old,new}` | `booleans.legacy_merge`, `paths.seg_results_filepath`, `paths.dl_zipfile`, `paths.dl_mapfile`, shared positional overrides |
-| `research_code/data_merge/final_data_merge.py` | Build the final merged WWTP dataset from regional and segmentation-adjusted sources | Data harmonization | Inputs: corrected regional layers plus country-specific imports. Outputs: final merged WWTP dataset at `corrected_all` | `cluster_point_indices`, imported `coordinate_corr_locations_wOSM`, `main` | `data_merge/combine_locations.sh` | `python -m research_code.data_merge.final_data_merge [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `paths.corrected_all`, `paths.eu_ref_filepath`, country-specific source file paths, `params.threshold`, shared positional overrides |
-
-### `research_code/annotation_scripts/`
-
-This directory prepares annotation assets and folds annotation-derived information back into the core dataset. It influences weighting and quality-control workflows but is not itself the Voronoi solver.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/annotation_scripts/NEW_01_GENERATEGRIDS.py` | Generate annotation grids around WWTP points | Annotation preparation | Inputs: corrected WWTP points. Outputs: grid files keyed by tile index | `point_to_square`, `main` | `annotation_scripts/grid_generation_and_osm_extract.sh` | `python -m research_code.annotation_scripts.NEW_01_GENERATEGRIDS [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `annotations.cell_size`, `annotations.factor`, shared positional overrides |
-| `research_code/annotation_scripts/NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py` | Query OSM context for each generated grid | Annotation preparation | Inputs: annotation grids. Outputs: per-grid GeoJSON context files | `query_overpass`, `elements_to_gdf`, `create_tasks`, `row_operation`, `main` | `annotation_scripts/grid_generation_and_osm_extract.sh` | `python -m research_code.annotation_scripts.NEW_02_EXTRACTOSMDATAFULL_GEOJSON [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | OSM query settings, output directories, shared positional overrides |
-| `research_code/annotation_scripts/NEW_03_WASTEWATERJOIN_GEOJSON.py` | Join OSM wastewater context back to WWTP or grid records | Ancillary annotation utility | Inputs: GeoJSON context files and point records. Outputs: merged parquet or GeoJSON artifacts | `load_geodata`, `parallel_convert_geojsons`, `merge_parquets_sql`, `merge_bboxes_sql`, `main` | No shell wrapper in active workflow | `python -m research_code.annotation_scripts.NEW_03_WASTEWATERJOIN_GEOJSON [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | Shared positional overrides; script currently documented as not used |
-| `research_code/annotation_scripts/NEW_04_EXPORTGEOTIFF.py` | Export selected geospatial products as GeoTIFF | Ancillary annotation utility | Inputs and outputs depend on export targets | Module exists; currently not documented as part of active tested workflow | No shell wrapper in active workflow | `python -m research_code.annotation_scripts.NEW_04_EXPORTGEOTIFF ...` | Shared positional overrides; script documented as not used and not tested |
-| `research_code/annotation_scripts/download_bing_annotate.py` | Render annotated tile images for a deterministic subset of grids | Annotation imagery generation | Inputs: annotation grids, reference images, OSM-derived polygon and line context. Outputs: annotated PNG or GeoTIFF assets | `download_bing_image`, `split_grids_for_instance`, `draw_annotations`, `process_bbox`, `annotate_bboxes_parallel` | `annotation_scripts/run_download_bing_annotate_array.sh` | `python -m research_code.annotation_scripts.download_bing_annotate <instance_id> --num-instances <n> --split-seed <seed> [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `annotations.max_workers`, `annotations.random_seed`, `annotations_images_dir`, `annotated_images_output_dir`, shared positional overrides |
-| `research_code/annotation_scripts/merge_annotations.py` | Parse annotation-model text outputs and merge them into the corrected WWTP layer | Annotation post-processing | Inputs: annotation results files and corrected WWTP dataset. Outputs: corrected WWTP layer with annotation-derived fields | `decode_gen_text`, `parse_idx_from_image_name`, `main` | `annotation_scripts/merge_annotations.sh` | `python -m research_code.annotation_scripts.merge_annotations [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `paths.annotations_results_filepath`, corrected WWTP paths, shared positional overrides |
-| `research_code/annotation_scripts/annotations_inspection.py` | Build QA sampling artifacts for annotation review | Annotation QA | Inputs: annotation outputs and image folders. Outputs: class-distribution figures and sampled image folders | `plot_category_distribution`, `get_stratified_sample`, `organize_files_by_category`, `main` | `annotation_scripts/annotations_inspection.sh` | `python -m research_code.annotation_scripts.annotations_inspection [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `annotations.n_sample_size`, `annotations.random_seed`, `annotations_images_dir`, shared positional overrides |
-| `research_code/annotation_scripts/copy_falsy_images.py` | Copy selected images for QA handling | Annotation QA utility | Inputs: annotation image directories and selection logic. Outputs: copied image subsets | `main` | `annotation_scripts/copy_falsy_images.sh` | `python -m research_code.annotation_scripts.copy_falsy_images [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | Shared positional overrides |
-
-### `research_code/industrial_analysis/`
-
-This directory implements the industrial-coverage branch of the project.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/industrial_analysis/download_and_vectorize.py` | Download industrial raster archives, vectorize them, merge polygons, and enrich them with watershed and country attributes | Industrial analysis, stage 1 | Inputs: Zenodo raster archive, watershed layer, country boundary data. Outputs: cached and enriched industrial polygon GeoPackages | `download_file`, `vectorize_raster_file`, `vectorize_rasters_parallel`, `merge_geodataframes`, `add_boundary_info`, `_vectorize_and_merge`, `main` | `industrial_analysis/industrial_analysis.sh`, `industrial_analysis_sweep.sh` | `python -m research_code.industrial_analysis.download_and_vectorize [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `params.industrial_zenodo_url`, `params.industrial_min_cells`, `params.industrial_persist_rasters`, `params.industrial_simplify_tolerance`, `params.industrial_vectorize_overwrite`, industrial raster and merged-output paths |
-| `research_code/industrial_analysis/find_unconnected_industrial_areas.py` | Build industrial or mixed WWTP service regions and identify industrial polygons outside them | Industrial analysis, stage 2 | Inputs: industrial polygons, corrected WWTP dataset, watershed and country layers. Outputs: parquet of uncovered industrial areas | `load_industrial_areas`, `load_wwtps`, `filter_industrial_wwtps`, `run_voronoi_for_wwtps`, `find_unconnected_areas`, `main` | `industrial_analysis/industrial_analysis.sh`, `industrial_analysis_sweep.sh` | `python -m research_code.industrial_analysis.find_unconnected_industrial_areas [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k] [--approach 0|1] [--only_round] [--verbose]` | `params.industrial_category_numbers`, `params.industrial_unconnected_overwrite`, `params.basin_column_name`, shared Voronoi parameters |
-
-### `research_code/pop_at_risk_river_calculations/`
-
-This directory computes non-served population, river-linked exposure, downstream impact, and final population-at-risk summaries.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/pop_at_risk_river_calculations/create_rasters.py` | Build signed rasters and country-wise non-served intermediate products from population-enriched Voronoi layers | Risk analysis, stage 1 | Inputs: population-enriched Voronoi outputs, population TIFFs, watershed layer. Outputs: raster products, CSV stats, non-served polygon intermediates | `extract_worldpop_universal`, `polygon_raster_sign_from_gdf`, `orchestrate_country_intersection`, `orchestrate_intersections`, `shard_tif_dict`, `main` | `create_rasters.sh` | `python -m research_code.pop_at_risk_river_calculations.create_rasters [job_index] [total_jobs] [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `annotations.default_mode`, `annotations.max_workers`, `annotations.random_seed`, `params.min_pixels`, `params.zoom_level`, shared positional overrides |
-| `research_code/pop_at_risk_river_calculations/find_unserved_pop.py` | Vectorize and export non-served population areas from raster outputs | Risk analysis, stage 2 | Inputs: raster outputs from `create_rasters.py`. Outputs: non-served area layers | `create_unserved_pop`, `main` | `find_unserved_pop.sh`, `pop_differences_and_impact_polygons.sh` | `python -m research_code.pop_at_risk_river_calculations.find_unserved_pop [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `params.threshold`, risk-output paths, shared positional overrides |
-| `research_code/pop_at_risk_river_calculations/find_diff_pop.py` | Compute population differences between watershed reference and population-enriched service products for one selected file index | Risk analysis, stage 3 | Inputs: one population-enriched Voronoi file and watershed reference. Outputs: difference GeoPackage | `find_difference`, `find_differences`, `parse_bool`, `parse_args`, `main` | `pop_differences_and_impact_polygons.sh` | `python -m research_code.pop_at_risk_river_calculations.find_diff_pop <index> [is_parallel] [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | leading file index, `is_parallel`, `params.max_workers`, `params.basin_column_name`, shared positional overrides |
-| `research_code/pop_at_risk_river_calculations/assign_rivers_to_basin.py` | Assign river segments to basin identifiers | Risk analysis, stage 4 | Inputs: river layer and basin layer. Outputs: basin-linked river layer | Script-style river-basin assignment helpers and `main` | `assign_rivers_to_basin.sh`, `pop_differences_and_impact_polygons.sh` | `python -m research_code.pop_at_risk_river_calculations.assign_rivers_to_basin [max_workers] [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | leading worker count, `paths.rivershed`, `paths.watershed`, basin column settings, shared positional overrides |
-| `research_code/pop_at_risk_river_calculations/find_intersection_river.py` | Link non-served features to nearby or intersecting river segments and assign topology metadata | Risk analysis, stage 5 | Inputs: non-served features and basin-linked river layers. Outputs: river-linked non-served features | `build_graph`, `optimize_river_lookup`, `orchestrate_settlement_river_intersections`, `assign_main_riv`, `orchestrate_river_assignment`, `main` | `find_intersection_river.sh`, `pop_differences_and_impact_polygons.sh` | `python -m research_code.pop_at_risk_river_calculations.find_intersection_river [max_workers] [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | leading worker count, search distance controls embedded in script logic, shared positional overrides |
-| `research_code/pop_at_risk_river_calculations/impact_polygons_pop.py` | Propagate environmental load downstream and build impact polygons | Risk analysis, stage 6 | Inputs: river-linked non-served features and river topology. Outputs: impact polygons and summaries | `create_dicts`, `get_runtime_params`, `calculate_load_ratio`, `generate_single_segment_plume`, `create_impact_polygons`, `orchestrate_logic`, `main` | `pop_differences_and_impact_polygons.sh` | `python -m research_code.pop_at_risk_river_calculations.impact_polygons_pop [max_workers] [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | leading worker count, `impact_polygons_pop_params.*`, shared positional overrides |
-| `research_code/pop_at_risk_river_calculations/find_pop_in_danger_pop.py` | Aggregate final population-at-risk outputs on tile and country units | Risk analysis, stage 7 | Inputs: impact-polygon outputs. Outputs: final population-at-risk parquet files | `find_tiles_in_countries`, `assign_tile_to_df`, `group_tile_population_sums`, `main` | `find_pop_in_danger_pop.sh`, figure scripts reuse `find_tiles_in_countries` | `python -m research_code.pop_at_risk_river_calculations.find_pop_in_danger_pop [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `params.zoom_level`, output paths, shared positional overrides |
-
-### `research_code/pop_validation_scripts/`
-
-This directory provides QA and reference-comparison tooling for generated population-enriched outputs.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/pop_validation_scripts/verification_script.py` | Split population-enriched outputs into verification, non-verification, and single-site groups | Validation | Inputs: population-enriched outputs. Outputs: verification subsets in the configured verification directory | `find_verification_watersheds`, `main` | `comparison.sh` | `python -m research_code.pop_validation_scripts.verification_script [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `params.percent_verification`, verification output paths, shared positional overrides |
-| `research_code/pop_validation_scripts/hw_comparison.py` | Compare project outputs against HydroWaste reference population values | Validation | Inputs: verification subsets and HydroWaste-derived references. Outputs: comparison figures and metrics | `ndvi`, `multiples`, `replace_inf`, `extract_voronoi_parameters`, `main` | `comparison.sh`, reused by EU and sweep comparison modules | `python -m research_code.pop_validation_scripts.hw_comparison [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | HydroWaste path settings, zonal-sum columns, shared positional overrides |
-| `research_code/pop_validation_scripts/eu_comparison.py` | Compare project outputs against the EU reference layer | Validation | Inputs: verification subsets and EU WWTP reference layer. Outputs: comparison figures and metrics | `composite_histogram`, imported `assign_to_nearest`, imported comparison helpers, `main` | `comparison.sh` | `python -m research_code.pop_validation_scripts.eu_comparison [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `paths.eu_ref_filepath`, `params.eu_utm`, shared positional overrides |
-
-### `research_code/figures_scripts/`
-
-This directory creates publication or communication outputs from previously generated data products.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/figures_scripts/convert_voronoi_to_geojson_for_map.py` | Convert population-enriched Voronoi outputs into lightweight map-ready GeoJSON | Visualization | Inputs: population-enriched Voronoi outputs. Outputs: GeoJSON under the configured figures path | `main` | `figures_scripts/convert_voronoi_to_geojson_for_map.sh` | `python -m research_code.figures_scripts.convert_voronoi_to_geojson_for_map [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | figure output paths, shared positional overrides |
-| `research_code/figures_scripts/composite_area_population_plots.py` | Create composite histogram and scatter diagnostics for area and population ratios | Visualization | Inputs: population-enriched Voronoi outputs and country boundaries. Outputs: histogram and scatter PNGs | `resolve_zonal_sum_column`, `build_country_table`, `make_histogram_plot`, `make_scatter_plot`, `main` | `figures_scripts/composite_area_population_plots.sh` | `python -m research_code.figures_scripts.composite_area_population_plots [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k] [--approach ...] [--color-col ...]` | `figures.approach`, `params.zonal_sum_default_column`, `--zonal-col`, histogram quantile controls |
-| `research_code/figures_scripts/piechart_figure.py` | Generate a static world map with country-level donut summaries | Visualization | Inputs: population-enriched outputs and country boundaries. Outputs: static PNG figure | `aggregate_by_country`, `plot_splitted_piechart`, `resolve_zonal_sum_columns`, `main` | Manual direct run documented in `research_code/figures_scripts/README.md` | `python -m research_code.figures_scripts.piechart_figure [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | figure output paths, zonal-sum columns, shared positional overrides |
-| `research_code/figures_scripts/piechart_interactive.py` | Generate an interactive Folium map summarizing served population and WWTP mix | Visualization | Inputs: population-enriched outputs and country boundaries. Outputs: standalone HTML file | `aggregate_by_country`, `ensure_population_percentage_column`, `get_pie_svg`, `main` | Manual direct run documented in `research_code/figures_scripts/README.md` | `python -m research_code.figures_scripts.piechart_interactive [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | figure output paths, zonal-sum columns, shared positional overrides |
-| `research_code/figures_scripts/pop_at_risk_figures.py` | Plot population-at-risk and impact polygon summaries | Visualization | Inputs: final risk outputs plus tile and country overlays. Outputs: risk-analysis figures | `_robust_bounds`, `create_single_plot`, `create_impact_polygon_plots`, `main` | `figures_scripts/pop_at_risk_figures.sh` | `python -m research_code.figures_scripts.pop_at_risk_figures [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | figure output paths, risk output files, shared positional overrides |
-
-### `research_code/sensitivity_analysis_scripts/`
-
-This directory performs parameter sweeps and cross-run evaluation.
-
-| File | Purpose | Pipeline stage | Inputs and outputs | Key functions | Called by | Manual run | Key configurable parameters |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `research_code/sensitivity_analysis_scripts/create_voronoi_parallel_sweep.py` | Execute one sharded Voronoi sweep task with internal parallelism and retry logic | Sensitivity analysis | Inputs: sharded parameter combinations. Outputs: standard Voronoi outputs plus sweep logs | `generate_parameter_combinations`, `filter_combinations_by_task`, `split_combinations_into_jobs`, `run_voronoi_job`, `main` | `create_voronoi_param_sweep_parallel.sh` | `python -m research_code.sensitivity_analysis_scripts.create_voronoi_parallel_sweep [task_id] [version] [dynamic_buffering] [dynamic_buffer_k] --approach 1 --num-jobs 16 --shuffle-seed 42` | `--approach`, `--num-jobs`, `--retry-failed-runs`, `--shuffle-seed`; positional dynamic buffering args are ignored |
-| `research_code/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.py` | Evaluate all parseable population-enriched sweep outputs against HydroWaste and EU references | Sensitivity analysis | Inputs: all population-enriched GPKGs under `data/pop_voronoi_layers`. Outputs: alias map, metric summary CSVs, ranking tables, and figures | `parse_pop_output_path`, `list_pop_output_files`, `compute_sensitivity_metrics`, `build_summary_table`, `plot_split_score_bars`, `plot_split_metric_profiles`, `main` | `compare_pop_sweep_hw_eu.sh` | `python -m research_code.sensitivity_analysis_scripts.compare_pop_sweep_hw_eu [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]` | `COMPARE_POP_SWEEP_MAX_WORKERS`, reference layer paths, threshold and zonal-sum availability |
-
-## Pipeline
-
-The recommended run order is:
-
-1. `data_merge/combine_locations.sh`
-2. `combine_watersheds.sh`
-3. `annotation_scripts/grid_generation_and_osm_extract.sh`
-4. `annotation_scripts/run_download_bing_annotate_array.sh`
-5. `annotation_scripts/merge_annotations.sh`
-6. `download_pop.sh`
-7. `create_voronoi.sh`
-8. `add_pop.sh`
-9. `pop_at_risk_river_calculations/create_rasters.sh`
-10. `pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh`
-11. `pop_at_risk_river_calculations/find_pop_in_danger_pop.sh`
-12. `industrial_analysis/industrial_analysis.sh`
-13. `pop_validation_scripts/comparison.sh` and figure-generation scripts
-
-### 1. Data merging and harmonization
-
-| Item | Details |
-| --- | --- |
-| Purpose | Build the canonical WWTP point dataset used by all downstream analyses |
-| Inputs | HydroWaste-like points, OSM-derived candidate geometries, segmentation outputs, country-specific imports from `data/extra_points` and `data/final_data_source` |
-| Outputs | Corrected intermediate datasets and final merged WWTP dataset at `paths.corrected_all` |
-| Main scripts | `data_merge/combine_locations.sh`, `correct_locations_w_OSM.py`, `merge_seg_results.py`, `final_data_merge.py` |
-| Dependencies | Correct source files, segmentation outputs if enabled, valid country boundaries, OSM enrichment support |
-| Generated files | `corrected_south`, `seg_corrected_south`, `corrected_all`, related merge logs |
-| Key parameters | `booleans.legacy_merge`, `params.threshold`, source file paths, shared positional overrides |
-
-`combine_locations.sh` executes a fixed sequence: OSM correction, legacy segmentation merge if enabled, final merge, and a current segmentation merge variant. This stage should usually be rebuilt first when source data changes.
-
-### 2. Watershed and basin preparation
-
-| Item | Details |
-| --- | --- |
-| Purpose | Merge watershed archive contents into combined GeoPackage layers by configured level |
-| Inputs | Zipped watershed archive directories under `paths.watersheds_zip_dir` |
-| Outputs | Combined watershed GeoPackage at `paths.watershed` |
-| Main scripts | `combine_watersheds.sh`, `combine_watersheds.py` |
-| Dependencies | Valid zip archives with at least one readable geospatial layer per archive |
-| Generated files | `hydrobase_lvl{level}_combined.gpkg`-style watershed outputs |
-| Key parameters | `paths.watersheds_zip_dir`, `paths.watershed`, shared positional overrides |
-
-The implementation loops over available `lvl*` subdirectories and writes one merged output per detected watershed level.
-
-### 3. Annotation and weighting preparation
-
-| Item | Details |
-| --- | --- |
-| Purpose | Generate grid tiles, extract OSM context, render annotation imagery, and merge annotation outputs back into the WWTP dataset |
-| Inputs | Corrected WWTP points, annotation grid settings, OSM queries, imagery directories, annotation-model results |
-| Outputs | Grid layers, OSM GeoJSON files, annotated imagery, and annotation-enriched WWTP datasets |
-| Main scripts | `annotation_scripts/grid_generation_and_osm_extract.sh`, `annotation_scripts/run_download_bing_annotate_array.sh`, `annotation_scripts/merge_annotations.sh`, optional QA wrappers |
-| Dependencies | Working annotation paths in config, external imagery directories, OSM service availability, annotation result files |
-| Generated files | Grid GeoPackages, per-grid OSM context, annotated images, merged annotation attributes, QA samples |
-| Key parameters | `annotations.cell_size`, `annotations.factor`, `annotations.max_workers`, `annotations.n_sample_size`, `annotations.random_seed`, `paths.annotations_images_dir`, `paths.annotations_results_filepath` |
-
-This stage is upstream of weighted Voronoi workflows whenever annotation-derived variables are being used or inspected.
-
-### 4. Voronoi service-area creation
-
-| Item | Details |
-| --- | --- |
-| Purpose | Create service-area polygons for configured approaches and weighting schemes |
-| Inputs | Corrected WWTP dataset, watershed layer, country boundaries, weighting controls, optional city points |
-| Outputs | Voronoi GeoPackages under `paths.voronoi_dir`; related dissolved buffer layers |
-| Main scripts | `create_voronoi.sh`, `create_voronoi.py`, `pipelines.py` |
-| Dependencies | Canonical WWTP dataset, watershed data for approach 1, country boundaries, configured weighting functions |
-| Generated files | `appr_0`, `appr_1`, `appr_2`, and optional `_only_round` outputs; buffer GeoPackages |
-| Key parameters | `params.buffer`, `params.weight_method`, `params.weight_func`, `params.dynamic_buffering`, `params.dynamic_buffer_k`, `params.min_buffer`, `params.max_buffer`, `params.calculate_area_fn`, `params.calculate_buffer_fn`, `params.prepare_data_fn`, `execution.mode` |
-
-Approaches implemented in `create_voronoi.py`:
-
-- Approach `0`: WWTP Voronoi without watershed-constrained clipping in the same sense as approach `1`
-- Approach `1`: WWTP Voronoi with watershed-derived grouping or clipping
-- Approach `2`: city-based Voronoi
-
-`create_voronoi.sh` can run in `array`, `sequential`, or `parallel` mode depending on `execution.mode`.
-
-### 5. Population enrichment
-
-| Item | Details |
-| --- | --- |
-| Purpose | Intersect one generated Voronoi output with country population rasters and attach yearly zonal statistics |
-| Inputs | One Voronoi GeoPackage plus WorldPop-style TIFF directories |
-| Outputs | Population-enriched Voronoi GeoPackage under `paths.pop_output_dir` |
-| Main scripts | `download_pop.sh`, `add_pop.sh`, `download_pop.py`, `add_pop.py` |
-| Dependencies | Downloaded or prepared population TIFFs, existing Voronoi outputs, valid country code fields |
-| Generated files | `pop_added_*.gpkg` files with yearly `*_zonal_sum` and `*_zonal_std` fields |
-| Key parameters | `paths.pop_tif_dir`, `params.add_pop_max_workers`, leading file index for `add_pop.py`, shared positional overrides |
-
-`add_pop.sh` operates on a single file index. In local runs you must provide the index explicitly; in SLURM array mode the wrapper uses `SLURM_ARRAY_TASK_ID`.
-
-### 6. Risk and river-impact calculations
-
-| Item | Details |
-| --- | --- |
-| Purpose | Estimate non-served population, connect it to river topology, propagate impact, and aggregate final at-risk outputs |
-| Inputs | Population-enriched Voronoi layers, watershed layer, river network, population rasters |
-| Outputs | Non-served areas, difference layers, basin-linked rivers, river-linked non-served features, impact polygons, final population-at-risk parquet files |
-| Main scripts | `create_rasters.sh`, `find_unserved_pop.sh`, `pop_differences_and_impact_polygons.sh`, `find_pop_in_danger_pop.sh` |
-| Dependencies | Population-enriched outputs, combined watershed layers, river network path, valid basin identifiers |
-| Generated files | `csv_output_filepath`, `non_served_outpath`, `rivershed_output_path`, `impact_pop_polygons_outpath`, `pop_at_risk_output_filepath` |
-| Key parameters | `params.threshold`, `params.min_pixels`, `params.zoom_level`, `impact_polygons_pop_params.*`, worker counts passed by wrappers, shared positional overrides |
-
-The middle-stage wrapper encodes a strict dependency chain:
-
-1. build non-served layers
-2. compute difference polygons
-3. assign rivers to basins
-4. link non-served features to river topology
-5. propagate impact and build polygons
-
-### 7. Industrial analysis
-
-| Item | Details |
-| --- | --- |
-| Purpose | Measure which industrial land areas are outside industrial or mixed WWTP service coverage |
-| Inputs | Industrial land rasters from Zenodo, merged WWTP dataset, watershed and country layers |
-| Outputs | Enriched industrial polygons and parquet of uncovered industrial areas |
-| Main scripts | `industrial_analysis/industrial_analysis.sh`, `download_and_vectorize.py`, `find_unconnected_industrial_areas.py` |
-| Dependencies | Industrial raster archive availability, watershed and country enrichment layers, configured industrial categories |
-| Generated files | `paths.industrial_merged_filepath`, cached `industrial_areas_mp{industrial_min_cells}.gpkg`, `paths.industrial_unconnected_output` |
-| Key parameters | `params.industrial_zenodo_url`, `params.industrial_min_cells`, `params.industrial_persist_rasters`, `params.industrial_vectorize_overwrite`, `params.industrial_unconnected_overwrite`, `params.industrial_category_numbers` |
-
-The first stage supports two levels of caching: persistent raster storage and a cached pre-enrichment industrial polygon layer.
-
-### 8. Validation, sensitivity analysis, and figures
-
-| Item | Details |
-| --- | --- |
-| Purpose | Validate outputs against references, visualize results, and evaluate parameter robustness |
-| Inputs | Population-enriched outputs, reference layers, figure settings, sweep outputs |
-| Outputs | Verification subsets, HW or EU comparison figures, map-ready exports, communication figures, sensitivity CSVs, ranking tables, and plots |
-| Main scripts | `pop_validation_scripts/comparison.sh`, `figures_scripts/*.sh`, `sensitivity_analysis_scripts/*.sh` |
-| Dependencies | Population-enriched Voronoi outputs, reference datasets, successful upstream workflow runs |
-| Generated files | Verification GPKGs, figure PNGs, HTML interactive maps, sweep summaries, alias maps, ranking tables |
-| Key parameters | `params.percent_verification`, `figures.approach`, `params.zonal_sum_default_column`, sweep grids embedded in shell scripts |
-
-## Mermaid Diagrams
-
-### Pipeline execution flow
-
-```mermaid
-flowchart TD
-	A[Source WWTP and boundary data]
-	B[data_merge/combine_locations.sh]
-	C[combine_watersheds.sh]
-	D[annotation_scripts workflows]
-	E[download_pop.sh]
-	F[create_voronoi.sh]
-	G[add_pop.sh]
-	H[create_rasters.sh]
-	I[pop_differences_and_impact_polygons.sh]
-	J[find_pop_in_danger_pop.sh]
-	K[industrial_analysis.sh]
-	L[comparison.sh]
-	M[figure scripts]
-
-	A --> B
-	A --> C
-	B --> D
-	C --> D
-	D --> E
-	E --> F
-	F --> G
-	G --> H
-	H --> I
-	I --> J
-	J --> K
-	K --> L
-	L --> M
-```
-
-### Data flow between scripts
-
-```mermaid
-flowchart LR
-	A[Raw WWTP sources]
-	B[combine_locations.sh]
-	C[Corrected and merged WWTP dataset]
-	D[combine_watersheds.sh]
-	E[Combined watershed dataset]
-	F[Annotation workflows]
-	G[Annotation enriched WWTP dataset]
-	H[download_pop.sh]
-	I[Population TIFF directories]
-	J[create_voronoi.sh]
-	K[Voronoi GeoPackages]
-	L[add_pop.sh]
-	M[Population enriched Voronoi GeoPackages]
-	N[Risk workflows]
-	O[Risk outputs]
-	P[industrial_analysis.sh]
-	Q[Industrial outputs]
-	R[comparison.sh]
-	S[Validation outputs]
-	T[figure scripts]
-	U[Figures and map exports]
-
-	A --> B --> C
-	C --> F --> G
-	C --> J
-	G --> J
-	D --> E --> J
-	H --> I --> L
-	J --> K --> L --> M
-	M --> N --> O
-	C --> P
-	E --> P
-	P --> Q
-	M --> R --> S
-	M --> T --> U
-	O --> T
-	Q --> T
-```
-
-### Merging workflow
-
-```mermaid
-flowchart TD
-	A[HydroWaste and corrected point inputs]
-	B[correct_locations_w_OSM.py]
-	C{legacy_merge enabled}
-	D[merge_seg_results.py old]
-	E[final_data_merge.py]
-	F[merge_seg_results.py new]
-	G[Canonical all_merged dataset]
-	H[Country specific WWTP inputs]
-	I[Segmentation outputs]
-
-	A --> B --> C
-	I --> D
-	I --> F
-	H --> E
-	C -- yes --> D --> E
-	C -- no --> E
-	E --> F --> G
-```
-
-### Hyperparameter sweep workflow
-
-```mermaid
-flowchart TD
-	A[Level grid]
-	B[Weight function grid]
-	C[Weight method grid]
-	D[Rigid buffer grid]
-	E[Dynamic k grid]
-	F[Generate rigid and dynamic combinations]
-	G[Deterministic shuffle]
-	H[Modulo shard across 10 tasks]
-	I[create_voronoi_param_sweep.sh]
-	J[create_voronoi_param_sweep_parallel.sh]
-	K[create_voronoi_parallel_sweep.py]
-	L[Voronoi sweep outputs]
-	M[add_pop_param_sweep.sh]
-	N[Population enriched sweep outputs]
-	O[industrial_analysis_sweep.sh]
-	P[Industrial sweep outputs]
-	Q[compare_pop_sweep_hw_eu.sh]
-	R[HW and EU sweep summaries]
-
-	A --> F
-	B --> F
-	C --> F
-	D --> F
-	E --> F
-	F --> G --> H
-	H --> I --> L
-	H --> J --> K --> L
-	L --> M --> N
-	H --> O --> P
-	N --> Q --> R
-```
-
-### Annotation workflow
-
-```mermaid
-flowchart TD
-	A[Corrected WWTP dataset]
-	B[NEW_01_GENERATEGRIDS.py]
-	C[Grid files]
-	D[NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py]
-	E[Per grid OSM GeoJSON]
-	F[download_bing_annotate.py]
-	G[Annotated imagery assets]
-	H[Annotation model outputs]
-	I[merge_annotations.py]
-	J[Annotation enriched WWTP dataset]
-	K[annotations_inspection.py]
-	L[copy_falsy_images.py]
-
-	A --> B --> C --> D --> E
-	C --> F --> G
-	G --> H --> I --> J
-	H --> K
-	G --> K
-	G --> L
-```
-
-### Population at risk assessment workflow
-
-```mermaid
-flowchart TD
-	A[create_voronoi.sh]
-	B[Voronoi outputs]
-	C[add_pop.sh]
-	D[Population enriched Voronoi outputs]
-	E[create_rasters.sh]
-	F[Raster and country intersection outputs]
-	G[find_unserved_pop.py]
-	H[Non served areas]
-	I[find_diff_pop.py]
-	J[Difference polygons]
-	K[assign_rivers_to_basin.py]
-	L[Basin linked rivers]
-	M[find_intersection_river.py]
-	N[River linked non served features]
-	O[impact_polygons_pop.py]
-	P[Impact polygons]
-	Q[find_pop_in_danger_pop.py]
-	R[Population at risk outputs]
-
-	A --> B --> C --> D --> E --> F
-	F --> G --> H --> I --> J
-	J --> K --> L --> M --> N --> O --> P --> Q --> R
-```
-
-### Industrial analysis workflow
-
-```mermaid
-flowchart TD
-	A[Industrial raster archive]
-	B[download_and_vectorize.py]
-	C[Vectorized industrial polygons]
-	D[Boundary and basin enrichment]
-	E[industrial_merged output]
-	F[Corrected WWTP dataset]
-	G[find_unconnected_industrial_areas.py]
-	H[Industrial or mixed WWTP filter]
-	I[Voronoi service areas for selected approach]
-	J[Spatial overlap test]
-	K[Unconnected industrial areas]
-
-	A --> B --> C --> D --> E
-	E --> G
-	F --> G --> H --> I --> J --> K
-	E --> J
-```
-
-## Configuration
-
-### Configuration model
-
-The repository uses `research_code/config.yaml` as the authoritative default configuration source. `research_code/starter.py` loads that file, normalizes optional CLI overrides, expands path templates, resolves dynamic-buffer-specific path tokens, and returns the runtime configuration dictionary used by the rest of the project.
-
-### How configuration is loaded
-
-| Component | Role |
-| --- | --- |
-| `research_code/config.yaml` | Stores default arguments, path templates, algorithm parameters, booleans, execution modes, annotation settings, industrial settings, and risk-model parameters |
-| `research_code/starter.py::parse_config_overrides` | Parses optional CLI positional overrides from `sys.argv` or `argparse` namespaces |
-| `research_code/starter.py::load_config` | Applies overrides, expands path templates, resolves weight labels, and returns the runtime configuration dictionary |
-| `research_code/pipelines.py::_resolve_configured_callable` | Resolves configurable function names such as `prepare_data_fn`, `calculate_area_fn`, and `calculate_buffer_fn` |
-
-### Shared CLI override layout
-
-Most wrappers and many direct Python module entrypoints accept the same positional override scheme:
-
-```text
 [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 ```
 
-Wrappers that require additional leading positionals place those arguments before the shared overrides. Examples include:
+## What Is Missing Or External To The Repository
 
-- `add_pop.py`: leading `index`
-- `create_rasters.py`: leading `job_index` and `total_jobs`
-- `find_diff_pop.py`: leading `index` and optional `is_parallel`
-- several river-analysis scripts: leading worker-count positional argument in shell wrappers
+The repository is not fully self-contained. Several required inputs are expected to exist outside the code.
 
-### Major configuration categories
+- Satellite imagery for annotation is not downloaded by the repository wrappers; the code expects an existing image directory.
+- Annotation inference CSV outputs are treated as external inputs to the merge-back stage.
+- Some default paths in `src/config.yaml` point to cluster-local storage and must be replaced for local execution.
+- HydroBASINS zip archives must be placed manually under `data/hydroshed_river_levels/lvl{level}` before watershed combination.
+- The corrected HydroWASTE source referenced by `correct_locations_w_OSM.paths.paul_corrected_filepath` is used by the pipeline, but the publication metadata for that correction source is not embedded in the repository.
+- The population-at-risk river matching distance in `src/pop_at_risk_river_calculations/find_intersection_river.py` is currently hardcoded at 5000 m rather than exposed through config.
 
-| Category | Representative keys | Notes |
-| --- | --- | --- |
-| Paths and versioning | `arguments.default_version`, `arguments.default_level`, `paths.data_dir`, `paths.corrected_all`, `paths.voronoi_dir`, `paths.pop_output_dir` | Output structure is versioned by `v{version}` and often nested by `lvl{level}` and `bf{buffer}` |
-| Voronoi parameters | `params.buffer`, `params.n_points`, `params.threshold`, `params.weight_method`, `params.weight_func`, `params.dynamic_buffering`, `params.dynamic_buffer_k`, `params.min_buffer`, `params.max_buffer` | Control service-area creation and weighting behavior |
-| Callable indirection | `params.calculate_area_fn`, `params.calculate_buffer_fn`, `params.prepare_data_fn`, `params.area_fn_kwargs` | Allow swapping compatible functions without editing orchestration code |
-| Weighting functions | `params.weight_method`, `params.weight_func` | `weight_method` supports `linear`, `square_root`, `logarithmic`, and `sigmoid`; `weight_func` supports `mult`, `add`, or empty |
-| Industrial settings | `params.industrial_zenodo_url`, `params.industrial_min_cells`, `params.industrial_persist_rasters`, `params.industrial_vectorize_overwrite`, `params.industrial_unconnected_overwrite`, `params.industrial_category_numbers` | Control industrial raster ingestion and uncovered-area analysis |
-| Annotation settings | `annotations.default_mode`, `annotations.cell_size`, `annotations.factor`, `annotations.max_workers`, `annotations.random_seed`, `annotations.n_sample_size`, `annotations.overwrite`, `annotations.retries` | Used by annotation grid, imagery, and QA workflows |
-| Boolean and legacy flags | `booleans.legacy_merge`, `booleans.eu_correction`, `booleans.city_voronoi`, `booleans.duckdb`, `booleans.remove_industrial`, `booleans.return_boolean` | Influence optional branches and legacy compatibility |
-| Risk-model settings | `impact_polygons_pop_params.org_per_pop`, `width`, `c_limit`, `base_k`, `theta`, `step_m`, `least_discharge_cms`, `impact_radii` | Control downstream impact propagation in `impact_polygons_pop.py` |
-| Execution modes | `execution.mode`, `annotations.default_mode` | Control shell-wrapper execution behavior for Voronoi and raster jobs |
+## Section Documentation
 
-### YAML paths and path templating
+The section READMEs under `src/` are the detailed reference documents for each stage.
 
-`load_config()` expands path templates using values such as `{version}`, `{level}`, `{buffer}`, `{weight_type}`, `{weight_func}`, `{final_data_dir}`, `{extra_points_dir}`, and `{industrial_min_cells}`.
-
-Important implication:
-
-- rigid-buffer runs use the numeric buffer value in output paths
-- dynamic-buffer runs use a buffer path token derived from `dynamic_buffer_k`, so output directories are grouped by dynamic buffering scale rather than the nominal buffer distance
-
-### When to edit YAML versus passing CLI overrides
-
-Use YAML edits when:
-
-- changing stable input or output locations
-- changing default algorithm behavior for repeated runs
-- setting machine-specific mounted paths
-- adjusting booleans, industrial settings, annotation settings, or execution modes
-
-Use CLI overrides when:
-
-- testing a different level, version, buffer, or weighting method without editing the default config
-- launching sweeps or ad hoc runs
-- changing dynamic buffering or weight-function settings for one run only
-
-## Bash Scripts
-
-### Parameter forwarding logic
-
-Most wrappers forward the shared positional override block unchanged into the Python module they launch. Some wrappers prepend control arguments such as a file index, worker count, or shard index before forwarding the shared overrides.
-
-### Important wrapper scripts
-
-| Script | Launches | Editable parameters | Notes |
-| --- | --- | --- | --- |
-| `research_code/download_pop.sh` | `python -m research_code.download_pop` | shared positional overrides | Installs editable package first |
-| `research_code/combine_watersheds.sh` | `python -m research_code.combine_watersheds` | shared positional overrides | Iterates available watershed levels internally |
-| `research_code/create_voronoi.sh` | `python -m research_code.create_voronoi` | shared positional overrides; config-driven execution mode | Runs array, sequential, or parallel depending on `execution.mode` |
-| `research_code/add_pop.sh` | `python -m research_code.add_pop` | leading file index plus shared positional overrides | Uses `SLURM_ARRAY_TASK_ID` if available |
-| `research_code/data_merge/combine_locations.sh` | multiple `data_merge` modules in sequence | shared positional overrides | Fixed orchestration wrapper |
-| `research_code/annotation_scripts/grid_generation_and_osm_extract.sh` | `NEW_01_GENERATEGRIDS.py` then `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py` | shared positional overrides | One-command grid plus OSM extraction |
-| `research_code/annotation_scripts/run_download_bing_annotate_array.sh` | `download_bing_annotate.py` | shared positional overrides plus wrapper-managed `instance_id`, `--num-instances`, `--split-seed` | Designed for SLURM array execution |
-| `research_code/annotation_scripts/merge_annotations.sh` | `merge_annotations.py` | shared positional overrides | Uses import check before editable install |
-| `research_code/annotation_scripts/annotations_inspection.sh` | `annotations_inspection.py` | shared positional overrides | QA sampling wrapper |
-| `research_code/annotation_scripts/copy_falsy_images.sh` | `copy_falsy_images.py` | shared positional overrides | QA utility wrapper |
-| `research_code/pop_at_risk_river_calculations/create_rasters.sh` | `create_rasters.py` | shared positional overrides; wrapper-managed `job_index` and `total_jobs` | Execution mode controlled by `annotations.default_mode` |
-| `research_code/pop_at_risk_river_calculations/find_unserved_pop.sh` | `find_unserved_pop.py` | shared positional overrides | Single-stage risk wrapper |
-| `research_code/pop_at_risk_river_calculations/assign_rivers_to_basin.sh` | `assign_rivers_to_basin.py` | wrapper prepends `2` worker count, then shared positional overrides | Worker count is hard-coded in wrapper |
-| `research_code/pop_at_risk_river_calculations/find_intersection_river.sh` | `find_intersection_river.py` | wrapper prepends `32` worker count, then shared positional overrides | Worker count is hard-coded in wrapper |
-| `research_code/pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh` | multiple risk modules in sequence | shared positional overrides | Prepares difference, river, and impact products in one run |
-| `research_code/pop_at_risk_river_calculations/find_pop_in_danger_pop.sh` | `find_pop_in_danger_pop.py` | shared positional overrides | Final risk aggregation |
-| `research_code/industrial_analysis/industrial_analysis.sh` | industrial analysis modules in sequence | shared positional overrides | End-to-end industrial branch |
-| `research_code/pop_validation_scripts/comparison.sh` | validation modules in sequence | shared positional overrides | Runs verification, HW, then EU comparisons |
-| `research_code/figures_scripts/convert_voronoi_to_geojson_for_map.sh` | `convert_voronoi_to_geojson_for_map.py` | shared positional overrides | Map export wrapper |
-| `research_code/figures_scripts/composite_area_population_plots.sh` | `composite_area_population_plots.py` | shared positional overrides plus optional `approach` and `color_col` | Figure wrapper with extra plotting CLI |
-| `research_code/figures_scripts/pop_at_risk_figures.sh` | `pop_at_risk_figures.py` | shared positional overrides | Risk-figure wrapper |
-
-### Example wrapper usage
-
-```bash
-cd research_code
-
-# Merge and harmonize WWTP source data
-bash data_merge/combine_locations.sh
-
-# Build watersheds
-bash combine_watersheds.sh
-
-# Create Voronoi outputs for the configured defaults
-bash create_voronoi.sh
-
-# Add population to Voronoi file index 0
-bash add_pop.sh 0
-
-# Run the industrial branch
-bash industrial_analysis/industrial_analysis.sh
-```
-
-## Hyperparameter Sweeping And Sensitivity Analysis
-
-The repository includes two related mechanisms:
-
-1. parameter sweep execution, which reruns workflow stages across a grid of settings
-2. sweep-result evaluation, which compares the outputs of those runs against HydroWaste and EU references
-
-### Sweep execution scripts
-
-| Script | What it sweeps | Execution model |
-| --- | --- | --- |
-| `sensitivity_analysis_scripts/create_voronoi_param_sweep.sh` | Voronoi generation for approach `1` across levels, weight functions, weight methods, rigid buffers, and dynamic-buffer `k` values | 10-way SLURM array sharding via modulo assignment |
-| `sensitivity_analysis_scripts/add_pop_param_sweep.sh` | Population enrichment across the same parameter grid, expanded over discovered Voronoi file indices | 10-way SLURM array sharding plus per-combination file discovery |
-| `sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel.sh` | Same Voronoi sweep, but each array task runs many internal parallel jobs | SLURM array plus internal Python job scheduler |
-| `sensitivity_analysis_scripts/industrial_analysis_sweep.sh` | Industrial analysis branch across the same parameter grid | 10-way SLURM array sharding |
-| `sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh` | Evaluation of all population-enriched outputs rather than generation of new parameter combinations | Single-run analysis with worker pool |
-
-### Explicit sweep grid
-
-The shell sweep scripts define the grid directly in bash or inline Python:
-
-| Parameter family | Values |
+| Section | Detailed documentation |
 | --- | --- |
-| Levels | `6`, `7`, `8`, `9` |
-| Weight functions | `mult`, `add`, empty |
-| Weight methods | `linear`, `logarithmic`, `square_root`, `sigmoid` |
-| Rigid buffers | `9000`, `11000`, `13000`, `15000` |
-| Dynamic buffering k-values | `0.6`, `0.7`, `0.8` |
-
-### Combination generation logic
-
-The sweep scripts explicitly implement the following logic:
-
-- generate rigid-buffer combinations for each level, weight function, weight method, and rigid buffer
-- generate dynamic-buffer combinations for each level, weight function, weight method, and dynamic `k` value using buffer `9000`
-- if `weight_func` is empty, keep only one canonical `weight_method=linear` combination to avoid redundant runs
-- shuffle combinations deterministically using a seed, defaulting to `42`
-- assign combinations to 10 SLURM tasks using `idx % 10 == task_id`
-
-### Sweep result evaluation
-
-`compare_pop_sweep_hw_eu.py` scans `data/pop_voronoi_layers`, parses parameter settings from file paths and filenames, deduplicates empty-weight-function duplicates, computes comparison metrics against HydroWaste and EU references, writes alias maps and summary CSVs, and saves diagnostic plots.
-
-## Usage Examples
-
-### Initial setup
-
-```bash
-cd research_code
-python -m pip install -e .
-```
-
-### Dataset merging
-
-```bash
-cd research_code
-bash data_merge/combine_locations.sh
-```
-
-### Watershed preparation
-
-```bash
-cd research_code
-bash combine_watersheds.sh
-```
-
-### Annotation preparation
-
-```bash
-cd research_code
-bash annotation_scripts/grid_generation_and_osm_extract.sh
-sbatch annotation_scripts/run_download_bing_annotate_array.sh
-bash annotation_scripts/merge_annotations.sh
-```
-
-### Create Voronoi layers
-
-```bash
-cd research_code
-
-# Default configuration
-bash create_voronoi.sh
-
-# Manual module run for one approach and one override set
-python -m research_code.create_voronoi 8 2 15000 square_root mult true 0.75 --approach 1
-```
-
-### Add population
-
-```bash
-cd research_code
-
-# Add population to Voronoi file index 0
-bash add_pop.sh 0
-
-# Equivalent module call
-python -m research_code.add_pop 0 7 2 9000 logarithmic mult true 0.5
-```
-
-### Run industrial analysis
-
-```bash
-cd research_code
-bash industrial_analysis/industrial_analysis.sh
-```
-
-### Run sensitivity sweeps
-
-```bash
-cd research_code
-
-# Standard Voronoi sweep
-sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep.sh
-
-# Population enrichment sweep
-sbatch sensitivity_analysis_scripts/add_pop_param_sweep.sh
-
-# High-resource parallel Voronoi sweep
-sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel.sh
-
-# Industrial analysis sweep
-sbatch sensitivity_analysis_scripts/industrial_analysis_sweep.sh
-```
-
-### Run sweep-result evaluation
-
-```bash
-cd research_code
-bash sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh
-```
-
-### Full end-to-end workflow
-
-```bash
-cd research_code
-
-bash data_merge/combine_locations.sh
-bash combine_watersheds.sh
-bash annotation_scripts/grid_generation_and_osm_extract.sh
-sbatch annotation_scripts/run_download_bing_annotate_array.sh
-bash annotation_scripts/merge_annotations.sh
-bash download_pop.sh
-bash create_voronoi.sh
-bash add_pop.sh 0
-bash pop_at_risk_river_calculations/create_rasters.sh
-bash pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh
-bash pop_at_risk_river_calculations/find_pop_in_danger_pop.sh
-bash industrial_analysis/industrial_analysis.sh
-bash pop_validation_scripts/comparison.sh
-bash figures_scripts/convert_voronoi_to_geojson_for_map.sh
-bash figures_scripts/composite_area_population_plots.sh
-```
-
-## Output Files And Directory Layout
-
-### Output organization model
-
-Many outputs are organized by version, watershed level, buffer token, and weighting settings. The main path template pattern is:
-
-```text
-data/.../v{version}/lvl{level}/bf{buffer_token}/{weight_type}/...
-```
-
-Where:
-
-- `version` comes from `arguments.default_version` or a CLI override
-- `level` comes from `arguments.default_level` or a CLI override
-- `buffer_token` is either the numeric buffer for rigid runs or a `k...` token for dynamic-buffer runs
-- `weight_type` is the short code derived from `weight_method` such as `li`, `sq`, `log`, or `sig`
-
-### Major generated output families
-
-| Output family | Config key or directory | Typical contents |
-| --- | --- | --- |
-| Merged WWTP base data | `paths.corrected_all` and related merge paths | Canonical point layers and corrected intermediates |
-| Watershed layers | `paths.watershed` | Combined basin polygons |
-| Buffer layers | `paths.buffers_dir` | Dissolved WWTP or city buffers and convex-hull variants |
-| Voronoi layers | `paths.voronoi_dir` | `appr_0`, `appr_1`, `appr_2`, and `_only_round` GeoPackages |
-| Population rasters | `paths.pop_dir`, `paths.pop_tif_dir` | Downloaded, unzipped, rasterized, and merged country TIFFs |
-| Population-enriched Voronoi layers | `paths.pop_output_dir` | `pop_added_*.gpkg` files with yearly zonal statistics |
-| Verification subsets | `paths.verification_dir` | Verification, non-verification, and single-site subsets |
-| Risk calculation outputs | `paths.csv_output_filepath`, `paths.non_served_outpath`, `paths.rivershed_output_path`, `paths.impact_pop_polygons_outpath` | CSV summaries, non-served polygons, basin-linked rivers, impact polygons |
-| Final risk products | `paths.pop_at_risk_output_filepath` | Final parquet outputs for at-risk population summaries |
-| Industrial outputs | `paths.industrial_merged_filepath`, `paths.industrial_unconnected_output` | Industrial polygons and uncovered industrial areas |
-| Figure outputs | `paths.interactive_piechart_html_filepath`, `paths.static_piechart_filepath`, `paths.leaflet_geojson_filepath`, `paths.composite_histogram_filepath`, `paths.composite_scatter_filepath` | Static PNGs, HTML maps, GeoJSON map layers |
-| Logs | `research_code/logs/` when wrappers are run from `research_code/` | `.log`, `.out`, and `.err` files for workflow runs |
-
-### Logs and checkpoints
-
-Most shell wrappers create a `logs/` directory in the current working directory and write:
-
-- one or more `.log` files created by the wrapper itself
-- SLURM `.out` and `.err` files when executed as batch jobs
-
-These logs are the first place to inspect when a stage fails or stalls.
-
-## Developer Notes
-
-### Environment and packaging
-
-- install from `research_code/` using `python -m pip install -e .`
-- the project depends on a geospatial Python stack, including `geopandas`, `rasterio`, `shapely`, `exactextract`, `pyproj`, and visualization libraries such as `matplotlib`, `cartopy`, and `folium`
-- several wrappers automatically run the editable install step before execution
-
-### Common pitfalls
-
-- missing mounted or machine-specific paths in `config.yaml`, especially segmentation and annotation paths
-- missing shapefile sidecars for country boundaries
-- assuming `add_pop.sh` processes all Voronoi outputs automatically; it requires a file index unless run in a SLURM array context
-- leaving `booleans.legacy_merge=true` when no legacy segmentation inputs are available
-- confusing `execution.mode` for Voronoi wrappers with `annotations.default_mode`, which controls raster-stage execution behavior
-- overlooking dynamic-buffer output naming; dynamic runs do not reuse the same path token as rigid-buffer runs
-
-### Indicative compute profile
-
-The repository includes SLURM headers in the bash wrappers, which give a useful approximation of intended compute scale:
-
-- lightweight QA or utility wrappers request as little as 2 CPUs and 4 GB RAM
-- main Voronoi and population stages request up to 8 to 16 CPUs and 192 GB RAM
-- some risk-analysis and parallel sweep stages request 64 CPUs and up to 234 GB RAM
-
-These values should be treated as evidence of intended batch scale, not as guaranteed minimums for every dataset.
-
-### Reproducibility recommendations
-
-- keep `research_code/config.yaml` under version control and archive the exact config used for any published run
-- preserve `logs/` outputs for all heavy stages
-- record `SHUFFLE_SEED` when running sensitivity sweeps
-- avoid changing input file paths between stages of the same experiment
-- run sensitivity-analysis scripts before locking final parameter choices for reporting
-
-### Extensibility notes
-
-- use `params.prepare_data_fn` to swap the data-loading function used by the Voronoi workflow without rewriting orchestration code
-- use `params.calculate_area_fn` and `params.calculate_buffer_fn` to experiment with alternate weighting or buffering functions in `create_voronoi.py`
-- `pipelines.py` is the main integration surface for new output families that need consistent path construction and prepared spatial inputs
-- validation and sweep-evaluation modules already parse parameter settings from output paths, so preserving naming conventions makes downstream comparisons much easier
-
-## Additional Internal Documentation
-
-More focused documentation is available in the subdirectory READMEs:
-
-- `research_code/README.md`
-- `research_code/data_merge/README.md`
-- `research_code/annotation_scripts/README.md`
-- `research_code/industrial_analysis/README.md`
-- `research_code/pop_at_risk_river_calculations/README.md`
-- `research_code/figures_scripts/README.md`
-- `research_code/pop_validation_scripts/README.md`
-- `research_code/sensitivity_analysis_scripts/README.md`
+| `src/` technical index | `src/README.md` |
+| Data merge | `src/data_merge/README.md` |
+| Annotation | `src/annotation_scripts/README.md` |
+| Population and river-risk calculations | `src/pop_at_risk_river_calculations/README.md` |
+| Validation | `src/pop_validation_scripts/README.md` |
+| Figures and exports | `src/figures_scripts/README.md` |
+| Industrial analysis | `src/industrial_analysis/README.md` |
+| Sensitivity analysis | `src/sensitivity_analysis_scripts/README.md` |

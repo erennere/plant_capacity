@@ -1,0 +1,93 @@
+#!/bin/bash
+#
+# Combined Location Data Merge Pipeline
+# Processes: correct OSM locations -> merge segmentation results -> combine locations -> final merge
+# Orchestrates multiple sequential data processing steps
+#
+# Usage:
+#   ./combine_locations.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
+#   sbatch combine_locations.sh (SLURM job)
+#
+# SLURM Configuration
+#SBATCH --partition=cpu-single
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64gb
+#SBATCH --time=48:00:00
+#SBATCH --job-name=combine-locations
+#SBATCH --output=logs/combine_locations.out
+#SBATCH --error=logs/combine_locations.err
+
+set -euo pipefail  # Exit on error, undefined vars, pipe failures
+
+# Configuration
+PROJECT_ROOT="$(pwd)"
+
+LOG_DIR="${PROJECT_ROOT}/logs"
+PYTHON_CMD="python"
+
+# Create log directory
+mkdir -p "${LOG_DIR}"
+
+# Clean up previous run logs and scheduler outputs for a fresh run
+rm -f "${LOG_DIR}/combine_locations.log" "${LOG_DIR}/merge_seg_results.log" "${LOG_DIR}/combine_locations.out" "${LOG_DIR}/combine_locations.err"
+
+
+# Logging function
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/combine_locations.log"
+}
+
+log "=========================================="
+log "Combined Location Data Merge Started"
+log "=========================================="
+log "Project root directory: ${PROJECT_ROOT}"
+
+# Parse optional config override arguments
+LEVEL="${1:-}"
+VERSION="${2:-}"
+BUFFER="${3:-}"
+WEIGHT_METHOD="${4:-}"
+WEIGHT_FUNC="${5:-}"
+DYNAMIC_BUFFERING="${6:-}"
+DYNAMIC_BUFFER_K="${7:-}"
+
+# Install package in editable mode only if import is unavailable.
+ensure_src_importable() {
+    if ${PYTHON_CMD} -c "import src" >/dev/null 2>&1; then
+        log "src import check passed; skipping editable install"
+        return 0
+    fi
+
+    log "src not importable; attempting editable install"
+    ${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+    ${PYTHON_CMD} -c "import src" >/dev/null 2>&1
+}
+
+log "Checking package importability..."
+ensure_src_importable
+
+log "Starting data merge pipeline..."
+
+# Step 1: Correct OSM locations
+log "Step 1: Correcting locations with OSM data..."
+${PYTHON_CMD} -m src.data_merge.correct_locations_w_OSM "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+log "Step 1 completed"
+
+# Step 2: Optionally merge legacy segmentation outputs.
+# Whether this actually runs is controlled by booleans.legacy_merge in config.yaml.
+log "Step 2: Running legacy segmentation merge if enabled in config.yaml..."
+${PYTHON_CMD} -m src.data_merge.merge_seg_results "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" --variant old 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
+log "Step 2 completed"
+
+# Step 3: Combine locations
+log "Step 3: Combining location data..."
+${PYTHON_CMD} -m src.data_merge.final_data_merge "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/combine_locations.log"
+log "Step 3 completed"
+
+log "Running merge_seg_results (variant=new)"
+${PYTHON_CMD} -m src.data_merge.merge_seg_results "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" --variant new 2>&1 | tee -a "${LOG_DIR}/merge_seg_results.log"
+log "Completed merge_seg_results (variant=new)"
+
+log "=========================================="
+log "Combined Location Data Merge Completed"
+log "=========================================="

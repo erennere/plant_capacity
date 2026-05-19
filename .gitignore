@@ -1,2 +1,26 @@
 
 data/all_merged_v2.gpkg
+
+# Python bytecode/cache artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+
+# Local Python environment and editable install metadata
+.venv/
+src/*.egg-info/
+
+# Coverage and test outputs
+.coverage
+coverage.xml
+coverage.json
+
+# Local logs
+*.log
+
+# Temporary audit artifacts
+tmp_*.py
+tmp_*.json

@@ -1,1 +1,0 @@
-"""Test suite for plant_capacity research_code."""

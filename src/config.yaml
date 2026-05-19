@@ -1,0 +1,564 @@
+# Section order below follows the canonical workflow derived from the repo wrappers and READMEs.
+# Put a shared parameter on the first script that actually consumes it.
+# Later scripts inherit that value by setting the field to null.
+# A later concrete value overrides only that script.
+# CLI overrides take precedence over all resolved config values.
+correct_locations_w_OSM:
+  version: '2'
+  rad: 5000
+  paths:
+    data_dir: '../data'
+    corrected_south: '{data_dir}/corrected_WWTP_enhanced_v{version}.geojson'
+    osmgeo_filepath: '{data_dir}/wastewater_plant.geojson'
+    paul_corrected_filepath: '{data_dir}/Enhanced_HW_WWTP__jun20_2025.geojson'
+    overture: '{data_dir}/overture_maps_countries.parquet'
+    overture_s3_url: 's3://overturemaps-us-west-2/release/2025-01-22.0/theme=divisions/type=division_area/*'
+
+merge_seg_results:
+  version: null
+  legacy_merge: true
+  paths:
+    data_dir: null
+    corrected_south: null
+    seg_corrected_south: '{data_dir}/seg_corrected_WWTP_enhanced_v{version}.gpkg'
+    corrected_all_filepath: '{data_dir}/all_merged_v{version}.gpkg'
+    dl_dir: '{data_dir}/DL_results'
+    dl_zipfile: '{data_dir}/DL_results/csvv2-2.zip'
+    dl_mapfile: '{data_dir}/DL_results/aftersort.geojson'
+    seg_results_filepath: '/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/Images_z17_512/results/csv/segoutput.csv'
+
+final_data_merge:
+  version: null
+  legacy_merge: null
+  threshold: 500
+  osm_threshold: 1000
+  paths:
+    data_dir: null
+    corrected_south: null
+    seg_corrected_south: null
+    corrected_all_filepath: null
+    canada_filepath: '{data_dir}/extra_points/Canada_14_03_2025.csv'
+    germany_filepath: '{data_dir}/extra_points/Germany_Hydra_waste_geospatial_corrected.geojson'
+    osmgeo_filepath: null
+    us_new_filepath: '{data_dir}/final_data_source/final_USA_WWT_dec3.geojson'
+    eu_new_filepath: '{data_dir}/final_data_source/final_W_europe_WWT_dec3.geojson'
+    thailand_filepath: '{data_dir}/final_data_source/Thailand_500m_merged.geojson'
+    new_points_filepath: '{data_dir}/new_locations_v{version}.gpkg'
+
+combine_watersheds:
+  level: '7'
+  paths:
+    data_dir: null
+    watersheds_zip_dir: '{data_dir}/hydroshed_river_levels/lvl{level}'
+    watershed: '{data_dir}/hydroshed_river_levels/hydrobase_lvl{level}_combined.gpkg'
+
+NEW_01_GENERATEGRIDS:
+  version: null
+  annotations:
+    cell_size: 3072
+    factor: 1.194
+  paths:
+    data_dir: null
+    corrected_all_filepath: null
+    annotations_grid_dir: '{data_dir}/annotations/GRID'
+
+NEW_02_EXTRACTOSMDATAFULL_GEOJSON:
+  version: null
+  annotations:
+    max_workers: 8
+    overwrite: false
+    retries: 5
+  paths:
+    data_dir: null
+    corrected_all_filepath: null
+    annotations_grid_dir: null
+    annotations_by_osm_dir: '{data_dir}/annotations/osm_by_idx'
+
+download_bing_annotate:
+  version: null
+  paths:
+    data_dir: null
+    corrected_all_filepath: null
+    annotations_grid_dir: null
+    annotations_by_osm_dir: null
+    annotations_temp_parquet_dir: '{data_dir}/temp_parquets'
+    annotations_images_dir: '/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/mm/Images_z17_512'
+    annotated_images_output_dir: '/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/Images_z17_512'
+
+merge_annotations:
+  version: null
+  paths:
+    data_dir: null
+    corrected_all_filepath: null
+    annotated_images_output_dir: null
+    annotations_results_filepath: '/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/inference/csv_files/chunk_1/i2t_res1.csv'
+
+annotations_inspection:
+  annotations:
+    n_sample_size: 1000
+    random_seed: 42
+  paths:
+    annotated_images_output_dir: null
+    annotations_results_filepath: null
+    annotations_verf_image_outpath_dir: '/mnt/sds-hd/sd17f001/sukanya/wtp_seg/2026_global/annotated/mm/inference/test'
+
+copy_falsy_images:
+  version: null
+  paths:
+    data_dir: null
+    corrected_all_filepath: null
+    annotated_images_output_dir: null
+    annotations_verf_image_outpath_dir: null
+
+NEW_03_WASTEWATERJOIN_GEOJSON:
+  version: null
+  annotations:
+    overwrite: null
+  paths:
+    data_dir: null
+    corrected_all_filepath: null
+    annotations_grid_dir: null
+    annotations_by_osm_dir: null
+    annotations_temp_parquet_dir: null
+
+NEW_04_EXPORTGEOTIFF: {}
+
+download_pop:
+  paths:
+    data_dir: null
+    pop_dir: '{data_dir}/population'
+
+create_voronoi:
+  level: null
+  version: null
+  buffer: 9000
+  weight_method: 'logarithmic'
+  weight_func: 'mult'
+  dynamic_buffering: true
+  dynamic_buffer_k: 0.5
+  max_workers: 16
+  n_points: 250
+  threshold: null
+  sigma: 3
+  percent_threshold: 10
+  country_output_column: 'ISO_2'
+  country_boundary_column: 'country'
+  site_id_column: 'WASTE_ID'
+  old_site_id_column: 'OLD_WASTE_ID'
+  calculate_area_fn: 'calculate_area'
+  calculate_buffer_fn: 'calculate_buffer'
+  area_fn_kwargs: {}
+  prepare_data_fn: 'prepare_data'
+  voronoi_overwrite: false
+  temp_voronoi_overwrite: false
+  flush_size: 1000
+  min_buffer: 2000
+  max_buffer: 50000
+  k_min: 0.32
+  k_max: 0.92
+  detection_confidence_threshold: 3
+  scipy_true: false
+  cv2_true: false
+  city_voronoi: false
+  csv_files: false
+  duckdb_cond: false
+  sindex_concurrency: true
+  remove_industrial: false
+  return_boolean: true
+  execution:
+    mode: 'sequential'
+  paths:
+    data_dir: null
+    bboxes: '{data_dir}/bboxes.csv'
+    hydrowaste: '{data_dir}/cleaned_hydrowaste.csv'
+    corrected_all_filepath: null
+    watershed: null
+    buffers_dir: '{data_dir}/buffers/v{version}/lvl{level}/bf{buffer}'
+    voronoi_dir: '{data_dir}/voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}'
+    cities: '{data_dir}/cities.csv'
+    overture: null
+    overture_s3_url: null
+
+add_pop:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  add_pop_max_workers: 8
+  country_output_column: null
+  pop_voronoi_overwrite: false
+  paths:
+    data_dir: null
+    voronoi_dir: null
+    pop_tif_dir: '{data_dir}/population/unzipped'
+    pop_output_dir: '{data_dir}/pop_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}'
+
+create_rasters:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  zoom_level: 8
+  min_pixels: 9
+  basin_column_name: 'HYBAS_ID'
+  country_boundary_column: null
+  country_output_column: null
+  annotations:
+    max_workers: null
+    random_seed: null
+    default_mode: 'sequential'
+  figures:
+    approach: 1
+  paths:
+    data_dir: null
+    buffers_dir: null
+    voronoi_dir: null
+    pop_output_dir: null
+    pop_tif_dir: null
+    WWTP_tif_dir: '{data_dir}/WWTP_tifs/v{version}/lvl{level}/bf{buffer}/{weight_type}'
+    non_served_outpath: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg'
+    csv_output_filepath: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/raster_country_stats_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.csv'
+    watershed: null
+    overture: null
+    overture_s3_url: null
+
+find_unserved_pop:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  figures:
+    pop_threshold: 1000
+  paths:
+    data_dir: null
+    non_served_outpath: null
+    non_served_above_threshold_outpath: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_areas_above_threshold_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg'
+
+find_diff_pop:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  max_workers: null
+  basin_column_name: null
+  country_output_column: null
+  paths:
+    data_dir: null
+    hydrowaste: null
+    pop_tif_dir: null
+    pop_output_dir: null
+    pop_dif_output_dir: '{data_dir}/pop_diff_voronoi_layers/v{version}/lvl{level}/bf{buffer}/{weight_type}'
+
+assign_rivers_to_basin:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  paths:
+    data_dir: null
+    watershed: null
+    rivershed: '{data_dir}/hydrorivers.gpkg'
+    rivershed_output_path: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/hydroshed_basin_assigned_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg'
+
+find_intersection_river:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  paths:
+    data_dir: null
+    non_served_above_threshold_outpath: null
+    rivershed_output_path: null
+    non_served_nxt_river_outpath: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/non_served_nxt_river_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg'
+
+impact_polygons_pop:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  impact_polygons_pop_params:
+    org_per_pop: 60.0
+    width: 12.0
+    c_limit: 5.0
+    base_k: 0.23
+    theta: 1.047
+    step_m: 100.0
+    least_discharge_cms: 0.269
+    impact_radii: [1000, 2000]
+  paths:
+    data_dir: null
+    non_served_nxt_river_outpath: null
+    rivershed_output_path: null
+    impact_pop_polygons_outpath: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/impact_pop_polygons_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.gpkg'
+
+find_pop_in_danger_pop:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  zoom_level: null
+  country_boundary_column: null
+  country_output_column: null
+  annotations:
+    max_workers: null
+  paths:
+    data_dir: null
+    pop_tif_dir: null
+    impact_pop_polygons_outpath: null
+    pop_at_risk_output_filepath: '{data_dir}/results_pop_at_risk/v{version}/lvl{level}/bf{buffer}/{weight_type}/pop_at_risk_pop_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.parquet'
+    overture: null
+
+download_and_vectorize:
+  level: null
+  version: null
+  max_workers: null
+  basin_column_name: null
+  country_boundary_column: null
+  country_output_column: null
+  industrial_zenodo_url: 'https://zenodo.org/records/14832219/files/Industrial_land_10m_1093cities_2023.zip'
+  industrial_min_cells: 100
+  industrial_persist_rasters: true
+  industrial_simplify_tolerance: 0.001
+  industrial_vectorize_overwrite: false
+  sindex_concurrency: null
+  paths:
+    data_dir: null
+    watershed: null
+    overture: null
+    overture_s3_url: null
+    industrial_raster_persistent_dir: '{data_dir}/industrial_analysis/rasters'
+    industrial_merged_filepath: '{data_dir}/industrial_analysis/industrial_land_merged_v{version}_lvl{level}_mp{industrial_min_cells}.gpkg'
+
+find_unconnected_industrial_areas:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  max_workers: null
+  n_points: null
+  threshold: null
+  sigma: null
+  percent_threshold: null
+  basin_column_name: null
+  country_output_column: null
+  country_boundary_column: null
+  site_id_column: null
+  old_site_id_column: null
+  calculate_area_fn: null
+  calculate_buffer_fn: null
+  area_fn_kwargs: null
+  prepare_data_fn: null
+  voronoi_overwrite: null
+  temp_voronoi_overwrite: null
+  flush_size: null
+  min_buffer: null
+  max_buffer: null
+  k_min: null
+  k_max: null
+  detection_confidence_threshold: null
+  industrial_min_cells: null
+  industrial_category_numbers: []
+  industrial_unconnected_overwrite: false
+  scipy_true: null
+  cv2_true: null
+  csv_files: null
+  sindex_concurrency: null
+  remove_industrial: null
+  return_boolean: null
+  paths:
+    data_dir: null
+    bboxes: null
+    hydrowaste: null
+    corrected_all_filepath: null
+    watershed: null
+    buffers_dir: null
+    voronoi_dir: null
+    overture: null
+    overture_s3_url: null
+    industrial_merged_filepath: null
+    industrial_unconnected_output: '{data_dir}/industrial_results/v{version}/lvl{level}/bf{buffer}/{weight_type}/unconnected_industrial_areas_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}_mp{industrial_min_cells}.parquet'
+
+verification_script:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  percent_verification: 0.8
+  paths:
+    data_dir: null
+    pop_output_dir: null
+    verification_dir: '{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}'
+
+hw_comparison:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  paths:
+    data_dir: null
+    verification_dir: null
+    hw_plots_dir: '{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/hw_plots'
+
+eu_comparison:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  threshold: null
+  paths:
+    data_dir: null
+    verification_dir: null
+    eu_plots_dir: '{data_dir}/verification/v{version}/lvl{level}/bf{buffer}/{weight_type}/plots/eu_plots'
+    eu_ref_filepath: '{data_dir}/extra_points/UWWTD_TreatmentPlants.gpkg'
+
+convert_voronoi_to_geojson_for_map:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  figures:
+    approach: null
+  paths:
+    data_dir: null
+    buffers_dir: null
+    voronoi_dir: null
+    pop_output_dir: null
+    leaflet_geojson_filepath: '{data_dir}/figures/v{version}/lvl{level}/{weight_type}/leaflet_size_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.geojson'
+
+composite_area_population_plots:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  zonal_sum_default_column: '2024_zonal_sum'
+  figures:
+    approach: null
+  paths:
+    data_dir: null
+    buffers_dir: null
+    voronoi_dir: null
+    pop_output_dir: null
+    country_boundaries_filepath: '{data_dir}/boundaries/ne_110m_admin_0_countries.shp'
+    composite_histogram_filepath: '{data_dir}/figures/v{version}/lvl{level}/{weight_type}/composite_histograms_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png'
+    composite_scatter_filepath: '{data_dir}/figures/v{version}/lvl{level}/{weight_type}/composite_scatter_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png'
+
+piechart_figure:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  zonal_sum_default_column: null
+  industrial_category_numbers: null
+  figures:
+    approach: null
+  paths:
+    data_dir: null
+    buffers_dir: null
+    voronoi_dir: null
+    pop_output_dir: null
+    country_boundaries_filepath: null
+    raster_country_stats_filepath: '{data_dir}/risk_calculation/v{version}/lvl{level}/bf{buffer}/{weight_type}/raster_country_stats_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.csv'
+    static_piechart_filepath: '{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.png'
+
+piechart_interactive:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  zonal_sum_default_column: null
+  industrial_category_numbers: null
+  figures:
+    approach: null
+  paths:
+    data_dir: null
+    buffers_dir: null
+    voronoi_dir: null
+    pop_output_dir: null
+    country_boundaries_filepath: null
+    raster_country_stats_filepath: null
+    interactive_piechart_html_filepath: '{data_dir}/figures/v{version}/lvl{level}/{weight_type}/WWTP_type_interactive_piechart_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func}.html'
+
+pop_at_risk_figures:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  zoom_level: null
+  paths:
+    data_dir: null
+    country_boundaries_filepath: null
+    figures_dir: '{data_dir}/figures'
+    non_served_outpath: null
+    pop_at_risk_output_filepath: null
+
+create_voronoi_parallel_sweep:
+  level: null
+  version: null
+  buffer: null
+  weight_method: null
+  weight_func: null
+  dynamic_buffering: null
+  dynamic_buffer_k: null
+  paths:
+    data_dir: null
+    buffers_dir: null
+    voronoi_dir: null
+
+compare_pop_sweep_hw_eu:
+  eu_utm: 32634
+  max_workers: null
+  threshold: null
+  paths:
+    data_dir: null
+    eu_ref_filepath: null

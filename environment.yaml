@@ -1,0 +1,35 @@
+name: wwtp-service-pipeline
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pyyaml
+  - numpy
+  - pandas
+  - geopandas
+  - shapely
+  - pyproj
+  - rasterio
+  - exactextract
+  - scipy
+  - scikit-image
+  - opencv
+  - networkx
+  - duckdb
+  - joblib
+  - tqdm
+  - requests
+  - pycountry
+  - matplotlib
+  - seaborn
+  - pillow
+  - cartopy
+  - folium
+  - branca
+  - mercantile
+  - pytest>=8
+  - pytest-cov>=5
+  - pytest-mock>=3.14
+  - pip:
+      - hdx-python-api
