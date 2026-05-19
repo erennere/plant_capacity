@@ -189,17 +189,31 @@ def get_urls_from_hdx():
                 add_country_url(country_urls, iso3, url)
     return country_urls
 
-def get_urls():
+def get_urls(start_year=2015, end_year=2024, worldpop_2014_template=None, worldpop_yearly_template=None):
     """
     Generate WorldPop population data URLs for all countries.
     Returns a dictionary mapping country codes to lists of download URLs.
     """
     alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
     all_countries = list(alpha_3_to_2.keys())
-    country_urls = {k.lower(): [f'https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2014/{k.upper()}/{k.lower()}_ppp_2014_1km_Aggregated.tif'] for k in all_countries}
+    if worldpop_2014_template is None:
+        worldpop_2014_template = 'https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2014/{country_upper}/{country_lower}_ppp_2014_1km_Aggregated.tif'
+    if worldpop_yearly_template is None:
+        worldpop_yearly_template = 'https://data.worldpop.org/GIS/Population/Global_2015_2030/R2024B/{year}/{country_upper}/v1/100m/constrained/{country_lower}_pop_{year}_CN_100m_R2024B_v1.tif'
+
+    country_urls = {
+        k.lower(): [worldpop_2014_template.format(country_upper=k.upper(), country_lower=k.lower())]
+        for k in all_countries
+    }
     for k in country_urls.keys():
-        for year in range(2015, 2025):
-            country_urls[k].append(f'https://data.worldpop.org/GIS/Population/Global_2015_2030/R2024B/{str(int(year))}/{k.upper()}/v1/100m/constrained/{k.lower()}_pop_{str(int(year))}_CN_100m_R2024B_v1.tif')    
+        for year in range(int(start_year), int(end_year) + 1):
+            country_urls[k].append(
+                worldpop_yearly_template.format(
+                    year=str(int(year)),
+                    country_upper=k.upper(),
+                    country_lower=k.lower(),
+                )
+            )
     return country_urls
 
 def download_file(url, output_path):
@@ -624,7 +638,15 @@ def main(res=30, max_workers=8):
     data_dir = os.path.abspath(cfg["paths"]["pop_dir"])
     
     logging.info('Retrieving population data URLs')
-    country_urls = get_urls()
+    if any(k in cfg for k in ('start_year', 'end_year', 'worldpop_2014_url_template', 'worldpop_yearly_url_template')):
+        country_urls = get_urls(
+            start_year=cfg.get('start_year', 2015),
+            end_year=cfg.get('end_year', 2024),
+            worldpop_2014_template=cfg.get('worldpop_2014_url_template'),
+            worldpop_yearly_template=cfg.get('worldpop_yearly_url_template'),
+        )
+    else:
+        country_urls = get_urls()
     country_urls = {k: v for k, v in country_urls.items() if k in list(country_urls.keys())[0:3]}
     
     logging.info(f'Processing {len(country_urls)} countries with {max_workers} workers')

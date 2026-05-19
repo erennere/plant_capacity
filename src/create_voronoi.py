@@ -98,6 +98,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _load_create_voronoi_default(key, fallback):
+    """Load one default value from create_voronoi config without CLI overrides."""
+    try:
+        try:
+            from .starter import load_config
+        except ImportError:
+            from starter import load_config
+        cfg = load_config(script_name="create_voronoi")
+        return cfg.get(key, fallback)
+    except Exception:
+        return fallback
+
+
 def geometry_contains_points(geometry, points):
     """Return a boolean mask for points contained in geometry.
 
@@ -1158,7 +1171,7 @@ def intersects_with_country_db(df, filepath, polygon_country_col='country', outp
 # SECTION 7: BUFFER & GEOMETRY DISSOLUTION
 ################################################################################
 
-def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=50000):
+def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=None):
     """
     Dissolve overlapping polygon geometries into unified regions.
     
@@ -1174,8 +1187,9 @@ def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=5
     convex : bool, default=False
         Whether to use bounding boxes of original geometries instead of centroid
         buffers.
-    recursion_lim : int, default=50000
-        Recursion limit used by the depth-first traversal.
+    recursion_lim : int | None, default=None
+        Recursion limit used by the depth-first traversal. When ``None``,
+        resolves from ``create_voronoi.recursion_lim`` in config.
 
     Returns
     -------
@@ -1189,6 +1203,8 @@ def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=5
     latitude/longitude grouping before connected-component merging.
     """
     import sys
+    if recursion_lim is None:
+        recursion_lim = int(_load_create_voronoi_default('recursion_lim', 50000))
     sys.setrecursionlimit(recursion_lim)
     if subdf is None or subdf.empty:
         logger.warning("Input subdf is empty")
@@ -1581,13 +1597,13 @@ def calculate_buffer(df, weights, *args, **kwargs):
     **kwargs : dict
         Configuration values used by the default implementation.
 
-        buffer : float, default=10000
+        buffer : float
             Fallback buffer radius in metres when NND is unavailable.
         dynamic_buffering : bool, default=True
             Whether to use per-site dynamic buffer lengths.
         min_buffer : float, default=1500
             Absolute floor for any buffer length in metres.
-        max_buffer : float, default=50000
+        max_buffer : float | None
             Absolute ceiling for any buffer length in metres.
             When None, derived per-site from ``total_area`` via
             ``_size_ceiling``.

@@ -18,6 +18,20 @@ This module computes downstream population risk after Voronoi and population att
 ## How It Fits In
 It runs after the population-enriched Voronoi stage. Its inputs come from the Voronoi outputs, WorldPOP rasters, watershed layers, and HydroRIVERS data, and its outputs feed the risk figures and reporting stages.
 
+## Required Starter Data Files
+
+Before running this stage, these inputs must exist.
+
+| Data file | Why needed | Default path status |
+| --- | --- | --- |
+| Population-enriched Voronoi outputs | core service-area layer with population | produced by prior `add_pop.sh` stage |
+| WorldPOP rasters | exposure surface for aggregation | `data/population/unzipped/` (populated by `download_pop.sh`) |
+| HydroBASINS watershed layer | basin grouping and clipping | `data/hydroshed_river_levels/hydrobase_lvl*.gpkg` (missing for default level=7) |
+| HydroRIVERS network | river assignment and downstream propagation | `data/hydrorivers.gpkg` (missing) |
+| HydroWASTE or reference dataset | validation comparison input | `data/cleaned_hydrowaste.csv` (present) |
+
+Note: `find_intersection_river.py` reads the river search distance from `find_intersection_river.x_distance` in config (default `5000`).
+
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
@@ -76,7 +90,7 @@ A successful run writes files under `data/risk_calculation/...` and `data/result
 - `create_rasters.sh` resolves `annotations.default_mode` from config and falls back to `array` or `sequential` depending on the wrapper logic.
 - `create_rasters.py` skips countries that already have completed outputs.
 - `assign_rivers_to_basin.py` skips assignment work if one of the join inputs is empty.
-- `find_intersection_river.py` uses a hardcoded 5000 m search distance for matching non-served polygons to rivers.
+- `find_intersection_river.py` uses `find_intersection_river.x_distance` to control river matching distance.
 - `impact_polygons_pop.py` uses propagation parameters from `impact_polygons_pop_params`, including `org_per_pop`, `c_limit`, `base_k`, `theta`, `step_m`, `least_discharge_cms`, and `impact_radii`.
 
 Delete the corresponding risk output directory to force a rerun.
@@ -88,6 +102,7 @@ Delete the corresponding risk output directory to force a rerun.
 | `create_rasters.zoom_level` | `8` | Tile zoom level |
 | `create_rasters.min_pixels` | `9` | Minimum raster island size |
 | `find_unserved_pop.figures.pop_threshold` | `1000` | Non-served population threshold |
+| `find_intersection_river.x_distance` | `5000` | Max distance for matching non-served polygons to nearby rivers |
 | `impact_polygons_pop.impact_polygons_pop_params.org_per_pop` | `60.0` | Organic load per person |
 | `impact_polygons_pop.impact_polygons_pop_params.c_limit` | `5.0` | Concentration threshold |
 | `impact_polygons_pop.impact_polygons_pop_params.impact_radii` | `[1000, 2000]` | Corridor radii |
@@ -105,5 +120,4 @@ Delete the corresponding risk output directory to force a rerun.
 | `find_pop_in_danger_pop.paths.pop_at_risk_output_filepath` | template | Final at-risk parquet |
 
 ## Known Issues / TODOs
-- `find_intersection_river.py` currently hardcodes the river-search distance instead of exposing it as a config parameter.
 - No explicit `TODO` or `FIXME` markers were found in this module.

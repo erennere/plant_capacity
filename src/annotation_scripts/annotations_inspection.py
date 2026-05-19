@@ -38,11 +38,14 @@ def plot_category_distribution(df, column='category_name', save_path=None, show=
     else:
         plt.close()
 
-def get_stratified_sample(df, target_column, total_n=1000, seed=42):
+def get_stratified_sample(df, target_column, total_n=None, seed=None):
     """Return near-balanced sample by category, with remainder backfill.
 
     Missing categories are treated as an explicit ``NaN`` class.
     """
+    if total_n is None or seed is None:
+        raise ValueError("total_n and seed must be provided")
+
     temp_df = df.copy()
     temp_df['temp_grp'] = temp_df[target_column].fillna('NaN')
 

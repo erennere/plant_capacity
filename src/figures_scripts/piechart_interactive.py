@@ -14,11 +14,11 @@ import math
 
 try:
     from ..starter import load_config, parse_config_overrides
-    from ..pipelines import create_pop_output_paths
+    from ..pipelines import create_pop_output_paths, build_industrial_or_mixed_mask
     from ..create_voronoi import ensure_output_dir_for_file
 except ImportError:
     from src.starter import load_config, parse_config_overrides
-    from src.pipelines import create_pop_output_paths
+    from src.pipelines import create_pop_output_paths, build_industrial_or_mixed_mask
     from src.create_voronoi import ensure_output_dir_for_file
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
@@ -139,6 +139,7 @@ def main():
 
     pop_col, ind_col = 'population_served_index', 'IND/RES'
     tag1, tag2, agg_t = 'round_area', 'wwtp_area_rect_2', 'sum'
+    min_total_size = float(cfg.get('min_total_size', 5e7))
 
     # Load and Prepare Data
     boundaries = gpd.read_file(boundaries_fp).to_crs("EPSG:4326")
@@ -151,7 +152,11 @@ def main():
     
     # Clean population for Voronoi tooltips
     pop_gdf[agg_col] = pop_gdf[agg_col].fillna(0).round(0)
-    pop_gdf[ind_col] = pop_gdf['category_number'].isin(cfg['industrial_category_numbers'])
+    pop_gdf[ind_col] = build_industrial_or_mixed_mask(
+        pop_gdf['category_number'],
+        cfg['industrial_category_numbers'],
+        cfg.get('mixed_use_category_keywords'),
+    )
 
     pop_df_no_geom = pop_gdf.drop('geometry', axis=1)
     agg_ds = []
@@ -205,7 +210,8 @@ def main():
     v_min, v_max = boundaries['total_size'].min(), boundaries['total_size'].max()
     
     for _, row in boundaries.iterrows():
-        if pd.isna(row.geometry) or row['total_size'] < 10000: continue
+        if pd.isna(row.geometry) or row['total_size'] < min_total_size:
+            continue
         
         pos = row.geometry.centroid if row.geometry.geom_type == 'Polygon' else max(list(row.geometry.geoms), key=lambda x: x.area).centroid
         s_px = int(calculate_size(row['total_size'], v_min, v_max, 25, 85))

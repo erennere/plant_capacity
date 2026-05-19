@@ -225,25 +225,34 @@ Practical prerequisites:
 - Access to the geospatial inputs under `data/`.
 - Optional SLURM access if you intend to use the cluster-oriented wrappers.
 
-## Starter Files You Need Before Running
+## Starter Data Files You Need Before Running
 
-These are the files a new user should look at first.
+The pipeline relies on input data artifacts. Without these files or their configured equivalents, the workflow cannot complete.
 
-| File | Why it matters | What you typically change |
+| Data file or directory | Consumed by | Status in this workspace |
 | --- | --- | --- |
-| `src/config.yaml` | Primary runtime configuration | local paths, version, level, buffer, weighting, execution mode |
-| `src/starter.py` | Shared config resolver for positional overrides | usually not edited; useful to understand inheritance and CLI precedence |
-| `src/README.md` | Technical map of the executable package | use as the index into per-stage documentation |
-| `src/data_merge/combine_locations.sh` | First canonical launcher | start here when building the WWTP base layer |
-| `src/combine_watersheds.sh` | Watershed preparation launcher | run before basin-constrained Voronoi or river-risk work |
-| `src/annotation_scripts/*.sh` | Annotation preparation and merge launchers | use when annotation-enriched categories are needed |
-| `src/download_pop.sh` | Population download launcher | prepares WorldPOP inputs |
-| `src/create_voronoi.sh` | Main service-area launcher | generates WWTP Voronoi outputs |
-| `src/add_pop.sh` | Population attachment launcher | produces population-enriched service areas |
-| `src/pop_at_risk_river_calculations/*.sh` | Risk chain launchers | compute non-served and downstream-risk outputs |
-| `src/pop_validation_scripts/comparison.sh` | Validation launcher | runs HydroWASTE and EU comparisons |
-| `src/industrial_analysis/industrial_analysis.sh` | Industrial coverage launcher | runs the industrial branch |
-| `src/figures_scripts/*.sh` | Reporting launchers | turns outputs into maps and figures |
+| `data/Enhanced_HW_WWTP__jun20_2025.geojson` | geometry correction and merge bootstrap | present |
+| `data/wastewater_plant.geojson` | OSM-based location correction | present |
+| `data/DL_results/csvv2-2.zip` | legacy segmentation merge (`--variant old`) | present |
+| `data/DL_results/aftersort.geojson` | legacy segmentation index mapping | present |
+| `data/extra_points/Canada_14_03_2025.csv` | final merge enrichment | present |
+| `data/extra_points/Germany_Hydra_waste_geospatial_corrected.geojson` | final merge enrichment | present |
+| `data/final_data_source/final_W_europe_WWT_dec3.geojson` | final merge enrichment | present |
+| `data/final_data_source/Thailand_500m_merged.geojson` | final merge enrichment | present |
+| `data/final_data_source/final_USA_WWT_dec3.geojson` (or another file set in `final_data_merge.paths.us_new_filepath`) | final merge enrichment | missing at default path |
+| `data/hydroshed_river_levels/lvl{level}/` | watershed combination (`combine_watersheds`) | missing for default `level=7` |
+| `data/cleaned_hydrowaste.csv` | weighted Voronoi input features | present |
+| `data/bboxes.csv` | weighted Voronoi support table | present |
+| `data/cities.csv` | optional city-based Voronoi approach | present |
+| `data/hydrorivers.gpkg` | river assignment and downstream risk chain | missing |
+| `data/extra_points/UWWTD_TreatmentPlants.gpkg` | EU validation comparison | present |
+| `data/boundaries/ne_110m_admin_0_countries.shp` (+ sidecars) | figures and country overlays | present |
+
+In addition, two canonical defaults point to external cluster paths and must usually be overridden locally:
+- `merge_seg_results.paths.seg_results_filepath`
+- `download_bing_annotate.paths.annotations_images_dir` (and related annotation-output paths)
+
+If you only need to read or modify execution settings, start with `src/config.yaml` and `src/README.md`. The shell launchers orchestrate execution, but the pipeline dependencies are the data files above.
 
 ## Configuration Parameters You Usually Need To Change
 
@@ -266,8 +275,10 @@ The defaults are a mix of portable relative paths and environment-specific clust
 | `create_voronoi.dynamic_buffer_k` | Controls dynamic buffer scaling |
 | `create_rasters.zoom_level` | Controls raster/tile resolution used in the risk workflow |
 | `find_unserved_pop.figures.pop_threshold` | Controls thresholding of non-served population polygons |
+| `find_intersection_river.x_distance` | Controls maximum river-match distance for non-served polygons |
 | `impact_polygons_pop.impact_polygons_pop_params.*` | Controls downstream organic-load propagation |
 | `find_unconnected_industrial_areas.industrial_category_numbers` | Controls which annotation categories are treated as industrial WWTPs |
+| `find_unconnected_industrial_areas.mixed_use_category_keywords` | Controls which category labels are treated as mixed-use matches |
 
 `src/starter.py` resolves values in canonical YAML order. Earlier sections define shared values and later sections inherit them with `null`. Positional CLI overrides always take precedence over the resolved config.
 
@@ -286,7 +297,7 @@ The repository is not fully self-contained. Several required inputs are expected
 - Some default paths in `src/config.yaml` point to cluster-local storage and must be replaced for local execution.
 - HydroBASINS zip archives must be placed manually under `data/hydroshed_river_levels/lvl{level}` before watershed combination.
 - The corrected HydroWASTE source referenced by `correct_locations_w_OSM.paths.paul_corrected_filepath` is used by the pipeline, but the publication metadata for that correction source is not embedded in the repository.
-- The population-at-risk river matching distance in `src/pop_at_risk_river_calculations/find_intersection_river.py` is currently hardcoded at 5000 m rather than exposed through config.
+- River matching distance is configurable via `find_intersection_river.x_distance` (default 5000 m).
 
 ## Section Documentation
 

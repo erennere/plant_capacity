@@ -205,7 +205,7 @@ def create_single_plot(
         plt.show()
     return fig, ax
 
-def create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, output_filepath):
+def create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, output_filepath, save_dpi=1000):
     """Create one map per radius/year population zonal-sum column."""
     tiles_gdf = tiles_gdf.copy()
     pop_at_risk_gdf = pop_at_risk_gdf.copy()
@@ -254,6 +254,7 @@ def create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, output_filepath):
             scale_type='log',
             value_label="Population at risk",
             suptitle_template="{title}",
+            save_dpi=save_dpi,
             show=False,
         )
         logger.info("Saved impact polygon map for column: %s (cmap=%s)", col, selected_cmap.name)
@@ -270,11 +271,12 @@ def main():
     zoom_level = int(cfg['zoom_level'])
     needed_cols = ['tile', 'pop_sum']
     pop_threshold = 100
+    save_dpi = int(cfg.get('save_dpi', 1000))
 
     pop_at_risk_path = cfg['paths']['pop_at_risk_output_filepath']
     pop_at_risk_gdf = gpd.read_parquet(pop_at_risk_path)
     tiles_gdf = find_tiles_in_countries(country_boundaries_gdf, zoom_level=zoom_level, country_id_col=country_id_col, max_workers=max_workers)
-    create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['paths']['figures_dir'])
+    create_impact_polygon_plots(pop_at_risk_gdf, tiles_gdf, cfg['paths']['figures_dir'], save_dpi)
 
     unserved_df_filepath = cfg['paths']['non_served_outpath']
     if str(unserved_df_filepath).lower().endswith('.gpkg'):
@@ -293,6 +295,7 @@ def main():
         scale_type='log',
         value_label='Unserved population',
         suptitle_template='{title}',
+        save_dpi=save_dpi,
         show=False,
     )
     logger.info("Saved unserved population tile map.")

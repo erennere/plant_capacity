@@ -4,7 +4,8 @@
 | Section | Purpose |
 | --- | --- |
 | `Module Overview` | Explains what lives in `src` and how the package is meant to be used |
-| `Starter Files In This Package` | Points to the files most readers should open first |
+| `Code Entry Files In This Package` | Points to the code/config files most readers should open first |
+| `Required Starter Data Files` | Lists data artifacts the pipeline relies on before execution |
 | `Configuration at a Glance` | Highlights the shared settings that shape most runs |
 | `Shared Override Convention` | Shows how the shell wrappers pass runtime overrides |
 | `Core Root-Level Pipeline Scripts` | Explains the three key top-level scripts in more detail |
@@ -13,18 +14,42 @@
 ## Module Overview
 `src/` is the executable heart of the project. Shell wrappers provide reproducible entry points and scheduler compatibility, while the Python modules hold the actual processing logic. Most scripts read `config.yaml` through `starter.py`, so the normal way to change paths or parameters is to edit config rather than code.
 
-## Starter Files In This Package
+## Code Entry Files In This Package
 
 | File | Role | When you use it |
 | --- | --- | --- |
 | `config.yaml` | Canonical workflow configuration | before any run |
 | `starter.py` | Shared config resolver and positional override parser | when tracing how values are inherited |
-| `combine_watersheds.sh` | Watershed preparation launcher | before basin-aware Voronoi and risk stages |
-| `create_voronoi.sh` | Main Voronoi launcher | for service-area generation |
-| `add_pop.sh` | Population attachment launcher | after Voronoi generation |
-| `download_pop.sh` | WorldPOP download launcher | before population attachment |
+| `pipelines.py` | Shared output-path and helper orchestration utilities | when tracing cross-stage path creation |
 
-The launchers inside the stage folders are documented in the corresponding module READMEs.
+Shell launchers are execution wrappers, not starter dependencies. They are documented in the stage READMEs and in the root README canonical run order.
+
+## Required Starter Data Files
+
+These are the input data artifacts resolved from `config.yaml` that the repository depends on for end-to-end execution.
+
+| Data file or directory | Why it is required | Default path status in this workspace |
+| --- | --- | --- |
+| `../data/Enhanced_HW_WWTP__jun20_2025.geojson` | seed corrected WWTP source for merge chain | present |
+| `../data/wastewater_plant.geojson` | OSM correction reference layer | present |
+| `../data/DL_results/csvv2-2.zip` and `../data/DL_results/aftersort.geojson` | legacy segmentation merge inputs | present |
+| `../data/extra_points/Canada_14_03_2025.csv` | final merge enrichment | present |
+| `../data/extra_points/Germany_Hydra_waste_geospatial_corrected.geojson` | final merge enrichment | present |
+| `../data/final_data_source/final_W_europe_WWT_dec3.geojson` | final merge enrichment | present |
+| `../data/final_data_source/Thailand_500m_merged.geojson` | final merge enrichment | present |
+| `../data/final_data_source/final_USA_WWT_dec3.geojson` (or a replacement set in config) | final merge enrichment | missing at default path |
+| `../data/hydroshed_river_levels/lvl{level}/` | input zip directory for `combine_watersheds.py` | missing for default `level=7` |
+| `../data/cleaned_hydrowaste.csv` | core Voronoi source table | present |
+| `../data/bboxes.csv` | Voronoi support table | present |
+| `../data/cities.csv` | city-based Voronoi approach input | present |
+| `../data/hydrorivers.gpkg` | river assignment and downstream-risk calculations | missing |
+| `../data/extra_points/UWWTD_TreatmentPlants.gpkg` | EU validation reference | present |
+| `../data/boundaries/ne_110m_admin_0_countries.shp` (+ sidecars) | country overlays for figure scripts | present |
+
+Defaults for several annotation/segmentation paths are cluster-specific and must usually be overridden locally in `config.yaml`, especially:
+- `merge_seg_results.paths.seg_results_filepath`
+- `download_bing_annotate.paths.annotations_images_dir`
+- `merge_annotations.paths.annotations_results_filepath`
 
 ## Configuration at a Glance
 The full parameter tables now live in the relevant module READMEs. This file keeps the global, cross-stage settings that matter before you run anything.
@@ -41,8 +66,12 @@ The full parameter tables now live in the relevant module READMEs. This file kee
 | `create_rasters.annotations.default_mode` | `sequential` | Launcher mode for raster preparation |
 | `create_rasters.zoom_level` | `8` | Tile zoom used in raster/risk stages |
 | `find_unserved_pop.figures.pop_threshold` | `1000` | Threshold for non-served population filtering |
+| `find_intersection_river.x_distance` | `5000` | River proximity search distance for non-served polygons |
 | `impact_polygons_pop.impact_polygons_pop_params.c_limit` | `5.0` | Downstream concentration threshold |
 | `impact_polygons_pop.impact_polygons_pop_params.org_per_pop` | `60.0` | Organic load per person |
+| `piechart_figure.min_total_size` | `50000000` | Minimum size threshold for pie-chart country inclusion |
+| `piechart_interactive.min_total_size` | `50000000` | Minimum size threshold for interactive pie-map country inclusion |
+| `find_unconnected_industrial_areas.mixed_use_category_keywords` | `['mix']` | Mixed-use token matching for industrial filtering |
 | `download_and_vectorize.industrial_zenodo_url` | Zenodo URL | Industrial raster source |
 
 Module-specific settings are documented in the corresponding README files under `src/`.

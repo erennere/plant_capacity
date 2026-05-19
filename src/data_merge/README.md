@@ -18,6 +18,22 @@ This module builds the canonical WWTP point dataset used by the rest of the pipe
 ## How It Fits In
 It is the first blocking stage after raw source collection. Its outputs feed Voronoi creation, population attachment, validation, industrial analysis, and all downstream reporting.
 
+## Required Starter Data Files
+
+Before running this stage, these inputs must be present or configured.
+
+| Data file | Why needed | Default path status |
+| --- | --- | --- |
+| Corrected HydroWASTE source | seed for location correction and merge bootstrap | `data/Enhanced_HW_WWTP__jun20_2025.geojson` (present) |
+| OSM reference layer | fallback geometry for corrected locations | `data/wastewater_plant.geojson` (present) |
+| Segmentation zip + mapping | legacy merge branch input (if `legacy_merge: true`) | `data/DL_results/csvv2-2.zip`, `aftersort.geojson` (present) |
+| Canada extra points | final merge enrichment | `data/extra_points/Canada_14_03_2025.csv` (present) |
+| Germany extra points | final merge enrichment | `data/extra_points/Germany_Hydra_waste_geospatial_corrected.geojson` (present) |
+| US/EU additional sources | final merge enrichment | `final_data_source/*.geojson` paths (EU present, US missing at default) |
+| Thailand extra points | final merge enrichment | `data/final_data_source/Thailand_500m_merged.geojson` (present) |
+
+If cluster-specific segmentation results are present, override `merge_seg_results.paths.seg_results_filepath` in `src/config.yaml`.
+
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |

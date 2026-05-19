@@ -18,6 +18,18 @@ This module prepares and merges annotation context around WWTP points. It create
 ## How It Fits In
 It runs after the main WWTP merge and before the Voronoi and population stages when annotation-derived context is needed. Its outputs are used for QA, downstream filtering, and explanation of WWTP type labels.
 
+## Required Starter Data Files
+
+Before running this stage, these inputs must be available.
+
+| Data file | Why needed | Default path status |
+| --- | --- | --- |
+| Corrected and merged WWTP layer | points for grid generation | produced by `data_merge/combine_locations.sh` |
+| Satellite imagery directory | source for annotation download | `download_bing_annotate.paths.annotations_images_dir` (cluster-specific path by default) |
+| Annotation inference results | CSV with AI labels for merge-back | `merge_annotations.paths.annotations_results_filepath` (cluster-specific path by default) |
+
+Cluster-specific defaults for imagery and annotation outputs must be overridden in `src/config.yaml` for local execution. See `download_bing_annotate.paths.*` and `merge_annotations.paths.*` in config.
+
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
@@ -86,8 +98,13 @@ Delete the grid, annotation, or merged outputs to force a rerun of the correspon
 | `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.annotations.max_workers` | `8` | OSM query parallelism |
 | `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.annotations.overwrite` | `false` | Overwrite existing OSM outputs |
 | `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.annotations.retries` | `5` | OSM retry count |
+| `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.annotations.overpass_urls` | list | Rotating Overpass endpoint list |
+| `NEW_02_EXTRACTOSMDATAFULL_GEOJSON.annotations.overpass_pause_seconds` | `0.1` | Pause between task-batch submissions |
 | `annotations_inspection.annotations.n_sample_size` | `1000` | QA sample size |
 | `annotations_inspection.annotations.random_seed` | `42` | QA sampling seed |
+| `download_bing_annotate.annotations.zoom_level` | `17` | Imagery zoom level |
+| `download_bing_annotate.annotations.image_size_px` | `3072` | Requested imagery width/height in pixels |
+| `download_bing_annotate.annotations.bing_imagery_url` | Bing endpoint | Base URL for imagery requests |
 | `download_bing_annotate.paths.annotations_images_dir` | ⚠️ path | Source imagery directory |
 | `download_bing_annotate.paths.annotated_images_output_dir` | ⚠️ path | Annotated image output directory |
 | `merge_annotations.paths.annotations_results_filepath` | ⚠️ path | Annotation results CSV |

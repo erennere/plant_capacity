@@ -26,9 +26,11 @@ queries = {
     "industrial": ""
 }
 
-urls = ["https://overpass.kumi.systems/api/interpreter",
-         "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-         "https://overpass-api.de/api/interpreter"]
+urls = [
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+]
 pause_seconds = 0.1
 
 def clean_columns(gdf):
@@ -163,7 +165,7 @@ def find_bbox(geometry):
     minx, miny, maxx, maxy = geometry.bounds
     return f"{miny},{minx},{maxy},{maxx}"
 
-def create_tasks(gdf, batch_size):
+def create_tasks(gdf, batch_size, endpoint_urls=None):
     """Yield batched Overpass download tasks across the configured endpoints.
 
     Parameters
@@ -178,12 +180,15 @@ def create_tasks(gdf, batch_size):
     list[tuple[str, int, str]]
         Tuples of ``(bbox, idx, url)`` for one download batch.
     """
+    if endpoint_urls is None:
+        endpoint_urls = urls
+
     rows = list(gdf.itertuples())
-    url_count = len(urls)
+    url_count = len(endpoint_urls)
 
     for start in range(0, len(rows), batch_size):
         batch = rows[start:start+batch_size]
-        yield [(r.bbox, r.idx, urls[i % url_count]) 
+        yield [(r.bbox, r.idx, endpoint_urls[i % url_count]) 
                for i, r in enumerate(batch)]
 
 def row_operation(bbox, idx_val, url, output_folder):
@@ -231,8 +236,12 @@ def main():
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     overrides = parse_config_overrides(start_index=1)
     cfg = load_config(script_name="NEW_02_EXTRACTOSMDATAFULL_GEOJSON", **overrides)
+    global pause_seconds
+    global urls
     overwrite = cfg["annotations"]["overwrite"]
     retrials = int(cfg["annotations"]["retries"])
+    urls = list(cfg["annotations"].get("overpass_urls", urls))
+    pause_seconds = float(cfg["annotations"].get("overpass_pause_seconds", pause_seconds))
 
     points_path = cfg["paths"]["corrected_all_filepath"]
 
@@ -242,7 +251,7 @@ def main():
 
     os.makedirs(output_folder, exist_ok=True)
     max_workers = int(cfg["annotations"]["max_workers"])
-    batch_size  = max_workers*len(urls)
+    batch_size  = max_workers * len(urls)
 
     poly = gpd.read_file(grid_filepath).to_crs(4326)
     poly['bbox'] = poly['geometry'].map(find_bbox)
@@ -267,7 +276,7 @@ def main():
         print(poly.head())
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for tasks in create_tasks(poly, batch_size):
+            for tasks in create_tasks(poly, batch_size, urls):
                 futures = [executor.submit(row_operation, bbox, idx_val, url, output_folder) for bbox, idx_val, url in tasks]
                 for future in as_completed(futures):
                     try:

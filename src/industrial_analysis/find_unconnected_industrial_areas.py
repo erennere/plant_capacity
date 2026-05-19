@@ -25,12 +25,24 @@ import pandas as pd
 try:
     from ..starter import load_config, parse_config_overrides
     from .. import pipelines as _pipelines_module
-    from ..pipelines import run_voronoi_approach, prepare_data, create_output_paths, _resolve_configured_callable
+    from ..pipelines import (
+        run_voronoi_approach,
+        prepare_data,
+        create_output_paths,
+        _resolve_configured_callable,
+        build_industrial_or_mixed_mask,
+    )
     from ..create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 except ImportError:
     from src.starter import load_config, parse_config_overrides
     import src.pipelines as _pipelines_module
-    from src.pipelines import run_voronoi_approach, prepare_data, create_output_paths, _resolve_configured_callable
+    from src.pipelines import (
+        run_voronoi_approach,
+        prepare_data,
+        create_output_paths,
+        _resolve_configured_callable,
+        build_industrial_or_mixed_mask,
+    )
     from src.create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 
 logger = logging.getLogger(__name__)
@@ -92,6 +104,7 @@ def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
 def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Filter WTTPs to those with industrial or mixed usage."""
     industrial_categories = cfg['industrial_category_numbers']
+    mixed_keywords = cfg.get('mixed_use_category_keywords')
     
     if not industrial_categories:
         logger.warning("No industrial categories configured; using all WTTPs")
@@ -99,10 +112,11 @@ def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDa
     
     logger.info(f"Filtering WTTPs by industrial categories: {industrial_categories}")
     
-    # category_number may be numeric; cast to str for consistent comparison
-    cat_as_str = wwtps_gdf['category_number'].astype(str)
-    industrial_as_str = [str(c) for c in industrial_categories]
-    mask = cat_as_str.isin(industrial_as_str) | cat_as_str.str.contains('mix', case=False, na=False)
+    mask = build_industrial_or_mixed_mask(
+        wwtps_gdf['category_number'],
+        industrial_categories,
+        mixed_keywords,
+    )
     
     filtered = wwtps_gdf[mask].copy()
     logger.info(f"Filtered to {len(filtered)} industrial/mixed WTTPs (from {len(wwtps_gdf)} total)")

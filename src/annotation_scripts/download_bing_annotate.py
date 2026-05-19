@@ -46,7 +46,8 @@ def safe_wkt_load(wkt_wtr):
     except Exception as e:
         return None
     
-BING_API_KEY = "de60014913a0464f83eec298da249356"
+BING_API_KEY = os.environ.get("BING_API_KEY", "")
+BING_IMAGERY_URL = "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial"
 RESOLUTIONS = { 
     1 :	78271.52,   
     2 :	39135.76,	
@@ -74,6 +75,7 @@ RES_Y = RESOLUTIONS[ZOOM_LEVEL]
 CELL_SIZE = 3072
 FACTOR = 1.194
 IMAGE_SIZE = [3072, 3072]
+BASE_Z17_RES = 1.1943285669555664
 MAX_WORKERS = 64
 GEOREFERENCED = False
 FONTSIZE = 24
@@ -89,8 +91,7 @@ transformer = Transformer.from_crs(
 def download_bing_image(center_lon, center_lat):
     """Download one imagery tile centered on the provided lon/lat coordinates."""
     url = (
-        "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial"
-        f"/{center_lat},{center_lon}"
+        f"{BING_IMAGERY_URL}/{center_lat},{center_lon}"
         f"/{ZOOM_LEVEL}"
         f"?mapSize={IMAGE_SIZE[0]},{IMAGE_SIZE[1]}"
         f"&key={BING_API_KEY}"
@@ -121,8 +122,6 @@ def mercator_to_pixel(x, y, cx, cy, IMAGE_SIZE, wrap=True):
     # At Z17, a 256px tile covers ~305.75 meters.
     # At Z17, a 512px tile covers ~611.5 meters.
     # Your 3072px image covers ~3669 meters.
-    
-    BASE_Z17_RES = 1.1943285669555664 
     
     # 2. Adjust resolution for your specific image size.
     # Since Maxar Zoom 17 typically refers to the 512px tile scale, 
@@ -487,6 +486,18 @@ if __name__ == "__main__":
 
     cfg = load_config(script_name="download_bing_annotate", **overrides)
     logging.info("Configuration loaded")
+
+    annotations_cfg = cfg.get("annotations", {})
+    CELL_SIZE = int(annotations_cfg.get("cell_size", CELL_SIZE))
+    FACTOR = float(annotations_cfg.get("factor", FACTOR))
+    image_size_px = int(annotations_cfg.get("image_size_px", IMAGE_SIZE[0]))
+    IMAGE_SIZE = [image_size_px, image_size_px]
+    ZOOM_LEVEL = int(annotations_cfg.get("zoom_level", ZOOM_LEVEL))
+    RES_X = RESOLUTIONS[ZOOM_LEVEL]
+    RES_Y = RESOLUTIONS[ZOOM_LEVEL]
+    BASE_Z17_RES = float(annotations_cfg.get("base_z17_resolution", BASE_Z17_RES))
+    BING_IMAGERY_URL = annotations_cfg.get("bing_imagery_url", BING_IMAGERY_URL)
+    BING_API_KEY = annotations_cfg.get("bing_api_key", BING_API_KEY) or BING_API_KEY
 
     images_dir = cfg["paths"]["annotations_images_dir"]
     grid_filedir = cfg["paths"]["annotations_grid_dir"]

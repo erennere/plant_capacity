@@ -270,7 +270,7 @@ def main():
     polygons_path = cfg['paths']['non_served_above_threshold_outpath']
     rivers_path = cfg['paths']['rivershed_output_path']
     output_path = cfg['paths']['non_served_nxt_river_outpath']
-    x_distance = 5000  # meters
+    x_distance = float(cfg.get('x_distance', 5000))
     # max_workers is provided via CLI for this script.
     max_workers = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 32
     if max_workers < 1:

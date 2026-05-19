@@ -51,7 +51,7 @@ A successful run writes the merged industrial layer and the unconnected-industri
 
 ## Smart Behaviors
 - `download_and_vectorize.py` caches rasters when `industrial_persist_rasters=true` and can reuse the merged industrial GeoPackage when overwrite is disabled.
-- `find_unconnected_industrial_areas.py` uses the numeric list in `industrial_category_numbers` to restrict the Voronoi branch to industrial or mixed-use WWTPs.
+- `find_unconnected_industrial_areas.py` uses `industrial_category_numbers` together with `mixed_use_category_keywords` to include both explicit industrial labels and mixed-use category text matches.
 - Both scripts accept the same positional override layout used by the rest of the pipeline.
 
 Delete the industrial output directory or enable the overwrite flags to force a rerun.
@@ -65,6 +65,7 @@ Delete the industrial output directory or enable the overwrite flags to force a 
 | `download_and_vectorize.industrial_simplify_tolerance` | `0.001` | Geometry simplification tolerance |
 | `download_and_vectorize.industrial_vectorize_overwrite` | `false` | Overwrite vectorized outputs |
 | `find_unconnected_industrial_areas.industrial_category_numbers` | `[]` | Numeric filter for industrial WWTP categories |
+| `find_unconnected_industrial_areas.mixed_use_category_keywords` | `['mix']` | Token list for mixed-use category matching |
 | `find_unconnected_industrial_areas.industrial_unconnected_overwrite` | `false` | Overwrite unconnected outputs |
 | `find_unconnected_industrial_areas.paths.industrial_unconnected_output` | template | Unconnected industrial parquet |
 

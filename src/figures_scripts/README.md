@@ -18,6 +18,18 @@ This module turns pipeline outputs into communication-ready products. It creates
 ## How It Fits In
 It runs near the end of the pipeline. Its inputs come from the population, risk, validation, and Voronoi stages, and its outputs are the charts and map layers used for review or publication.
 
+## Required Starter Data Files
+
+Before running this stage, these outputs from prior stages must exist.
+
+| Data file | Why needed | Default path status |
+| --- | --- | --- |
+| Population-enriched Voronoi outputs | core layer for map export and plots | produced by `add_pop.sh` |
+| Risk calculation outputs | at-risk population and impact polygons | produced by `pop_at_risk_river_calculations/` stage |
+| Validation results | comparison summaries for reporting | produced by `pop_validation_scripts/` |
+| Country boundaries | spatial overlays for composite plots | `data/boundaries/ne_110m_admin_0_countries.shp` (present) |
+| Raster country statistics | WWTP type summaries for pie charts | produced by `create_rasters.py` |
+
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
@@ -94,8 +106,13 @@ Delete the corresponding figure output directory to force a rerun.
 | `composite_area_population_plots.zonal_sum_default_column` | `2024_zonal_sum` | Preferred zonal-sum column |
 | `composite_area_population_plots.paths.country_boundaries_filepath` | template | Country boundary input |
 | `piechart_figure.industrial_category_numbers` | null | Industrial category filter |
+| `piechart_figure.mixed_use_category_keywords` | `['mix']` | Mixed-use token list merged with industrial filter |
+| `piechart_figure.min_total_size` | `50000000` | Minimum summed area threshold per country |
 | `piechart_interactive.industrial_category_numbers` | null | Industrial category filter |
+| `piechart_interactive.mixed_use_category_keywords` | `['mix']` | Mixed-use token list merged with industrial filter |
+| `piechart_interactive.min_total_size` | `50000000` | Minimum summed area threshold per country |
 | `pop_at_risk_figures.zoom_level` | null | Risk figure tile zoom level |
+| `pop_at_risk_figures.save_dpi` | `1000` | Export DPI for saved risk figures |
 | `pop_at_risk_figures.paths.figures_dir` | template | Figure output directory |
 | `pop_at_risk_figures.paths.non_served_outpath` | null | Non-served area input |
 | `pop_at_risk_figures.paths.pop_at_risk_output_filepath` | null | At-risk parquet input |
