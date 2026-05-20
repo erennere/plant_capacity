@@ -7,6 +7,7 @@ import os
 from string import Formatter
 import sys
 from copy import deepcopy
+from typing import Any
 
 import yaml
 
@@ -33,6 +34,13 @@ class ConfigResolutionError(KeyError):
         super().__init__(message)
 
 
+    ################################################################################
+    # SECTION 1: CLI OVERRIDE NORMALIZATION & PARSING
+    ################################################################################
+
+    # Primitive value normalizers/parsers
+
+
 def _normalize_optional_cli_value(value, preserve_empty=False):
     """Normalize optional CLI values, treating empty/None/NaN/null as omitted."""
     if value is None:
@@ -48,7 +56,6 @@ def _normalize_optional_cli_value(value, preserve_empty=False):
         return normalized
     return value
 
-
 def _parse_optional_int(value, field_name):
     """Parse optional integer overrides."""
     value = _normalize_optional_cli_value(value)
@@ -58,7 +65,6 @@ def _parse_optional_int(value, field_name):
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid {field_name} '{value}'. Must be an integer.") from exc
-
 
 def _parse_optional_weight_func(value, field_name="weight_func"):
     """Parse optional weight function mode override."""
@@ -70,12 +76,10 @@ def _parse_optional_weight_func(value, field_name="weight_func"):
         return normalized
     raise ValueError(f"Invalid {field_name} '{value}'. Must be one of: mult, add, ''.")
 
-
 def _normalize_weight_func(value, field_name="weight_func"):
     """Return a normalized weight function token, defaulting missing values to ''."""
     normalized = _parse_optional_weight_func(value, field_name)
     return "" if normalized is None else normalized
-
 
 def _parse_optional_bool(value, field_name):
     """Parse optional boolean overrides from common truthy/falsey strings."""
@@ -92,7 +96,6 @@ def _parse_optional_bool(value, field_name):
         return False
     raise ValueError(f"Invalid {field_name} '{value}'. Must be a boolean value.")
 
-
 def _parse_optional_float(value, field_name):
     """Parse optional float overrides."""
     value = _normalize_optional_cli_value(value)
@@ -103,22 +106,20 @@ def _parse_optional_float(value, field_name):
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid {field_name} '{value}'. Must be a number.") from exc
 
-
-def _collect_raw_overrides(args=None, argv=None, start_index=1):
+def _collect_raw_overrides(args: Any = None, argv: list[str] | None = None, start_index: int = 1):
     start_index = int(start_index)
     if start_index < 0:
         raise ValueError("start_index must be >= 0")
 
-    if args is None:
-        argv = sys.argv if argv is None else argv
+    argv_values: list[str] = list(sys.argv) if argv is None else list(argv)
 
-    raw_overrides = {}
+    raw_overrides: dict[str, Any] = {}
     for field_name, offset, preserve_empty in _OVERRIDE_FIELDS:
         if args is not None:
             raw_value = getattr(args, field_name, None)
         else:
-            index = start_index + offset
-            raw_value = argv[index] if len(argv) > index else None
+            index: int = start_index + offset
+            raw_value = next(iter(argv_values[index:index + 1]), None)
         raw_overrides[field_name] = _normalize_optional_cli_value(
             raw_value,
             preserve_empty=preserve_empty,
@@ -126,7 +127,8 @@ def _collect_raw_overrides(args=None, argv=None, start_index=1):
     return raw_overrides
 
 
-def parse_config_overrides(args=None, argv=None, start_index=1):
+# Public parser used by scripts before load_config()
+def parse_config_overrides(args: Any = None, argv: list[str] | None = None, start_index: int = 1):
     """Parse optional config overrides for ``load_config``."""
     raw_overrides = _collect_raw_overrides(args=args, argv=argv, start_index=start_index)
 
@@ -141,17 +143,9 @@ def parse_config_overrides(args=None, argv=None, start_index=1):
     }
 
 
-def _normalize_cfg_path(path_value, base_dir):
-    """Return an absolute filesystem path for a config entry, passing URLs through unchanged."""
-    if not isinstance(path_value, str):
-        return path_value
-    if "://" in path_value:
-        return path_value
-
-    expanded = os.path.expanduser(path_value)
-    if os.path.isabs(expanded):
-        return os.path.abspath(expanded)
-    return os.path.abspath(os.path.join(base_dir, expanded))
+################################################################################
+# SECTION 2: RAW CONFIG LOADING & SECTION INHERITANCE
+################################################################################
 
 
 def _load_raw_config(config_path: str) -> dict:
@@ -267,6 +261,11 @@ def resolve_config(script_name: str, raw_config: dict) -> dict:
     return _resolve_mapping(script_name, tuple(), section_cfg, base_cfg)
 
 
+################################################################################
+# SECTION 3: RUNTIME OVERRIDES & DERIVED VALUES
+################################################################################
+
+
 def _apply_optional_override(cfg: dict, key: str, override, parser=None) -> None:
     if override is None and key not in cfg:
         return
@@ -367,6 +366,24 @@ def _derive_runtime_values(cfg: dict, default_distance_additive, default_distanc
     return derived
 
 
+################################################################################
+# SECTION 4: PATH TEMPLATE EXPANSION
+################################################################################
+
+
+def _normalize_cfg_path(path_value, base_dir):
+    """Return an absolute filesystem path for a config entry, passing URLs through unchanged."""
+    if not isinstance(path_value, str):
+        return path_value
+    if "://" in path_value:
+        return path_value
+
+    expanded = os.path.expanduser(path_value)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded)
+    return os.path.abspath(os.path.join(base_dir, expanded))
+
+
 def _format_field_names(template: str) -> list[str]:
     field_names = []
     for _, field_name, _, _ in _FORMATTER.parse(template):
@@ -413,6 +430,11 @@ def _expand_paths(script_name: str, paths_cfg: dict, config_dir: str, cfg: dict,
     return expanded_paths
 
 
+################################################################################
+# SECTION 5: PUBLIC CONFIG API
+################################################################################
+
+
 def get_runtime_params(cfg: dict) -> dict:
     """Return validated impact-model runtime parameters from the loaded config."""
     section = cfg["impact_polygons_pop_params"]
@@ -452,7 +474,10 @@ def load_config(
     config_dir = os.path.dirname(config_path)
     raw_config = _load_raw_config(config_path)
 
+    # Resolve the script section against earlier canonical sections first.
     script_cfg = resolve_config(script_name, raw_config)
+
+    # Apply optional CLI/runtime overrides onto the resolved section.
     script_cfg = _apply_runtime_overrides(
         script_cfg,
         level=level,
@@ -464,6 +489,7 @@ def load_config(
         dynamic_buffer_k=dynamic_buffer_k,
     )
 
+    # Derive helper values and expand any templated output/input paths last.
     derived = _derive_runtime_values(script_cfg, default_distance_additive, default_distance_multiplicative)
     if "paths" in script_cfg:
         script_cfg["paths"] = _expand_paths(script_name, script_cfg["paths"], config_dir, script_cfg, derived)
