@@ -16,8 +16,6 @@ pytestmark = pytest.mark.unit
 
 
 def test_new04_exportgeotiff_script_executes_with_dummy_data(monkeypatch):
-    import src.create_voronoi as cv
-
     grid = gpd.GeoDataFrame(
         {"idx": [1], "geometry": [box(0, 0, 10, 10)]},
         geometry="geometry",
@@ -48,7 +46,7 @@ def test_new04_exportgeotiff_script_executes_with_dummy_data(monkeypatch):
         def savefig(self, *args, **kwargs):
             return None
 
-    monkeypatch.setattr(cv, "ensure_output_dir_for_file", lambda path: None)
+    monkeypatch.setattr("src.utils.ensure_output_dir_for_file", lambda path: None)
     monkeypatch.setattr("geopandas.read_file", fake_read_file)
     monkeypatch.setattr("matplotlib.pyplot.subplots", lambda *args, **kwargs: (_Fig(), _Ax()))
     monkeypatch.setattr("matplotlib.pyplot.close", lambda fig: None)

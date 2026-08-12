@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -8,7 +9,6 @@ import pytest
 from shapely.geometry import LineString, Point, Polygon
 
 from src import combine_watersheds
-from src.figures_scripts import convert_voronoi_to_geojson_for_map
 from src.pop_at_risk_river_calculations import assign_rivers_to_basin
 
 
@@ -20,10 +20,8 @@ def test_extract_and_merge_geodata_merges_first_readable_layer_per_zip(monkeypat
     out_dir = tmp_path / "out"
     zip_dir.mkdir()
 
-    # Two readable archives and one malformed archive.
     (zip_dir / "a.zip").write_bytes(b"PK\x03\x04fake")
     (zip_dir / "b.zip").write_bytes(b"PK\x03\x04fake")
-    (zip_dir / "bad.zip").write_text("not-a-zip", encoding="utf-8")
 
     captured = {}
 
@@ -61,8 +59,6 @@ def test_extract_and_merge_geodata_merges_first_readable_layer_per_zip(monkeypat
             self.zip_path = Path(zip_path)
 
         def __enter__(self):
-            if self.zip_path.name == "bad.zip":
-                raise combine_watersheds.zipfile.BadZipFile("bad")
             return self
 
         def __exit__(self, exc_type, exc, tb):
@@ -96,6 +92,38 @@ def test_extract_and_merge_geodata_merges_first_readable_layer_per_zip(monkeypat
     assert captured["ensured"].endswith("merged.gpkg")
     assert captured["rows"] == 2
     assert captured["driver"] == "GPKG"
+
+
+def test_extract_and_merge_geodata_propagates_bad_zip(monkeypatch, tmp_path):
+    """A corrupt archive must abort the merge, not be skipped silently."""
+    zip_dir = tmp_path / "zips"
+    zip_dir.mkdir()
+    (zip_dir / "bad.zip").write_text("not-a-zip", encoding="utf-8")
+
+    class _FakeTmpDir:
+        def __enter__(self):
+            root = tmp_path / "tmp"
+            root.mkdir(exist_ok=True)
+            return str(root)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeZip:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            raise combine_watersheds.zipfile.BadZipFile("bad")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(combine_watersheds.tempfile, "TemporaryDirectory", _FakeTmpDir)
+    monkeypatch.setattr(combine_watersheds.zipfile, "ZipFile", _FakeZip)
+
+    with pytest.raises(combine_watersheds.zipfile.BadZipFile):
+        combine_watersheds.extract_and_merge_geodata(zip_dir, tmp_path / "out")
 
 
 def test_extract_and_merge_geodata_handles_no_readable_layers(monkeypatch, tmp_path):
@@ -139,7 +167,8 @@ def test_extract_and_merge_geodata_handles_no_readable_layers(monkeypatch, tmp_p
 
     try:
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
-        combine_watersheds.extract_and_merge_geodata(zip_dir, out_dir)
+        with pytest.raises(RuntimeError, match="No readable geospatial layer"):
+            combine_watersheds.extract_and_merge_geodata(zip_dir, out_dir)
     finally:
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
 
@@ -236,16 +265,17 @@ def test_combine_watersheds_main_handles_missing_optional_overrides(monkeypatch,
             }
         return cfg_initial
 
-    monkeypatch.setattr(combine_watersheds.os, "chdir", lambda path: None)
     monkeypatch.setattr(
         combine_watersheds,
         "parse_config_overrides",
-        lambda start_index=1: {
+        lambda *a, **k: {
             "level": None,
             "version": None,
             "buffer": None,
             "weight_method": None,
             "weight_func": None,
+            "dynamic_buffering": None,
+            "dynamic_buffer_k": None,
         },
     )
     monkeypatch.setattr(combine_watersheds, "load_config", fake_load_config)
@@ -273,7 +303,7 @@ def test_combine_watersheds_main_requires_levels_root(monkeypatch, tmp_path):
     }
 
     monkeypatch.setattr(combine_watersheds.os, "chdir", lambda path: None)
-    monkeypatch.setattr(combine_watersheds, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(combine_watersheds, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(combine_watersheds, "load_config", lambda **kwargs: cfg_initial)
     monkeypatch.setattr(combine_watersheds.os.path, "isdir", lambda p: False)
 
@@ -281,135 +311,82 @@ def test_combine_watersheds_main_requires_levels_root(monkeypatch, tmp_path):
         combine_watersheds.main()
 
 
-def test_convert_voronoi_main_converts_to_centroids_and_updates_html(monkeypatch, tmp_path):
-    data_dir = tmp_path / "data"
-    figures_dir = data_dir / "figures"
-    figures_dir.mkdir(parents=True)
+def test_combine_watersheds_main_honors_explicit_level_override(monkeypatch, tmp_path):
+    """An explicit --level processes only that level (combine_watersheds F1).
 
-    geojson_output = data_dir / "figures" / "points.geojson"
-    html_path = figures_dir / "sizes_interactive_map.html"
-    html_path.write_text('fetch("old/path.geojson")\n', encoding="utf-8")
+    The flag used to be parsed and then discarded in favour of discovering every
+    ``lvl*`` directory. This pins the honor-the-flag branch, and the companion
+    test below pins that omitting the flag still discovers every level.
+    """
+    calls = []
+    listdir_calls = []
 
-    cfg = {
-        "figures": {"approach": 1},
-        "paths": {
-            "leaflet_geojson_filepath": str(geojson_output),
-            "data_dir": str(data_dir),
-        },
-    }
+    def fake_load_config(**kwargs):
+        level = kwargs.get("level")
+        return {
+            "paths": {
+                "watersheds_zip_dir": str(tmp_path / f"lvl{level}"),
+                "watershed": str(tmp_path / "out" / f"lvl{level}.gpkg"),
+            }
+        }
 
-    src = gpd.GeoDataFrame(
-        {
-            "total_area": [10.0, 20.0],
-            "round_area": [6.0, 12.0],
-            "geometry": [Polygon([(0, 0), (0, 1), (1, 1), (0, 0)]), None],
-        },
-        geometry="geometry",
-        crs="EPSG:4326",
-    )
-
-    captured = {}
-    original_to_file = gpd.GeoDataFrame.to_file
-
-    def fake_to_file(self, path, driver=None, index=None, **kwargs):
-        captured["path"] = path
-        captured["driver"] = driver
-        captured["index"] = index
-        captured["geoms"] = list(self.geometry)
-
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map.os, "chdir", lambda path: None)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "create_pop_output_paths", lambda _: {"voronoi": {"1": "in.gpkg"}})
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map.gpd, "read_file", lambda *args, **kwargs: src.copy())
+    monkeypatch.setattr(combine_watersheds.os, "chdir", lambda path: None)
     monkeypatch.setattr(
-        convert_voronoi_to_geojson_for_map,
-        "ensure_output_dir_for_file",
-        lambda path: captured.setdefault("ensured", path),
+        combine_watersheds,
+        "parse_config_overrides",
+        lambda *a, **k: {"level": "9", "version": None, "buffer": None},
+    )
+    monkeypatch.setattr(combine_watersheds, "load_config", fake_load_config)
+    monkeypatch.setattr(combine_watersheds.os, "listdir", lambda p: listdir_calls.append(p) or [])
+    monkeypatch.setattr(
+        combine_watersheds,
+        "extract_and_merge_geodata",
+        lambda zip_dir, out_dir, output_filename="merged.gpkg": calls.append((zip_dir, output_filename)),
     )
 
-    try:
-        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
-        convert_voronoi_to_geojson_for_map.main()
-    finally:
-        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
+    combine_watersheds.main()
 
-    assert captured["ensured"] == str(geojson_output)
-    assert captured["path"] == str(geojson_output)
-    assert captured["driver"] == "GeoJSON"
-    assert captured["index"] is False
-    assert captured["geoms"][0].geom_type == "Point"
-    assert captured["geoms"][1] is None
-    assert 'fetch("./points.geojson")' in html_path.read_text(encoding="utf-8")
+    assert len(calls) == 1
+    assert calls[0][0].endswith("lvl9")
+    assert calls[0][1] == "lvl9.gpkg"
+    # The discovery branch must be skipped entirely when --level is given.
+    assert listdir_calls == []
 
 
-def test_convert_voronoi_main_skips_html_rewrite_when_file_missing(monkeypatch, tmp_path):
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True)
+def test_combine_watersheds_main_discovers_every_level_without_override(monkeypatch, tmp_path):
+    """No --level keeps the original discover-all-levels behavior."""
+    calls = []
 
-    cfg = {
-        "figures": {"approach": 1},
-        "paths": {
-            "leaflet_geojson_filepath": str(data_dir / "figures" / "points.geojson"),
-            "data_dir": str(data_dir),
-        },
-    }
+    def fake_load_config(**kwargs):
+        level = kwargs.get("level")
+        if level is None:
+            return {
+                "paths": {
+                    "watersheds_zip_dir": str(tmp_path / "levels" / "lvl6"),
+                    "watershed": str(tmp_path / "out" / "lvl6.gpkg"),
+                }
+            }
+        return {
+            "paths": {
+                "watersheds_zip_dir": str(tmp_path / "levels" / f"lvl{level}"),
+                "watershed": str(tmp_path / "out" / f"lvl{level}.gpkg"),
+            }
+        }
 
-    src = gpd.GeoDataFrame(
-        {"total_area": [1.0], "round_area": [1.0], "geometry": [Polygon([(0, 0), (1, 0), (0, 1), (0, 0)])]},
-        geometry="geometry",
-        crs="EPSG:4326",
+    monkeypatch.setattr(combine_watersheds.os, "chdir", lambda path: None)
+    monkeypatch.setattr(combine_watersheds, "parse_config_overrides", lambda *a, **k: {"level": None})
+    monkeypatch.setattr(combine_watersheds, "load_config", fake_load_config)
+    monkeypatch.setattr(combine_watersheds.os, "listdir", lambda p: ["lvl6", "lvl9", "notalevel"])
+    monkeypatch.setattr(combine_watersheds.os.path, "isdir", lambda p: True)
+    monkeypatch.setattr(
+        combine_watersheds,
+        "extract_and_merge_geodata",
+        lambda zip_dir, out_dir, output_filename="merged.gpkg": calls.append(output_filename),
     )
 
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map.os, "chdir", lambda path: None)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "create_pop_output_paths", lambda _: {"voronoi": {"1": "in.gpkg"}})
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map.gpd, "read_file", lambda *args, **kwargs: src.copy())
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "ensure_output_dir_for_file", lambda path: None)
-    monkeypatch.setattr(gpd.GeoDataFrame, "to_file", lambda self, *args, **kwargs: None)
+    combine_watersheds.main()
 
-    convert_voronoi_to_geojson_for_map.main()
-
-
-def test_convert_voronoi_main_requires_figures_approach(monkeypatch, tmp_path):
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True)
-
-    cfg = {
-        "paths": {
-            "leaflet_geojson_filepath": str(data_dir / "figures" / "points.geojson"),
-            "data_dir": str(data_dir),
-        },
-    }
-
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map.os, "chdir", lambda path: None)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "load_config", lambda **overrides: cfg)
-
-    with pytest.raises(KeyError, match="figures"):
-        convert_voronoi_to_geojson_for_map.main()
-
-
-def test_convert_voronoi_main_requires_voronoi_mapping_for_selected_approach(monkeypatch, tmp_path):
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True)
-
-    cfg = {
-        "figures": {"approach": 2},
-        "paths": {
-            "leaflet_geojson_filepath": str(data_dir / "figures" / "points.geojson"),
-            "data_dir": str(data_dir),
-        },
-    }
-
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map.os, "chdir", lambda path: None)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(convert_voronoi_to_geojson_for_map, "create_pop_output_paths", lambda _: {"voronoi": {"1": "in.gpkg"}})
-
-    with pytest.raises(KeyError, match="2"):
-        convert_voronoi_to_geojson_for_map.main()
+    assert sorted(calls) == ["lvl6.gpkg", "lvl9.gpkg"]
 
 
 def test_extract_first_digit_handles_strings_and_missing_values():
@@ -466,7 +443,7 @@ def test_assign_hybas_id_by_length_picks_longest_intersection_for_multi_match():
     assert result["HYBAS_ID"].tolist() == [1, 1]
 
 
-def test_orchestrate_intersections_keeps_unmatched_regions_and_combines_results(monkeypatch):
+def test_orchestrate_intersections_discards_unmatched_regions_and_combines_results(monkeypatch):
     hybas = gpd.GeoDataFrame(
         {
             "HYBAS_ID": ["1A"],
@@ -525,67 +502,54 @@ def test_orchestrate_intersections_keeps_unmatched_regions_and_combines_results(
         max_workers=1,
     )
 
-    assert sorted(out["HYRIV_ID"].tolist()) == ["1x", "2y"]
-    matched = out[out["HYRIV_ID"] == "1x"]
-    unmatched = out[out["HYRIV_ID"] == "2y"]
-    assert matched["HYBAS_ID"].iloc[0] == "1A"
-    assert "HYBAS_ID" not in unmatched.columns or pd.isna(unmatched.get("HYBAS_ID", pd.Series([pd.NA])).iloc[0])
+    # Region "2" has no basin polygon, so its rivers are discarded rather than
+    # emitted with an empty HYBAS_ID.
+    assert out["HYRIV_ID"].tolist() == ["1x"]
+    assert out["HYBAS_ID"].iloc[0] == "1A"
 
 
-def test_convert_voronoi_script_entrypoint_runs_via_fallback_imports(monkeypatch, tmp_path):
-    import os
-    import runpy
-
-    import src.create_voronoi as create_voronoi_mod
-    import src.pipelines as pipelines_mod
-    import src.starter as starter_mod
-
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True)
-    cfg = {
-        "figures": {"approach": 1},
-        "paths": {
-            "leaflet_geojson_filepath": str(data_dir / "figures" / "points.geojson"),
-            "data_dir": str(data_dir),
-        },
-    }
-    src = gpd.GeoDataFrame(
-        {
-            "total_area": [1.0],
-            "round_area": [1.0],
-            "geometry": [Polygon([(0, 0), (1, 0), (0, 1), (0, 0)])],
-        },
+def test_orchestrate_intersections_raises_when_every_region_fails(monkeypatch):
+    hybas = gpd.GeoDataFrame(
+        {"HYBAS_ID": ["1A"], "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]},
         geometry="geometry",
         crs="EPSG:4326",
     )
-    captured = {}
-    module_path = Path(__file__).resolve().parents[3] / "src" / "figures_scripts" / "convert_voronoi_to_geojson_for_map.py"
+    rivers = gpd.GeoDataFrame(
+        {"HYRIV_ID": ["1x"], "geometry": [LineString([(0, 0.5), (1, 0.5)])]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
 
-    monkeypatch.setattr(os, "chdir", lambda path: None)
-    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(starter_mod, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(pipelines_mod, "create_pop_output_paths", lambda _: {"voronoi": {"1": "in.gpkg"}})
-    monkeypatch.setattr(create_voronoi_mod, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
-    monkeypatch.setattr(gpd, "read_file", lambda *args, **kwargs: src.copy())
+    class _Future:
+        def result(self):
+            raise RuntimeError("worker exploded")
 
-    original_to_file = gpd.GeoDataFrame.to_file
+    class _Exec:
+        def __init__(self, max_workers=None):
+            self.max_workers = max_workers
 
-    def fake_to_file(self, path, driver=None, index=None, **kwargs):
-        captured["write"] = {"path": path, "driver": driver, "index": index, "rows": len(self)}
+        def __enter__(self):
+            return self
 
-    try:
-        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
-        runpy.run_path(str(module_path), run_name="__main__")
-    finally:
-        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
+        def __exit__(self, exc_type, exc, tb):
+            return False
 
-    assert captured["ensured"] == cfg["paths"]["leaflet_geojson_filepath"]
-    assert captured["write"] == {
-        "path": cfg["paths"]["leaflet_geojson_filepath"],
-        "driver": "GeoJSON",
-        "index": False,
-        "rows": 1,
-    }
+        def submit(self, fn, *args, **kwargs):
+            return _Future()
+
+    monkeypatch.setattr(assign_rivers_to_basin, "ProcessPoolExecutor", _Exec)
+    monkeypatch.setattr(assign_rivers_to_basin, "as_completed", lambda futures: list(futures))
+    monkeypatch.setattr(assign_rivers_to_basin, "tqdm", lambda iterable, **kwargs: iterable)
+
+    with pytest.raises(RuntimeError, match="produced no assigned rivers"):
+        assign_rivers_to_basin.orchestrate_intersections(
+            hybas,
+            rivers,
+            hybas_col="HYBAS_ID",
+            hyshed_col="HYRIV_ID",
+            new_col="continent",
+            max_workers=1,
+        )
 
 
 def test_assign_rivers_orchestrate_intersections_accepts_leading_n_region(monkeypatch):
@@ -701,9 +665,9 @@ def test_assign_rivers_main_uses_default_workers_for_non_digit_argv(monkeypatch,
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(assign_rivers_to_basin.sys, "argv", ["assign_rivers_to_basin.py", "not-a-number"])
+    monkeypatch.setattr(sys, "argv", ["assign_rivers_to_basin.py"])
     monkeypatch.setattr(assign_rivers_to_basin.os, "chdir", lambda path: None)
-    monkeypatch.setattr(assign_rivers_to_basin, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(assign_rivers_to_basin, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(assign_rivers_to_basin, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(assign_rivers_to_basin.gpd, "read_file", lambda path: gdf.copy())
     monkeypatch.setattr(assign_rivers_to_basin, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))

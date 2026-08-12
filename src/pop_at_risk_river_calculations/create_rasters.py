@@ -24,37 +24,33 @@ from rasterio import windows
 from rasterio.features import shapes, geometry_mask, rasterize
 from exactextract import exact_extract
 from shapely.geometry import shape, box
-from shapely import to_wkt, make_valid
+from shapely import to_wkt
 from shapely.ops import unary_union
 
 try:
     from ..add_pop import find_newest_country_tif_files
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import download_overture_maps, intersects_with_country_db, ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..create_voronoi import download_overture_maps, intersects_with_country_db
     from ..pipelines import create_pop_output_paths
+    from ..utils import configure_logging, ensure_output_dir_for_file
+    from ..geo_utils import repair_geometry
     from .find_pop_in_danger_pop import find_bbox, finding_tiles
 except ImportError:
     from src.add_pop import find_newest_country_tif_files
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import download_overture_maps, intersects_with_country_db, ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.create_voronoi import download_overture_maps, intersects_with_country_db
     from src.pipelines import create_pop_output_paths
+    from src.utils import configure_logging, ensure_output_dir_for_file
+    from src.geo_utils import repair_geometry
     from src.pop_at_risk_river_calculations.find_pop_in_danger_pop import find_bbox, finding_tiles
 
-logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
 def _sanitize_polygon_geom(geom):
     """Return a valid Polygon/MultiPolygon geometry or None."""
-    if geom is None or geom.is_empty:
-        return None
-
-    try:
-        geom = make_valid(geom)
-    except Exception:
-        geom = geom.buffer(0)
-
-    if geom is None or geom.is_empty:
+    geom = repair_geometry(geom)
+    if geom is None:
         return None
 
     if geom.geom_type in ("Polygon", "MultiPolygon"):
@@ -451,6 +447,13 @@ def orchestrate_country_intersection(raster_path, polygons_gdf, watershed_gdf, o
     gdf = extract_worldpop_universal(raster_path, watershed_gdf, polygons_gdf, min_pixels=min_pixels, zoom_level=zoom_level, basin_col=basin_col)
     return filepath, sum_pos, sum_neg, gdf
 
+def _append_csv(df, filepath):
+    """Append ``df`` to ``filepath``, writing the header only on first creation."""
+    ensure_output_dir_for_file(filepath)
+    exists = os.path.exists(filepath)
+    df.to_csv(filepath, index=False, mode='a' if exists else 'w', header=not exists)
+
+
 def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_output_filepath, non_served_outpath, max_workers=4,
                               min_pixels=9, zoom_level=8, country_col='ISO_2', basin_col='HYBAS_ID'):
     """
@@ -528,17 +531,19 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
                            desc="Processing countries"):
             country = future_to_country[future]
             try:
-                _, sum_pos, sum_neg, gdf = future.result()  # Raises exception if failed
+                # Named island_gdf, not gdf: this loop runs inside a function whose
+                # own `gdf` parameter is still needed by later iterations.
+                _, sum_pos, sum_neg, island_gdf = future.result()  # Raises exception if failed
 
-                if gdf is not None and not gdf.empty:
-                    gdf['country'] = country
-                    if gdf.crs is None:
+                if island_gdf is not None and not island_gdf.empty:
+                    island_gdf['country'] = country
+                    if island_gdf.crs is None:
                         logger.warning("[%s] Extracted islands missing CRS; assuming EPSG:4326", country)
-                        gdf = gdf.set_crs(4326, allow_override=True)
-                    elif gdf.crs.to_epsg() != 4326:
-                        gdf = gdf.to_crs(4326)
-                    gdf['geometry'] = gdf.geometry.apply(to_wkt)                
-                elif gdf is None:
+                        island_gdf = island_gdf.set_crs(4326, allow_override=True)
+                    elif island_gdf.crs.to_epsg() != 4326:
+                        island_gdf = island_gdf.to_crs(4326)
+                    island_gdf['geometry'] = island_gdf.geometry.apply(to_wkt)
+                elif island_gdf is None:
                     logger.warning("[%s] No island dataframe returned", country)
 
                 if sum_pos is None:
@@ -553,21 +558,14 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
                     'population_served_index': [sum_pos/(sum_pos + abs(sum_neg) + 0.1)]
                 }
                 stats = pd.DataFrame(stats)
-                if os.path.exists(csv_output_filepath):
-                    ensure_output_dir_for_file(csv_output_filepath)
-                    stats.to_csv(csv_output_filepath, index=False, mode='a', header=False)
-                else: 
-                    ensure_output_dir_for_file(csv_output_filepath)
-                    stats.to_csv(csv_output_filepath, index=False, header=True)
+                # No inner except here: a failed stats/polygon write must reach the
+                # outer handler so the country is recorded as failed rather than
+                # reported as "processed successfully" with no output on disk.
+                _append_csv(stats, csv_output_filepath)
 
-                if gdf is not None and not gdf.empty:
-                    if os.path.exists(non_served_outpath.replace('.gpkg', '.csv')):
-                        ensure_output_dir_for_file(non_served_outpath.replace('.gpkg', '.csv'))
-                        gdf.to_csv(non_served_outpath.replace('.gpkg', '.csv'), index=False, mode='a', header=False)
-                    else:
-                        ensure_output_dir_for_file(non_served_outpath.replace('.gpkg', '.csv'))
-                        gdf.to_csv(non_served_outpath.replace('.gpkg', '.csv'), index=False, header=True)
-            
+                if island_gdf is not None and not island_gdf.empty:
+                    _append_csv(island_gdf, non_served_outpath.replace('.gpkg', '.csv'))
+
                 logger.warning("[OK] %s: processed successfully", country)
                 results[country] = True
             except Exception as e:
@@ -576,20 +574,18 @@ def orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_dir, csv_outp
     return results
 
 def parse_args():
-    """Parse optional positional sharding args: job_index and total_jobs."""
+    """Parse sharding args and standardized named config overrides."""
     parser = argparse.ArgumentParser(
         description="Create signed rasters and unserved island stats for a country shard."
     )
-    parser.add_argument("job_index", nargs="?", type=int, default=0)
-    parser.add_argument("total_jobs", nargs="?", type=int, default=1)
-    parser.add_argument("level", nargs="?", default=None)
-    parser.add_argument("version", nargs="?", default=None)
-    parser.add_argument("buffer", nargs="?", default=None)
-    parser.add_argument("weight_method", nargs="?", default=None)
-    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
-    parser.add_argument("dynamic_buffering", nargs="?", default=None, help="Optional dynamic buffering override (true/false)")
-    parser.add_argument("dynamic_buffer_k", nargs="?", default=None, help="Optional dynamic buffer scaling override")
-    return parser.parse_args()
+    parser.add_argument("--job-index", type=int, default=0,
+                        help="Index of this shard, in [0, total-jobs-1] (default: 0).")
+    parser.add_argument("--total-jobs", type=int, default=1,
+                        help="Total number of shards the country list is split into (default: 1).")
+    add_standard_override_arguments(parser)
+
+    args = parser.parse_args()
+    return args
 
 def shard_tif_dict(tif_dict, job_index, total_jobs, seed):
     """Split the country-to-raster mapping into a deterministic worker shard."""
@@ -613,7 +609,6 @@ def main():
         polygon outputs for the configured shard.
     """
     args = parse_args()
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="create_rasters", **overrides)
     max_workers = cfg['annotations']['max_workers']
@@ -626,8 +621,14 @@ def main():
     non_served_outpath = os.path.abspath(cfg['paths']['non_served_outpath'].replace('.gpkg', '.csv'))
     csv_output_filepath = os.path.abspath(cfg['paths']['csv_output_filepath'].replace('.gpkg', '.csv'))
 
-    approach = cfg['figures']['approach']
-    voronoi_3a_filepath = os.path.abspath(create_pop_output_paths(cfg)['voronoi'][approach])
+    approach = str(cfg['figures']['approach'])
+    voronoi_map = create_pop_output_paths(cfg)['voronoi']
+    if approach not in voronoi_map:
+        raise KeyError(
+            f"Configured figures.approach '{approach}' is not available; "
+            f"expected one of {sorted(voronoi_map)}"
+        )
+    voronoi_3a_filepath = os.path.abspath(voronoi_map[approach])
     if not os.path.exists(output_tif_dir):
         os.makedirs(output_tif_dir, exist_ok=True)
     logger.info("Loading Voronoi polygons from %s", voronoi_3a_filepath)
@@ -663,12 +664,16 @@ def main():
             polygon_country_col=country_boundary_col,
             output_country_col=country_output_col,
         )
-        ensure_output_dir_for_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'))
-        watershed_gdf.to_file(cfg['paths']['watershed'].replace('.geojson', '.gpkg'), driver='GPKG', index=False)
+        # Persist to a dedicated path, never back onto cfg['paths']['watershed']:
+        # that was a self-loop that mutated the asset combine_watersheds
+        # produces and would race under concurrent/partitioned execution.
+        ensure_output_dir_for_file(cfg['paths']['watershed_with_countries'])
+        watershed_gdf.to_file(cfg['paths']['watershed_with_countries'], driver='GPKG', index=False)
     
     logger.info("Starting country intersection workflow with max_workers=%s", max_workers)
     orchestrate_intersections(tif_dict, gdf, watershed_gdf, output_tif_dir, csv_output_filepath, non_served_outpath, max_workers, min_pixels=min_pixels, zoom_level=zoom_level, country_col=country_output_col, basin_col=cfg['basin_column_name'])
 if __name__ == '__main__':
+    configure_logging()
     main()
     
 

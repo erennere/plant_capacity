@@ -3,59 +3,45 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=234gb
 #SBATCH --time=96:00:00
+#SBATCH --output=logs/pop_differences_and_impact_polygons_%j.out
+#SBATCH --error=logs/pop_differences_and_impact_polygons_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+UTILS_PATH="${PROJECT_ROOT}/lib/utils.sh"
 
-mkdir -p "${LOG_DIR}"
+if [[ ! -f "${UTILS_PATH}" ]]; then
+	echo "[$(date +'%Y-%m-%d %H:%M:%S')] ERROR: ${UTILS_PATH} not found. Submit from src with: sbatch pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh" >&2
+	exit 1
+fi
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+# shellcheck source=lib/utils.sh
+source "${UTILS_PATH}"
+init_log "pop_differences_and_impact_polygons"
 
+log "Starting pop_differences_and_impact_polygons pipeline"
 
-#
-# Usage:
-#   ./pop_differences_and_impact_polygons.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level        - Processing level (default: from config.yaml arguments.default_level)
-#   version      - Data version (default: from config.yaml arguments.default_version)
-#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
-## Parse optional config override arguments
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
+enable_err_trap
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
-}
+parse_overrides "$@"
 
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+build_override_args
 
-log "Running find_unserved_pop"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_unserved_pop "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+log "Checking package importability"
+ensure_src_importable
 
-log "Running find_diff_pop"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_diff_pop 0 true "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+run_stage "find_unserved_pop" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_unserved_pop "${OVERRIDE_ARGS[@]}"
 
-log "Running assign_rivers_to_basin"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.assign_rivers_to_basin 2 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+run_stage "assign_rivers_to_basin" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.assign_rivers_to_basin --max-workers 2 "${OVERRIDE_ARGS[@]}"
 
-log "Running find_intersection_river"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_intersection_river 32 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+run_stage "find_intersection_river" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_intersection_river --max-workers 32 "${OVERRIDE_ARGS[@]}"
 
-log "Running impact_polygons_pop"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.impact_polygons_pop 64 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_differences_and_impact_polygons.log"
+run_stage "impact_polygons_pop" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.impact_polygons_pop --max-workers 64 "${OVERRIDE_ARGS[@]}"
+
+# A dead end: nothing downstream depends on find_diff_pop's output. Sequenced
+# last so its failure never aborts the stages that don't need it.
+run_stage "find_diff_pop" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_diff_pop --index 0 --is-parallel true "${OVERRIDE_ARGS[@]}"
 
 log "All pop_at_risk pipeline stages completed"
 

@@ -60,6 +60,9 @@ def test_composite_main_end_to_end_with_sample_files(tmp_path, monkeypatch):
     cfg = {
         "figures": {"approach": 1},
         "zonal_sum_default_column": "2024_zonal_sum",
+        "min_country_facility_count": 25,
+        "plot_outlier_quantiles": [0.005, 0.995],
+        "plot_outlier_iqr_factor": 3.0,
         "paths": {
             "country_boundaries_filepath": str(boundaries_path),
             "composite_histogram_filepath": str(hist_path),
@@ -98,6 +101,9 @@ def test_composite_main_raises_when_required_columns_are_missing(monkeypatch, tm
     cfg = {
         "figures": {"approach": 1},
         "zonal_sum_default_column": "2024_zonal_sum",
+        "min_country_facility_count": 25,
+        "plot_outlier_quantiles": [0.005, 0.995],
+        "plot_outlier_iqr_factor": 3.0,
         "paths": {
             "country_boundaries_filepath": str(tmp_path / "bounds.gpkg"),
             "composite_histogram_filepath": str(tmp_path / "hist.png"),
@@ -143,6 +149,9 @@ def test_composite_main_raises_when_color_column_is_missing(monkeypatch, tmp_pat
     cfg = {
         "figures": {"approach": 1},
         "zonal_sum_default_column": "2024_zonal_sum",
+        "min_country_facility_count": 25,
+        "plot_outlier_quantiles": [0.005, 0.995],
+        "plot_outlier_iqr_factor": 3.0,
         "paths": {
             "country_boundaries_filepath": str(tmp_path / "bounds.gpkg"),
             "composite_histogram_filepath": str(tmp_path / "hist.png"),
@@ -184,7 +193,6 @@ def test_composite_script_entrypoint_runs_via_fallback_imports(monkeypatch, tmp_
     import runpy
     import sys
 
-    import src.create_voronoi as create_voronoi_mod
     import src.pipelines as pipelines_mod
     import src.starter as starter_mod
 
@@ -223,6 +231,9 @@ def test_composite_script_entrypoint_runs_via_fallback_imports(monkeypatch, tmp_
     cfg = {
         "figures": {"approach": 1},
         "zonal_sum_default_column": "2024_zonal_sum",
+        "min_country_facility_count": 25,
+        "plot_outlier_quantiles": [0.005, 0.995],
+        "plot_outlier_iqr_factor": 3.0,
         "paths": {
             "country_boundaries_filepath": str(boundaries_path),
             "composite_histogram_filepath": str(hist_path),
@@ -236,7 +247,7 @@ def test_composite_script_entrypoint_runs_via_fallback_imports(monkeypatch, tmp_
     monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(starter_mod, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(pipelines_mod, "create_pop_output_paths", lambda _: {"voronoi": {"1": str(pop_path)}})
-    monkeypatch.setattr(create_voronoi_mod, "ensure_output_dir_for_file", lambda path: None)
+    monkeypatch.setattr("src.utils.ensure_output_dir_for_file", lambda path: None)
 
     runpy.run_path(str(module_path), run_name="__main__")
 
@@ -284,6 +295,31 @@ def test_pop_at_risk_create_single_plot_linear_and_log(tmp_path):
     assert fig2 is not None
     assert (tmp_path / "log.png").exists()
     assert (tmp_path / "lin.png").exists()
+
+
+def test_composite_filter_countries_by_facility_count():
+    pop_df = gpd.GeoDataFrame(
+        {
+            "ISO_2": ["DE", "DE", "FR", "IT"],
+            "total_area": [1.0, 2.0, 3.0, 4.0],
+            "round_area": [1.0, 2.0, 3.0, 4.0],
+            "2024_zonal_sum": [10.0, 20.0, 30.0, 40.0],
+            "geometry": [box(0, 0, 1, 1)] * 4,
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    boundaries = gpd.GeoDataFrame(
+        {"ISO_A2": ["DE", "FR", "IT"], "ECONOMY": ["A", "B", "C"], "geometry": [box(0, 0, 1, 1)] * 3},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    filtered_pop, filtered_boundaries, removed = capp.filter_countries_by_facility_count(pop_df, boundaries, "ISO_2", 2)
+
+    assert set(filtered_pop["ISO_2"]) == {"DE"}
+    assert set(filtered_boundaries["ISO_A2"]) == {"DE"}
+    assert removed == ["FR", "IT"]
 
 
 def test_pop_at_risk_create_impact_polygon_plots(monkeypatch, tmp_path):
@@ -380,7 +416,7 @@ def test_download_pop_process_all_and_main(monkeypatch, tmp_path):
     dp.process_all_countries(urls, res=120, max_workers=2, data_dir=str(tmp_path))
     assert len(calls) == 2
 
-    monkeypatch.setattr(dp, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(dp, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(
         dp,
         "load_config",
@@ -390,10 +426,29 @@ def test_download_pop_process_all_and_main(monkeypatch, tmp_path):
             "end_year": 2024,
             "worldpop_2014_url_template": "tpl2014",
             "worldpop_yearly_url_template": "tplyear",
+            "country_limit": 0,
         },
     )
     monkeypatch.setattr(dp, "get_urls", lambda **kwargs: {"a": ["u"], "b": ["u"], "c": ["u"], "d": ["u"]})
     monkeypatch.setattr(dp, "process_all_countries", lambda country_urls, res, max_workers, data_dir: calls.append((len(country_urls), res, max_workers, data_dir)))
 
+    # country_limit=0 means "no limit" - all four countries are processed.
+    # (YAML cannot express a literal null here, so 0 is the sentinel.)
     dp.main(res=90, max_workers=1)
-    assert any(isinstance(c[0], int) and c[0] == 3 for c in calls)
+    assert calls[-1][0] == 4
+
+    # A positive country_limit really truncates, alphabetically.
+    monkeypatch.setattr(
+        dp,
+        "load_config",
+        lambda **kwargs: {
+            "paths": {"pop_dir": str(tmp_path)},
+            "start_year": 2015,
+            "end_year": 2024,
+            "worldpop_2014_url_template": "tpl2014",
+            "worldpop_yearly_url_template": "tplyear",
+            "country_limit": 3,
+        },
+    )
+    dp.main(res=90, max_workers=1)
+    assert calls[-1][0] == 3

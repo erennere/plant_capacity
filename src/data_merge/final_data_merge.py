@@ -4,48 +4,36 @@ This module merges corrected points with country-specific datasets,
 applies confidence-aware enrichment, and deduplicates nearby facilities.
 """
 
+import argparse
 import os
-import re
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely import Point, from_wkt
-from scipy.spatial import KDTree as cKDTree
 try:
-    from .correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
-    from ..create_voronoi import ensure_output_dir_for_file
-    from ..starter import load_config, parse_config_overrides
+    from .correct_locations_w_OSM import coordinate_corr_locations_wOSM
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file
+    from ..geo_utils import (
+        cluster_point_indices as _cluster_point_indices,
+        estimate_utm_epsg_for_geom,
+        parse_diameters_to_round_area,
+        nearest_within_threshold,
+    )
 except ImportError:
-    from src.data_merge.correct_locations_w_OSM import coordinate_corr_locations_wOSM, estimate_utm_epsg
-    from src.create_voronoi import ensure_output_dir_for_file
-    from src.starter import load_config, parse_config_overrides
+    from src.data_merge.correct_locations_w_OSM import coordinate_corr_locations_wOSM
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file
+    from src.geo_utils import (
+        cluster_point_indices as _cluster_point_indices,
+        estimate_utm_epsg_for_geom,
+        parse_diameters_to_round_area,
+        nearest_within_threshold,
+    )
 
 def cluster_point_indices(geoms, threshold):
-    """Group point geometries into connected components within a distance threshold."""
-    geoms = [from_wkt(g) for g in geoms]
-    coords = np.array([(pt.x, pt.y) for pt in geoms])
-    tree = cKDTree(coords)
-    neighbors = tree.query_ball_point(coords, threshold)
-
-    visited = np.full(len(coords), False)
-    clusters = []
-
-    for i in range(len(coords)):
-        if visited[i]:
-            continue
-        # Begin new cluster
-        cluster = set()
-        queue = [i]
-        visited[i] = True
-        while queue:
-            idx = queue.pop()
-            cluster.add(idx)
-            for n_idx in neighbors[idx]:
-                if not visited[n_idx]:
-                    visited[n_idx] = True
-                    queue.append(n_idx)
-        clusters.append(cluster)
-    return clusters
+    """Group point geometries (given as WKT strings) into connected components within a distance threshold."""
+    return _cluster_point_indices([from_wkt(g) for g in geoms], threshold)
 
 def cluster_points(df, threshold):
     """Aggregate records whose meter-space geometries fall into the same cluster."""
@@ -73,10 +61,7 @@ def cluster_points(df, threshold):
                 if i and i.lower() != 'none'
             ]) if pd.notnull(x) else 0).sum())+']'
         if 'diameters' in sub_df:
-            sub_df['diameters_2'] = sub_df['diameters'].apply(
-                lambda x: [float(i) for i in re.findall(r"[-+]?\d*\.\d+|\d+", str(x))])
-            sub_df['round_area'] = sub_df['diameters_2'].apply(
-                lambda y: np.sum([(d/2)**2 * np.pi for d in y]))
+            sub_df['round_area'] = sub_df['diameters'].apply(parse_diameters_to_round_area)
             merged['round_area'] = sub_df['round_area'].sum()
         merged["geometry"] = df.loc[geom_idx, "geometry"]
         rows.append(merged)
@@ -88,16 +73,10 @@ def find_unmatched_targets(gdf_source, gdf_target, threshold):
     # Work in same CRS
     gdf_source = gdf_source.copy().to_crs(gdf_target.crs)
     sindex_source = gdf_source.sindex
-    matched_target_indices = set()
-
-    for idx, geom in gdf_target.geometry.items():
-        if geom is None or geom.is_empty:
-            continue
-        try:
-            nearest_idx = list(sindex_source.nearest(geom, max_distance=threshold))[1][0]
-            matched_target_indices.add(idx)
-        except Exception:
-            continue
+    matched_target_indices = {
+        idx for idx, geom in gdf_target.geometry.items()
+        if nearest_within_threshold(sindex_source, geom, threshold) is not None
+    }
 
     # Keep only target rows NOT in matched indices
     unmatched_targets = gdf_target[~gdf_target.index.isin(matched_target_indices)].copy()
@@ -113,10 +92,7 @@ def get_best_points(gdf):
 
 def find_safe_epsg(row):
     """Estimate a suitable projected EPSG code for distance-based operations."""
-    if isinstance(row['geometry'], Point):
-        return estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-    else:
-        return estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y)
+    return estimate_utm_epsg_for_geom(row['geometry'])
     
 def find_meter_coordinates(df):
     """Create meter-space geometry WKT per EPSG group for clustering."""
@@ -149,10 +125,16 @@ def find_meter_coordinates(df):
         geometry='geometry'
     )
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run final_data_merge.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Run final merge, confidence handling, OSM correction, and deduplication."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="final_data_merge", **overrides)
     paths = cfg['paths']
     osm_threshold = cfg['osm_threshold']
@@ -229,4 +211,5 @@ def main():
     merged_df.to_file(paths["corrected_all_filepath"], driver='GPKG', index=False)
 
 if __name__ == '__main__':
+    configure_logging()
     main()

@@ -3,14 +3,15 @@
 Watersheds are selected for verification when the share of valid WWTP shapes in a
 basin exceeds the configured `percent_verification` threshold.
 """
+import argparse
 import os
 import geopandas as gpd
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file
 
 def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS_ID'):
     """Mark each row with verification flags derived from basin-level validity rates."""
@@ -37,10 +38,16 @@ def find_verification_watersheds(gdf, percent_verification, watershed_col='HYBAS
     return gdf
 
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run verification_script.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Split each population output into verification, non-verification, and single-site files."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="verification_script", **overrides)
     verification_dir = cfg['paths']['verification_dir']
     pop_dir = cfg['paths']['pop_output_dir']
@@ -81,4 +88,5 @@ def main():
 
 
 if __name__ == '__main__':
+    configure_logging()
     main()

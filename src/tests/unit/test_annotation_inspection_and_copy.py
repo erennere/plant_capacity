@@ -70,7 +70,7 @@ def test_copy_falsy_images_main_copies_expected_subset(monkeypatch, tmp_path):
     corrected_path = str(tmp_path / "corrected_all.gpkg")
     cfg = {
         "paths": {
-            "corrected_all_filepath": corrected_path,
+            "annotated_all_filepath": corrected_path,
             "annotated_images_output_dir": str(input_dir),
             "annotations_verf_image_outpath_dir": str(out_dir / "x"),
         }
@@ -87,7 +87,7 @@ def test_copy_falsy_images_main_copies_expected_subset(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(copy_falsy_images.os, "chdir", lambda path: None)
-    monkeypatch.setattr(copy_falsy_images, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(copy_falsy_images, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(copy_falsy_images, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(copy_falsy_images.gpd, "read_file", lambda path: gdf.copy())
 
@@ -104,7 +104,7 @@ def test_copy_falsy_images_main_handles_missing_source_file(monkeypatch, tmp_pat
 
     cfg = {
         "paths": {
-            "corrected_all_filepath": str(tmp_path / "corrected_all.gpkg"),
+            "annotated_all_filepath": str(tmp_path / "corrected_all.gpkg"),
             "annotated_images_output_dir": str(input_dir),
             "annotations_verf_image_outpath_dir": str(tmp_path / "verification" / "x"),
         }
@@ -120,7 +120,7 @@ def test_copy_falsy_images_main_handles_missing_source_file(monkeypatch, tmp_pat
     )
 
     monkeypatch.setattr(copy_falsy_images.os, "chdir", lambda path: None)
-    monkeypatch.setattr(copy_falsy_images, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(copy_falsy_images, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(copy_falsy_images, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(copy_falsy_images.gpd, "read_file", lambda path: gdf.copy())
 
@@ -155,7 +155,7 @@ def test_annotations_inspection_main_raises_when_required_columns_missing(monkey
     }
 
     monkeypatch.setattr(annotations_inspection.os, "chdir", lambda path: None)
-    monkeypatch.setattr(annotations_inspection, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(annotations_inspection, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(annotations_inspection, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(annotations_inspection.pd, "read_csv", lambda path: pd.DataFrame({"image": ["1.png"]}))
 
@@ -181,7 +181,7 @@ def test_annotations_inspection_main_runs_sampling_and_exports(monkeypatch, tmp_
     )
 
     monkeypatch.setattr(annotations_inspection.os, "chdir", lambda path: None)
-    monkeypatch.setattr(annotations_inspection, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(annotations_inspection, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(annotations_inspection, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(annotations_inspection.pd, "read_csv", lambda path: df.copy())
     monkeypatch.setattr(
@@ -228,7 +228,7 @@ def test_annotations_inspection_main_rejects_non_positive_sample_size(monkeypatc
     )
 
     monkeypatch.setattr(annotations_inspection.os, "chdir", lambda path: None)
-    monkeypatch.setattr(annotations_inspection, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(annotations_inspection, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(annotations_inspection, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(annotations_inspection.pd, "read_csv", lambda path: df.copy())
 
@@ -239,7 +239,7 @@ def test_annotations_inspection_main_rejects_non_positive_sample_size(monkeypatc
 def test_copy_falsy_images_main_requires_expected_columns(monkeypatch, tmp_path):
     cfg = {
         "paths": {
-            "corrected_all_filepath": str(tmp_path / "corrected_all.gpkg"),
+            "annotated_all_filepath": str(tmp_path / "corrected_all.gpkg"),
             "annotated_images_output_dir": str(tmp_path / "images"),
             "annotations_verf_image_outpath_dir": str(tmp_path / "verification" / "x"),
         }
@@ -253,7 +253,7 @@ def test_copy_falsy_images_main_requires_expected_columns(monkeypatch, tmp_path)
     )
 
     monkeypatch.setattr(copy_falsy_images.os, "chdir", lambda path: None)
-    monkeypatch.setattr(copy_falsy_images, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(copy_falsy_images, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(copy_falsy_images, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(copy_falsy_images.gpd, "read_file", lambda path: gdf.copy())
 

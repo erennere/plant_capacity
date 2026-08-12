@@ -167,7 +167,7 @@ def test_filter_requested_approaches_skips_city_when_disabled(monkeypatch):
 
     runnable, skipped_existing, skipped_disabled = create_voronoi._filter_requested_approaches(
         ["0", "2"],
-        {"city_voronoi": False, "voronoi_overwrite": False},
+        {"city_voronoi": False, "overwrite_existing": False},
         {
             "voronoi": {
                 "0": "appr_0.gpkg",
@@ -194,7 +194,7 @@ def test_filter_requested_approaches_keeps_city_when_enabled_and_skips_existing(
 
     runnable, skipped_existing, skipped_disabled = create_voronoi._filter_requested_approaches(
         ["1", "2"],
-        {"city_voronoi": True, "voronoi_overwrite": False},
+        {"city_voronoi": True, "overwrite_existing": False},
         {
             "voronoi": {
                 "0": "appr_0.gpkg",
@@ -249,30 +249,21 @@ def test_weighted_voronoi_raises_when_site_id_column_is_missing(tiny_country_gdf
         )
 
 
-def test_weighted_voronoi_returns_none_when_utm_estimation_fails(monkeypatch, tiny_country_gdf):
-    df = gpd.GeoDataFrame(
-        {
-            "WASTE_ID": [1],
-            "HYBAS_ID": [101],
-            "weights": [1.0],
-            "geometry": [Point(0, 0)],
-        },
-        geometry="geometry",
-        crs=None,
+def test_estimate_utm_crs_always_returns_a_crs():
+    """The dead `if utm is None` guards were removed because this cannot happen.
+
+    estimate_utm_crs falls back to Web Mercator rather than returning None, so
+    callers have no unresolvable-CRS branch to handle.
+    """
+    from src.geo_utils import estimate_utm_crs
+
+    empty = gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326")
+    assert estimate_utm_crs(empty).to_epsg() == 3857
+
+    populated = gpd.GeoDataFrame(
+        {"geometry": [Point(10, 50)]}, geometry="geometry", crs="EPSG:4326"
     )
-
-    monkeypatch.setattr(create_voronoi, "estimate_utm_crs", lambda gdf: None)
-
-    result = create_voronoi.weighted_voronoi(
-        df,
-        "HYBAS_ID",
-        tiny_country_gdf,
-        n_points=20,
-        calculate_buffer_fn=lambda sub_df, weights, **kwargs: np.array([1000.0]),
-        site_id_col="WASTE_ID",
-    )
-
-    assert result is None
+    assert estimate_utm_crs(populated).to_epsg() == 32632
 
 
 def test_weighted_voronoi_rejects_calculate_buffer_length_mismatch(tiny_country_gdf):

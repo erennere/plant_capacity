@@ -17,6 +17,7 @@ Output directories:
 - ../data/population/rasterized/  : Individual CSV rasterized outputs
 - ../data/population/merged/      : Final country mosaics
 """
+import argparse
 import requests
 import zipfile
 import os, re, shutil
@@ -29,33 +30,29 @@ from rasterio.transform import from_origin
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 import rasterio.features
 from rasterio.windows import from_bounds
-import pycountry
 import logging
 try:
-    from .create_voronoi import estimate_utm_crs, ensure_output_dir_for_file
-    from .starter import load_config, parse_config_overrides
+    from .starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from .geo_utils import estimate_utm_crs
+    from .utils import (
+        DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        configure_logging,
+        ensure_output_dir_for_file,
+        get_iso_codes,
+        requests_session_with_retries,
+    )
 except ImportError:  # Support running as a top-level script
-    from create_voronoi import estimate_utm_crs, ensure_output_dir_for_file
-    from starter import load_config, parse_config_overrides
+    from starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from geo_utils import estimate_utm_crs
+    from utils import (
+        DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        configure_logging,
+        ensure_output_dir_for_file,
+        get_iso_codes,
+        requests_session_with_retries,
+    )
 
-def get_iso_codes():
-    """Build ISO-code lookup dictionaries used by population workflows.
-
-    Returns
-    -------
-    tuple[dict, dict, dict, dict]
-        ``(alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names)``.
-    """
-    alpha_3_to_2 = {}
-    alpha_2_to_3 = {}
-    alpha_3_to_names = {}
-    alpha_2_to_names = {}
-    for country in pycountry.countries:
-        alpha_3_to_2[country.alpha_3.upper()] = country.alpha_2.upper()
-        alpha_2_to_3[country.alpha_2.upper()] = country.alpha_3.upper()
-        alpha_3_to_names[country.alpha_3.upper()] = country.name
-        alpha_2_to_names[country.alpha_2.upper()] = country.name
-    return alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names
+logger = logging.getLogger(__name__)
 
 def extract_first_wildcard(test_string, pattern):
     """Extract first capture group from regex pattern match.
@@ -219,7 +216,8 @@ def get_urls(start_year=2015, end_year=2024, worldpop_2014_template=None, worldp
 def download_file(url, output_path):
     """Stream a remote file to disk using an adaptive chunk size."""
     try:
-        with requests.get(url, stream=True) as response:
+        session = requests_session_with_retries()
+        with session.get(url, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS) as response:
             response.raise_for_status()
 
             total_size = int(response.headers.get('Content-Length', 0))
@@ -269,27 +267,27 @@ def download_save_and_unzip_pop(url, country, data_dir='../data/population'):
             with open(zip_filename, "wb") as f:
                 f.write(response.content)
         except Exception as err:
-            logging.warning(f'Download failed for {url}: {err}')
+            logger.warning(f'Download failed for {url}: {err}')
             try:
-                logging.info('Attempting fallback URL with maxar_v1')
+                logger.info('Attempting fallback URL with maxar_v1')
                 response = requests.get(url.replace('BSGM', 'maxar_v1'))
                 ensure_output_dir_for_file(zip_filename)
                 with open(zip_filename, "wb") as f:
                     f.write(response.content)
             except Exception as err:
-                logging.error(f'Fallback download also failed: {err}')
+                logger.error(f'Fallback download also failed: {err}')
                 return None
         try:
             with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
                 zip_ref.extractall(extract_folder)
         except Exception as err:
-            logging.error(f'Extraction failed for {zip_filename}: {err}') 
+            logger.error(f'Extraction failed for {zip_filename}: {err}') 
             return None
         return extract_folder
     else:
         output_file = os.path.join(extract_folder, os.path.basename(url))
         if not download_file(url, output_file):
-            logging.info('Attempting fallback URL with maxar_v1')
+            logger.info('Attempting fallback URL with maxar_v1')
             if not download_file(url.replace('BSGM', 'maxar_v1'), output_file):
                 return None
         return extract_folder
@@ -371,7 +369,7 @@ def rasterize_csv(df, output_path, res=30):
         lon_col = next(c for c in df.columns if c.startswith('lon'))
         pop_col = next(c for c in df.columns if 'pop' in c or 'general' in c)
     except StopIteration:
-        logging.error(f"Missing required column in CSV. Available columns: {list(df.columns)}")
+        logger.error(f"Missing required column in CSV. Available columns: {list(df.columns)}")
         return None
 
     df[lat_col] = df[lat_col].astype(float)
@@ -458,6 +456,27 @@ def resample_raster(src, target_transform, target_shape, target_crs, resampling_
     )
     return resampled_data
 
+def add_tile_into_mosaic(mosaic_data, data, row_off, col_off, height, width, source=None):
+    """Accumulate one tile into the mosaic at (row_off, col_off).
+
+    Both arrays are (bands, rows, cols). A tile's rounded window can run past the
+    mosaic edge, so the destination and the tile are clipped to their common
+    row/column extent before adding. Clipping used to index ``shape[0]``/
+    ``shape[1]`` - the band and row axes - and so trimmed rows by a band count
+    and columns by a row count, shifting tile contents.
+    """
+    dest = mosaic_data[:, row_off:row_off + height, col_off:col_off + width]
+    rows = min(dest.shape[1], data.shape[1])
+    cols = min(dest.shape[2], data.shape[2])
+    if (rows, cols) != (dest.shape[1], dest.shape[2]) or (rows, cols) != (data.shape[1], data.shape[2]):
+        logger.warning(
+            "Mosaic window for %s does not fit: window=%s, tile=%s; clipping to (%d, %d)",
+            source, dest.shape, data.shape, rows, cols,
+        )
+    mosaic_data[:, row_off:row_off + rows, col_off:col_off + cols] += data[:, :rows, :cols]
+    return mosaic_data
+
+
 def mosaic_large_rasters(raster_files, output_path):
     """Mosaic one or more raster tiles into a single output file.
 
@@ -531,11 +550,18 @@ def mosaic_large_rasters(raster_files, output_path):
                     data = src.read(
                         out_shape=(count, window.height, window.width)
                     )
-                    temp =  mosaic_data[:, window.row_off:window.row_off + window.height, window.col_off:window.col_off + window.width]
-                    if temp.shape != data.shape:
-                        data = data[:, int(data.shape[0]-temp.shape[0]):, int(data.shape[1]-temp.shape[1]):]
-                    mosaic_data[:,window.row_off:window.row_off + window.height, window.col_off:window.col_off + window.width] += data
+                    add_tile_into_mosaic(
+                        mosaic_data, data,
+                        int(window.row_off), int(window.col_off),
+                        int(window.height), int(window.width),
+                        source=fp,
+                    )
         mosaic.write(mosaic_data)
+
+def merged_output_path(pop_dir, country):
+    """Canonical path of one country's merged population mosaic."""
+    return os.path.join(pop_dir, 'merged', f'pop_{country.lower()}_merged.tif')
+
 
 def process_single_country(country_urls, country, res=30, data_dir='../data/population'):
     """Download, prepare, and mosaic population data for one country.
@@ -553,18 +579,15 @@ def process_single_country(country_urls, country, res=30, data_dir='../data/popu
     """
     extract_folder = download_save_and_unzip_pops(country_urls, country, data_dir)
     if extract_folder is None:
-        logging.warning(f'Failed to download data for {country}')
+        logger.warning(f'Failed to download data for {country}')
         return None
     result, if_tif = find_files(extract_folder)
 
-    merged_path = os.path.join(data_dir, 'merged')
+    merged_path = merged_output_path(data_dir, country)
     output_path = os.path.join(data_dir, 'rasterized', country)
-    if not os.path.exists(merged_path):
-            os.makedirs(merged_path, exist_ok=True)
-    if not os.path.exists(output_path):
-            os.makedirs(output_path, exist_ok=True)
+    os.makedirs(os.path.dirname(merged_path), exist_ok=True)
+    os.makedirs(output_path, exist_ok=True)
 
-    merged_path = os.path.join(merged_path, f'pop_{country}_merged.tif')
     if if_tif:
         mosaic_large_rasters(result, merged_path)
     else:
@@ -577,13 +600,13 @@ def process_single_country(country_urls, country, res=30, data_dir='../data/popu
                 if result_path is not None:
                     filepaths.append(part_output_path)
             except Exception as err:
-                logging.error(f'Failed to rasterize {csv_filepath}: {err}')
+                logger.error(f'Failed to rasterize {csv_filepath}: {err}')
                 continue
         filepaths = [f for f in filepaths if os.path.exists(f)]
         if filepaths:
             mosaic_large_rasters(filepaths, merged_path)
         else:
-            logging.error(f'No successfully rasterized files for {country}')
+            logger.error(f'No successfully rasterized files for {country}')
 
 def process_all_countries(country_urls, res=30, max_workers=16, data_dir='../data/population'):
     """Process population data for all configured countries in parallel.
@@ -608,7 +631,27 @@ def process_all_countries(country_urls, res=30, max_workers=16, data_dir='../dat
             try:
                 future.result()
             except Exception as err:
-                logging.error(f'Error processing country: {err}')
+                logger.error(f'Error processing country: {err}')
+
+def parse_args():
+    """Parse the standardized named config-override flags plus download_pop's
+    own --country selector (script-local, not part of the shared 7-field
+    override contract - no other script needs a country selector).
+    """
+    parser = argparse.ArgumentParser(description="Run download_pop.")
+    add_standard_override_arguments(parser)
+    parser.add_argument(
+        "--country",
+        default=None,
+        help=(
+            "Optional ISO-3 country code (case-insensitive); process only "
+            "this one country instead of every country. Unset processes all "
+            "countries (subject to config's country_limit) - unchanged from "
+            "the default."
+        ),
+    )
+    return parser.parse_args()
+
 
 def main(res=30, max_workers=8):
     """Load config, collect download URLs, and run the population pipeline.
@@ -622,33 +665,49 @@ def main(res=30, max_workers=8):
 
     Notes
     -----
-    The CLI entrypoint accepts optional config overrides in the form
-    ``[level] [version] [buffer] [weight_method] [weight_func]``.
-    Resolution and worker count remain direct Python-call parameters unless
-    separate CLI support is added.
+    The CLI entrypoint accepts the seven standard named config-override flags
+    (``--level``, ``--version``, ``--buffer``, ``--weight-method``,
+    ``--weight-func``, ``--dynamic-buffering``, ``--dynamic-buffer-k``), plus
+    its own ``--country``. Resolution and worker count remain direct
+    Python-call parameters unless separate CLI support is added.
     """
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
-    overrides = parse_config_overrides(start_index=1)
+    args = parse_args()
+    overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="download_pop", **overrides)
     data_dir = os.path.abspath(cfg["paths"]["pop_dir"])
-    
-    logging.info('Retrieving population data URLs')
+
+    logger.info('Retrieving population data URLs')
     country_urls = get_urls(
         start_year=cfg['start_year'],
         end_year=cfg['end_year'],
         worldpop_2014_template=cfg['worldpop_2014_url_template'],
         worldpop_yearly_template=cfg['worldpop_yearly_url_template'],
     )
-    country_urls = {k: v for k, v in country_urls.items() if k in list(country_urls.keys())[0:3]}
-    
-    logging.info(f'Processing {len(country_urls)} countries with {max_workers} workers')
+
+    if args.country:
+        country = args.country.strip().lower()
+        if country not in country_urls:
+            raise ValueError(
+                f"Unknown --country '{args.country}'; expected an ISO-3 code "
+                "such as 'usa' (see src.utils.get_iso_codes)."
+            )
+        country_urls = {country: country_urls[country]}
+        logger.info("Restricting to single --country override: %s", country)
+    else:
+        # 0 means "no limit"; YAML cannot express a literal null here because
+        # the config resolver reads null as "inherit from an earlier section".
+        country_limit = int(cfg['country_limit'])
+        if country_limit < 0:
+            raise ValueError("country_limit must be >= 0 (0 disables the limit)")
+        if country_limit:
+            selected_countries = sorted(country_urls.keys())[:country_limit]
+            country_urls = {k: country_urls[k] for k in selected_countries}
+            logger.info("Applying configured country limit: %s", country_limit)
+
+    logger.info(f'Processing {len(country_urls)} countries with {max_workers} workers')
     process_all_countries(country_urls, res, max_workers, data_dir)
-    logging.info('Population data processing complete')
+    logger.info('Population data processing complete')
 
 if __name__ == '__main__':
+    configure_logging()
     main()

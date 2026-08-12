@@ -1,3 +1,4 @@
+import argparse
 from argparse import Namespace
 from pathlib import Path
 
@@ -16,7 +17,12 @@ def test_normalize_optional_cli_value_preserves_explicit_empty_string():
 
 def test_parse_config_overrides_from_argv_parses_all_supported_types():
     overrides = starter.parse_config_overrides(
-        argv=["prog", "9", "3", "12000", "square_root", "", "yes", "0.75"]
+        argv=[
+            "prog",
+            "--level", "9", "--version", "3", "--buffer", "12000",
+            "--weight-method", "square_root", "--weight-func=",
+            "--dynamic-buffering", "yes", "--dynamic-buffer-k", "0.75",
+        ]
     )
 
     assert overrides == {
@@ -54,10 +60,57 @@ def test_parse_config_overrides_from_namespace_normalizes_optional_values():
     }
 
 
-def test_parse_config_overrides_honors_custom_start_index():
+def test_add_standard_override_arguments_parses_named_flags():
+    parser = argparse.ArgumentParser()
+    starter.add_standard_override_arguments(parser)
+    args = parser.parse_args([
+        "--level", "7",
+        "--version", "3",
+        "--buffer", "1200",
+        "--weight-method", "logarithmic",
+        "--weight-func", "mult",
+        "--dynamic-buffering", "true",
+        "--dynamic-buffer-k", "0.75",
+    ])
+
+    overrides = starter.parse_config_overrides(args=args)
+
+    assert overrides == {
+        "level": "7",
+        "version": "3",
+        "buffer": 1200,
+        "weight_method": "logarithmic",
+        "weight_func": "mult",
+        "dynamic_buffering": True,
+        "dynamic_buffer_k": 0.75,
+    }
+
+
+def test_parse_config_overrides_ignores_positional_tokens():
+    """Positional overrides were removed: a stray token must not become `level`."""
     overrides = starter.parse_config_overrides(
         argv=["prog", "required_arg", "8", "4", "1500", "linear", "mult", "0", "1.5"],
-        start_index=2,
+    )
+
+    assert overrides == {
+        "level": None,
+        "version": None,
+        "buffer": None,
+        "weight_method": None,
+        "weight_func": None,
+        "dynamic_buffering": None,
+        "dynamic_buffer_k": None,
+    }
+
+
+def test_parse_config_overrides_reads_named_flags_from_argv():
+    overrides = starter.parse_config_overrides(
+        argv=[
+            "prog", "positional-arg",
+            "--level", "8", "--version", "4", "--buffer", "1500",
+            "--weight-method", "linear", "--weight-func", "mult",
+            "--dynamic-buffering", "0", "--dynamic-buffer-k", "1.5",
+        ],
     )
 
     assert overrides == {
@@ -69,37 +122,15 @@ def test_parse_config_overrides_honors_custom_start_index():
         "dynamic_buffering": False,
         "dynamic_buffer_k": 1.5,
     }
-
-
-def test_parse_config_overrides_coerces_string_start_index():
-    overrides = starter.parse_config_overrides(
-        argv=["prog", "required_arg", "8", "4", "1500", "linear", "mult", "0", "1.5"],
-        start_index="2",
-    )
-
-    assert overrides == {
-        "level": "8",
-        "version": "4",
-        "buffer": 1500,
-        "weight_method": "linear",
-        "weight_func": "mult",
-        "dynamic_buffering": False,
-        "dynamic_buffer_k": 1.5,
-    }
-
-
-def test_parse_config_overrides_rejects_negative_start_index():
-    with pytest.raises(ValueError, match="start_index"):
-        starter.parse_config_overrides(argv=["prog"], start_index=-1)
 
 
 @pytest.mark.parametrize(
     ("argv", "message"),
     [
-        (["prog", "7", "2", "not-an-int"], "Invalid buffer"),
-        (["prog", "7", "2", "1200", "linear", "bad-mode"], "Invalid weight_func"),
-        (["prog", "7", "2", "1200", "linear", "mult", "maybe"], "Invalid dynamic_buffering"),
-        (["prog", "7", "2", "1200", "linear", "mult", "true", "nanmeters"], "Invalid dynamic_buffer_k"),
+        (["prog", "--buffer", "not-an-int"], "Invalid buffer"),
+        (["prog", "--weight-func", "bad-mode"], "Invalid weight_func"),
+        (["prog", "--dynamic-buffering", "maybe"], "Invalid dynamic_buffering"),
+        (["prog", "--dynamic-buffer-k", "nanmeters"], "Invalid dynamic_buffer_k"),
     ],
 )
 def test_parse_config_overrides_rejects_invalid_optional_values(argv, message):
@@ -178,6 +209,38 @@ def test_load_config_dynamic_buffering_uses_k_token_and_empty_weight_func(write_
     assert cfg["dynamic_buffering"] is True
     assert cfg["dynamic_buffer_k"] == pytest.approx(0.75)
     assert cfg["distance_fn"] is create_voronoi.default_distance_multiplicative
+
+
+def test_load_config_derives_calculate_buffer_kwargs_with_expected_keys(write_test_config):
+    config_path = write_test_config(
+        {
+            "create_voronoi": {
+                "buffer": 9000,
+                "weight_method": "logarithmic",
+                "weight_func": "mult",
+                "dynamic_buffering": True,
+                "dynamic_buffer_k": 0.5,
+                "min_buffer": 2000,
+                "max_buffer": 50000,
+                "k_min": 0.32,
+                "k_max": 0.92,
+                "detection_confidence_threshold": 3,
+            },
+        }
+    )
+
+    cfg = starter.load_config(script_name="create_voronoi", config=str(config_path))
+
+    assert cfg["calculate_buffer_kwargs"] == {
+        "buffer": 9000,
+        "dynamic_buffering": True,
+        "min_buffer": 2000,
+        "max_buffer": 50000,
+        "k_min": 0.32,
+        "k_max": 0.92,
+        "detection_confidence_threshold": 3,
+        "k_value": 0.5,
+    }
 
 
 def test_load_config_normalizes_weight_func_from_yaml(write_test_config):

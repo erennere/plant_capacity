@@ -4,18 +4,21 @@ For every grid feature, the script queries Overpass, converts the response into
 GeoDataFrames, and writes one GeoJSON per grid cell for lines and polygons.
 """
 
-import os, requests, json, time, re
+import argparse
+import os, json, time, re
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import LineString, Polygon
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file, requests_session_with_retries
+    from ..geo_utils import repair_geometry
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file, requests_session_with_retries
+    from src.geo_utils import repair_geometry
 
 queries = {
     "man_made": "wastewater_plant",
@@ -55,8 +58,13 @@ def clean_columns(gdf):
     return gdf
 
 
-def query_overpass(bbox, queries, url, retries=3):
-    """Query Overpass API safely with retries."""
+def query_overpass(bbox, queries, url, retries=3, pause_seconds=0.1):
+    """Query Overpass API safely with retries.
+
+    ``pause_seconds`` is taken as a parameter, not read from the module-level
+    default, so a call from inside the thread pool in ``main`` never depends
+    on a global being set before the pool starts.
+    """
     q = f"""
     [out:json][timeout:180];
     ("""
@@ -75,24 +83,25 @@ def query_overpass(bbox, queries, url, retries=3):
     out body;
     """
 
+    session = requests_session_with_retries(total_retries=0)
     for attempt in range(1, retries + 1):
         try:
-            r = requests.get(url, params={"data": q}, timeout=300)
+            r = session.get(url, params={"data": q}, timeout=300)
             
             if r.status_code == 200:
                 try:
                     return r.json()
                 except json.JSONDecodeError:
-                    print("âš ï¸ JSON error â†’ invalid response, skipping.")
+                    print("⚠️ JSON error → invalid response, skipping.")
                     return None
             elif r.status_code in [429, 504]:
-                print(f"âš ï¸ Server limit ({r.status_code}) â†’ waiting {pause_seconds * attempt}s...")
+                print(f"⚠️ Server limit ({r.status_code}) → waiting {pause_seconds * attempt}s...")
                 time.sleep(pause_seconds * attempt)
             else:
-                print(f"âš ï¸ Overpass error {r.status_code}")
+                print(f"⚠️ Overpass error {r.status_code}")
                 break
         except Exception as e:
-            print(f"âš ï¸ Attempt {attempt} failed: {e}")
+            print(f"⚠️ Attempt {attempt} failed: {e}")
             time.sleep(pause_seconds * attempt)
     return None
 
@@ -146,22 +155,20 @@ def timer(label):
             t0 = time.time()
             result = func(*args, **kwargs)
             dt = time.time() - t0
-            print(f"â±ï¸ {label}: {dt:.5f} sec")
+            print(f"⏱️ {label}: {dt:.5f} sec")
             return result
         return inner
     return wrap
 
 def find_bbox(geometry):
     """Return an Overpass bbox string for a geometry, or None when invalid."""
-    if geometry is None or pd.isna(geometry) or geometry.is_empty:
+    if geometry is None or pd.isna(geometry):
         return None
-    
-    if not geometry.is_valid:
-        geometry = geometry.buffer(0)
-        # Re-check after buffer; if still invalid or became empty, bail
-        if geometry is None or not geometry.is_valid or geometry.is_empty:
-            return None
-            
+
+    geometry = repair_geometry(geometry)
+    if geometry is None:
+        return None
+
     minx, miny, maxx, maxy = geometry.bounds
     return f"{miny},{minx},{maxy},{maxx}"
 
@@ -191,7 +198,7 @@ def create_tasks(gdf, batch_size, endpoint_urls=None):
         yield [(r.bbox, r.idx, endpoint_urls[i % url_count]) 
                for i, r in enumerate(batch)]
 
-def row_operation(bbox, idx_val, url, output_folder):
+def row_operation(bbox, idx_val, url, output_folder, pause_seconds=0.1):
     """Fetch and persist OSM features for one grid-cell bbox.
 
     Parameters
@@ -204,11 +211,13 @@ def row_operation(bbox, idx_val, url, output_folder):
         Overpass endpoint URL.
     output_folder : str
         Directory where per-tile GeoJSON outputs are written.
+    pause_seconds : float
+        Base backoff delay passed through to ``query_overpass``.
     """
     if bbox is None: return
     line_path = os.path.join(output_folder, f"idx_{idx_val}_lines.geojson")
     poly_path = os.path.join(output_folder, f"idx_{idx_val}_polygons.geojson")
-    data = query_overpass(bbox, queries, url)
+    data = query_overpass(bbox, queries, url, pause_seconds=pause_seconds)
     all_lines, all_polys = elements_to_gdf(data)
 
     if not all_lines.empty:
@@ -216,14 +225,21 @@ def row_operation(bbox, idx_val, url, output_folder):
 
         ensure_output_dir_for_file(line_path)
         all_lines.to_file(line_path, driver="GeoJSON")
-        print(f"âœ… Saved {line_path}")
+        print(f"✅ Saved {line_path}")
 
     if not all_polys.empty:
         all_polys = clean_columns(all_polys)
         poly_path = os.path.join(output_folder, f"idx_{idx_val}_polygons.geojson")
         ensure_output_dir_for_file(poly_path)
         all_polys.to_file(poly_path, driver="GeoJSON")
-        print(f"âœ… Saved {poly_path}")
+        print(f"✅ Saved {poly_path}")
+
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run NEW_02_EXTRACTOSMDATAFULL_GEOJSON.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
 
 def main():
     """Load annotation grids, query Overpass, and persist per-tile OSM outputs.
@@ -233,12 +249,11 @@ def main():
     None
         The function writes per-grid polygon and line GeoJSON files to disk.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="NEW_02_EXTRACTOSMDATAFULL_GEOJSON", **overrides)
     global pause_seconds
     global urls
-    overwrite = cfg["annotations"]["overwrite"]
+    overwrite = cfg["overwrite_existing"]
     retrials = int(cfg["annotations"]["retries"])
     urls = list(cfg["annotations"]["overpass_urls"])
     pause_seconds = float(cfg["annotations"]["overpass_pause_seconds"])
@@ -269,7 +284,7 @@ def main():
                     mask.append(True)
             poly = poly[mask]
             if poly.empty:
-                print("ðŸŽ‰ All idx features already processed, no retrials needed!")
+                print("🎉 All idx features already processed, no retrials needed!")
                 return
             
         print(len(poly))
@@ -277,13 +292,17 @@ def main():
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for tasks in create_tasks(poly, batch_size, urls):
-                futures = [executor.submit(row_operation, bbox, idx_val, url, output_folder) for bbox, idx_val, url in tasks]
+                futures = [
+                    executor.submit(row_operation, bbox, idx_val, url, output_folder, pause_seconds)
+                    for bbox, idx_val, url in tasks
+                ]
                 for future in as_completed(futures):
                     try:
                         future.result()
                     except Exception as e:
-                        print(f"âš ï¸ Error processing task: {e}")
-            print("\nðŸŽ¯ All requested idx features processed successfully!")
+                        print(f"⚠️ Error processing task: {e}")
+            print("\n🎯 All requested idx features processed successfully!")
 
 if __name__ == "__main__":
+    configure_logging()
     main()

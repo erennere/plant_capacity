@@ -72,10 +72,12 @@ def test_main_uses_cached_vectorized_polygons_and_writes_enriched_result(monkeyp
             "overture_s3_url": "s3://example/overture.parquet",
             "industrial_raster_persistent_dir": str(tmp_path / "rasters"),
         },
-        "industrial_vectorize_overwrite": False,
+        "overwrite_existing": False,
         "industrial_min_cells": 20,
         "industrial_persist_rasters": False,
         "industrial_simplify_tolerance": 0.01,
+        "industrial_batch_size": 2000,
+        "industrial_download_chunk_size": 1048576,
         "max_workers": 2,
         "basin_column_name": "HYBAS_ID",
         "sindex_concurrency": False,
@@ -105,7 +107,7 @@ def test_main_uses_cached_vectorized_polygons_and_writes_enriched_result(monkeyp
             return state["vectorized_exists"]
         return original_exists(path)
 
-    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda args=None, argv=None, start_index=1: {})
+    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(download_and_vectorize, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(download_and_vectorize.os.path, "exists", fake_exists)
     monkeypatch.setattr(download_and_vectorize.gpd, "read_parquet", lambda path: merged_gdf.copy())
@@ -182,10 +184,12 @@ def test_main_returns_false_when_boundary_enrichment_fails(monkeypatch, tmp_path
             "overture_s3_url": "s3://example/overture.parquet",
             "industrial_raster_persistent_dir": str(tmp_path / "rasters"),
         },
-        "industrial_vectorize_overwrite": False,
+        "overwrite_existing": False,
         "industrial_min_cells": 20,
         "industrial_persist_rasters": False,
         "industrial_simplify_tolerance": 0.01,
+        "industrial_batch_size": 2000,
+        "industrial_download_chunk_size": 1048576,
         "max_workers": 2,
         "basin_column_name": "HYBAS_ID",
         "sindex_concurrency": False,
@@ -201,7 +205,7 @@ def test_main_returns_false_when_boundary_enrichment_fails(monkeypatch, tmp_path
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda args=None, argv=None, start_index=1: {})
+    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(download_and_vectorize, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(download_and_vectorize.os.path, "exists", lambda path: path == vectorized_path)
     monkeypatch.setattr(download_and_vectorize.gpd, "read_parquet", lambda path: merged_gdf.copy())
@@ -227,10 +231,12 @@ def test_main_rejects_non_positive_industrial_min_cells(monkeypatch, tmp_path):
             "overture_s3_url": "s3://example/overture.parquet",
             "industrial_raster_persistent_dir": str(tmp_path / "rasters"),
         },
-        "industrial_vectorize_overwrite": False,
+        "overwrite_existing": False,
         "industrial_min_cells": 0,
         "industrial_persist_rasters": False,
         "industrial_simplify_tolerance": 0.01,
+        "industrial_batch_size": 2000,
+        "industrial_download_chunk_size": 1048576,
         "max_workers": 2,
         "basin_column_name": "HYBAS_ID",
         "sindex_concurrency": False,
@@ -239,7 +245,7 @@ def test_main_rejects_non_positive_industrial_min_cells(monkeypatch, tmp_path):
         "industrial_zenodo_url": "https://example.com/industrial.zip",
     }
 
-    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda args=None, argv=None, start_index=1: {})
+    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(download_and_vectorize, "load_config", lambda **overrides: cfg)
 
     with pytest.raises(ValueError, match="industrial_min_cells"):
@@ -258,10 +264,12 @@ def test_main_persist_rasters_reuses_existing_rasters_without_download(monkeypat
             "overture_s3_url": "s3://example/overture.parquet",
             "industrial_raster_persistent_dir": raster_dir,
         },
-        "industrial_vectorize_overwrite": False,
+        "overwrite_existing": False,
         "industrial_min_cells": 20,
         "industrial_persist_rasters": True,
         "industrial_simplify_tolerance": 0.01,
+        "industrial_batch_size": 2000,
+        "industrial_download_chunk_size": 1048576,
         "max_workers": 2,
         "basin_column_name": "HYBAS_ID",
         "sindex_concurrency": False,
@@ -283,7 +291,7 @@ def test_main_persist_rasters_reuses_existing_rasters_without_download(monkeypat
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda args=None, argv=None, start_index=1: {})
+    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(download_and_vectorize, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(download_and_vectorize.os.path, "exists", lambda path: False)
     monkeypatch.setattr(download_and_vectorize.Path, "rglob", lambda self, pattern: [tmp_path / "tile_1.tif"])
@@ -365,10 +373,12 @@ def test_main_non_persistent_branch_downloads_extracts_and_vectorizes(monkeypatc
             "overture_s3_url": "s3://example/overture.parquet",
             "industrial_raster_persistent_dir": str(tmp_path / "rasters"),
         },
-        "industrial_vectorize_overwrite": False,
+        "overwrite_existing": False,
         "industrial_min_cells": 20,
         "industrial_persist_rasters": False,
         "industrial_simplify_tolerance": 0.01,
+        "industrial_batch_size": 2000,
+        "industrial_download_chunk_size": 1048576,
         "max_workers": 2,
         "basin_column_name": "HYBAS_ID",
         "sindex_concurrency": False,
@@ -399,7 +409,7 @@ def test_main_non_persistent_branch_downloads_extracts_and_vectorizes(monkeypatc
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda args=None, argv=None, start_index=1: {})
+    monkeypatch.setattr(download_and_vectorize, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(download_and_vectorize, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(download_and_vectorize.os.path, "exists", lambda path: False)
     monkeypatch.setattr(download_and_vectorize.os, "makedirs", lambda path, exist_ok=False: captured.setdefault("makedirs", []).append((path, exist_ok)))

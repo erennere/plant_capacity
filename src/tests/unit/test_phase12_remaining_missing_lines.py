@@ -180,9 +180,18 @@ def test_pop_at_risk_main_orchestrates_with_patched_io(monkeypatch, tmp_path):
             "figures_dir": str(tmp_path),
             "pop_at_risk_output_filepath": str(tmp_path / "pop_at_risk.parquet"),
             "non_served_outpath": str(non_served_csv),
+            "non_served_above_threshold_outpath": str(tmp_path / "non_served_above_threshold.gpkg"),
         },
         "zoom_level": 8,
         "save_dpi": 100,
+        "threshold_value": 1000,
+        "min_display_population": 1000,
+        "country_id_column": "ISO_A2",
+        "nodata_country_color": "#bdbdbd",
+        "nodata_country_label": "NODATA",
+        "plot_outlier_quantiles": [0.005, 0.995],
+        "plot_outlier_iqr_factor": 3.0,
+        "max_workers": 8,
     }
 
     boundaries = gpd.GeoDataFrame(
@@ -208,9 +217,18 @@ def test_pop_at_risk_main_orchestrates_with_patched_io(monkeypatch, tmp_path):
         def to_df(self):
             return pd.DataFrame({"tile": ["t1"], "pop_sum": [123.0]})
 
-    monkeypatch.setattr(prf, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(prf, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(prf, "load_config", lambda **kwargs: cfg)
-    monkeypatch.setattr(prf.gpd, "read_file", lambda path: boundaries.copy())
+    def _read_file(path, columns=None, **kwargs):
+        if str(path).endswith("non_served_above_threshold.gpkg"):
+            return gpd.GeoDataFrame(
+                {"tile": ["t1"], "pop_sum": [250.0], "geometry": [box(0, 0, 1, 1)]},
+                geometry="geometry",
+                crs="EPSG:4326",
+            )
+        return boundaries.copy()
+
+    monkeypatch.setattr(prf.gpd, "read_file", _read_file)
     def _read_parquet(path):
         seen["parquet_path"] = path
         return pop_at_risk.copy()
@@ -230,7 +248,7 @@ def test_pop_at_risk_main_orchestrates_with_patched_io(monkeypatch, tmp_path):
     assert calls["impact"] == 1
     assert calls["single"] == 1
     assert seen["parquet_path"] == cfg["paths"]["pop_at_risk_output_filepath"]
-    assert str(non_served_csv) in seen["duckdb_query"]
+    assert "duckdb_query" not in seen
 
 
 def test_piechart_interactive_helper_error_and_edge_paths():
@@ -310,6 +328,7 @@ def test_piechart_interactive_main_end_to_end(tmp_path, monkeypatch):
         "min_total_size": 10000,
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [10],
+        "mix_use_categories": [],
         "paths": {
             "country_boundaries_filepath": str(boundaries_fp),
             "raster_country_stats_filepath": str(stats_fp),
@@ -317,7 +336,7 @@ def test_piechart_interactive_main_end_to_end(tmp_path, monkeypatch):
         },
     }
 
-    monkeypatch.setattr(pif, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(pif, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(pif, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(pif, "create_pop_output_paths", lambda cfg: {"voronoi": {"1": str(pop_fp)}})
 
@@ -358,6 +377,7 @@ def test_piechart_interactive_main_raises_for_missing_stats_file(tmp_path, monke
         "min_total_size": 10000,
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [10],
+        "mix_use_categories": [],
         "paths": {
             "country_boundaries_filepath": str(boundaries_fp),
             "raster_country_stats_filepath": str(tmp_path / "missing.csv"),
@@ -365,7 +385,7 @@ def test_piechart_interactive_main_raises_for_missing_stats_file(tmp_path, monke
         },
     }
 
-    monkeypatch.setattr(pif, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(pif, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(pif, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(pif, "create_pop_output_paths", lambda cfg: {"voronoi": {"1": str(pop_fp)}})
 
@@ -392,9 +412,18 @@ def test_pop_at_risk_module_main_guard_executes(monkeypatch, tmp_path):
             "figures_dir": str(tmp_path),
             "pop_at_risk_output_filepath": str(tmp_path / "pop_at_risk.parquet"),
             "non_served_outpath": str(tmp_path / "non_served.csv"),
+            "non_served_above_threshold_outpath": str(tmp_path / "non_served_above_threshold.gpkg"),
         },
         "zoom_level": 8,
         "save_dpi": 100,
+        "threshold_value": 1,
+        "min_display_population": 1,
+        "country_id_column": "ISO_A2",
+        "nodata_country_color": "#bdbdbd",
+        "nodata_country_label": "NODATA",
+        "plot_outlier_quantiles": [0.005, 0.995],
+        "plot_outlier_iqr_factor": 3.0,
+        "max_workers": 8,
     }
 
     boundaries = gpd.GeoDataFrame(
@@ -418,9 +447,18 @@ def test_pop_at_risk_module_main_guard_executes(monkeypatch, tmp_path):
             return pd.DataFrame({"tile": ["t1"], "pop_sum": [150.0]})
 
     monkeypatch.setattr(os, "chdir", lambda path: None)
-    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(starter_mod, "load_config", lambda **kwargs: cfg)
-    monkeypatch.setattr(geopandas, "read_file", lambda path: boundaries.copy())
+    def _read_file(path, columns=None, **kwargs):
+        if str(path).endswith("non_served_above_threshold.gpkg"):
+            return gpd.GeoDataFrame(
+                {"tile": ["t1"], "pop_sum": [250.0], "geometry": [box(0, 0, 1, 1)]},
+                geometry="geometry",
+                crs="EPSG:4326",
+            )
+        return boundaries.copy()
+
+    monkeypatch.setattr(geopandas, "read_file", _read_file)
     monkeypatch.setattr(geopandas, "read_parquet", lambda path: pop_at_risk.copy())
     monkeypatch.setattr(fpip, "find_tiles_in_countries", lambda *args, **kwargs: tiles.copy())
     monkeypatch.setattr(duckdb, "sql", lambda q: _DuckResult())

@@ -108,6 +108,9 @@ def test_piechart_figure_main_smoke(monkeypatch, tmp_path):
         },
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [9],
+        "mix_use_categories": [],
+        "nodata_country_color": "#bdbdbd",
+        "nodata_country_label": "NODATA",
     }
 
     boundaries = gpd.GeoDataFrame(
@@ -137,7 +140,7 @@ def test_piechart_figure_main_smoke(monkeypatch, tmp_path):
 
     pd.DataFrame({"country": ["DE", "FR"], "population_total": [80_000_000, 65_000_000]}).to_csv(stats_fp, index=False)
 
-    monkeypatch.setattr(pf, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(pf, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(pf, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(pf, "create_pop_output_paths", lambda cfg_in: {"voronoi": {"0": str(pop_fp)}})
 
@@ -170,9 +173,10 @@ def test_piechart_figure_main_requires_figures_approach(monkeypatch, tmp_path):
         },
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [9],
+        "mix_use_categories": [],
     }
 
-    monkeypatch.setattr(pf, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(pf, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(pf, "load_config", lambda **kwargs: cfg)
 
     with pytest.raises(KeyError, match="figures"):
@@ -189,9 +193,10 @@ def test_piechart_figure_main_requires_voronoi_mapping_for_approach(monkeypatch,
         },
         "zonal_sum_default_column": "2024_zonal_sum",
         "industrial_category_numbers": [9],
+        "mix_use_categories": [],
     }
 
-    monkeypatch.setattr(pf, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(pf, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(pf, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(pf, "create_pop_output_paths", lambda _cfg: {"voronoi": {"0": "pop.gpkg"}})
 
@@ -296,7 +301,8 @@ def test_download_bing_annotate_parallel_error_logging_branch(monkeypatch, tmp_p
 
     monkeypatch.setattr(dba, "ThreadPoolExecutor", _Exec)
     monkeypatch.setattr(dba, "as_completed", lambda futures: list(futures))
-    dba.annotate_bboxes_parallel(bbox, poly, ["man_made"], line, ["waterway"], str(tmp_path), str(tmp_path), set())
+    with pytest.raises(RuntimeError, match="bbox annotation task"):
+        dba.annotate_bboxes_parallel(bbox, poly, ["man_made"], line, ["waterway"], str(tmp_path), str(tmp_path), set())
 
 
 def test_download_bing_main_smoke(monkeypatch, tmp_path):
@@ -329,7 +335,6 @@ def test_download_bing_main_smoke(monkeypatch, tmp_path):
             "zoom_level": 17,
             "base_z17_resolution": 1.1943285669555664,
             "bing_imagery_url": "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial",
-            "bing_api_key": "dummy",
             "max_workers": 1,
             "georeferenced": False,
             "fontsize": 24,
@@ -353,6 +358,7 @@ def test_download_bing_main_smoke(monkeypatch, tmp_path):
 
     monkeypatch.setattr(starter, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(starter, "load_config", lambda **kwargs: cfg)
+    monkeypatch.setenv("BING_API_KEY", "dummy")
 
     grids = gpd.GeoDataFrame({"idx": [1], "geometry": [box(0, 0, 10, 10)]}, geometry="geometry", crs="EPSG:4326")
     points = gpd.GeoDataFrame({"idx": [1], "geometry": [Point(5, 5)]}, geometry="geometry", crs="EPSG:4326")
@@ -389,7 +395,10 @@ def test_download_bing_main_smoke(monkeypatch, tmp_path):
                 return _QRes(pd.DataFrame({"waterway": ["river"], "geometry": [LineString([(0, 0), (1, 1)]).wkt], "grid": ["1"]}))
             return _QRes(pd.DataFrame())
 
-    monkeypatch.setattr(dba.duckdb, "connect", lambda path: _Conn())
+        def close(self):
+            return None
+
+    monkeypatch.setattr(dba.duckdb, "connect", lambda *a, **k: _Conn())
     runpy.run_module("src.annotation_scripts.download_bing_annotate", run_name="__main__")
 
 
@@ -413,7 +422,7 @@ def test_new01_main_script_smoke(monkeypatch, tmp_path):
         },
     }
 
-    monkeypatch.setattr(starter, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(starter, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(starter, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(n1.os, "chdir", lambda path: None)
 
@@ -565,12 +574,13 @@ def test_download_pop_main_smoke(monkeypatch, tmp_path):
         "paths": {"pop_dir": str(tmp_path / "pop")},
         "start_year": 2015,
         "end_year": 2024,
+        "country_limit": 0,
         "worldpop_2014_url_template": "tpl2014",
         "worldpop_yearly_url_template": "tplyear",
     }
 
     monkeypatch.setattr(dp.os, "chdir", lambda path: None)
-    monkeypatch.setattr(dp, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(dp, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(dp, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(
         dp,
@@ -598,7 +608,7 @@ def test_download_pop_main_smoke(monkeypatch, tmp_path):
     )
 
     dp.main(res=12, max_workers=3)
-    assert seen["countries"] == ["deu", "fra", "usa"]
+    assert seen["countries"] == ["bra", "deu", "fra", "usa"]
     assert seen["res"] == 12
     assert seen["max_workers"] == 3
 
@@ -623,6 +633,7 @@ def test_create_rasters_main_smoke(monkeypatch, tmp_path):
             "non_served_outpath": str(tmp_path / "non_served.gpkg"),
             "csv_output_filepath": str(tmp_path / "stats.gpkg"),
             "watershed": str(watershed_path),
+            "watershed_with_countries": str(tmp_path / "watershed_with_countries.gpkg"),
             "overture": str(overture_path),
             "overture_s3_url": "s3://dummy/overture",
         },
@@ -752,20 +763,13 @@ def test_new03_merge_bboxes_sql_branches(monkeypatch, tmp_path):
         def close(self):
             return None
 
-    def _connect(dbfile):
-        # Ensure temp file exists so final cleanup remove-path is exercised.
-        with open(dbfile, "w", encoding="utf-8") as f:
-            f.write("x")
+    def _connect(*_args, **_kwargs):
         return _Conn()
 
-    monkeypatch.setattr(ww3.random, "randint", lambda a, b: 123)
     monkeypatch.setattr(ww3.duckdb, "connect", _connect)
     monkeypatch.setattr(ww3, "parallel_convert_geojsons", lambda *args, **kwargs: [str(tmp_path / "idx_1_polygons.parquet")])
     monkeypatch.setattr(ww3, "merge_parquets_sql", lambda *args, **kwargs: {"x": "1"})
     monkeypatch.setattr(ww3, "ensure_output_dir_for_file", lambda path: None)
-
-    removed = {}
-    monkeypatch.setattr(ww3.os, "remove", lambda p: removed.setdefault("path", str(p)))
 
     ww3.merge_bboxes_sql(
         polygons_dir=str(tmp_path),
@@ -778,7 +782,9 @@ def test_new03_merge_bboxes_sql_branches(monkeypatch, tmp_path):
         overwrite=True,
     )
 
-    assert removed["path"].endswith("temp_123.db")
+    # The scratch database is owned by utils.duckdb_connection; this module must
+    # neither name nor delete one.
+    assert not list(tmp_path.glob("temp_*.db"))
 
 
 def test_new03_load_geodata_missing_geometry_column_raises(monkeypatch, tmp_path):
@@ -805,7 +811,7 @@ def test_new03_merge_bboxes_sql_empty_conversion_short_circuits(monkeypatch, tmp
             return None
 
     monkeypatch.setattr(ww3.random, "randint", lambda a, b: 456)
-    monkeypatch.setattr(ww3.duckdb, "connect", lambda _db: _Conn())
+    monkeypatch.setattr(ww3.duckdb, "connect", lambda *a, **k: _Conn())
     monkeypatch.setattr(ww3, "parallel_convert_geojsons", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         ww3,
@@ -825,47 +831,10 @@ def test_new03_merge_bboxes_sql_empty_conversion_short_circuits(monkeypatch, tmp
     )
 
 
-def test_new03_merge_bboxes_sql_cleanup_failure_is_non_fatal(monkeypatch, tmp_path):
-    # FIX [F-1]: cleanup failures must not mask successful or primary execution outcomes.
-    out = tmp_path / "merged.parquet"
-    inputs = [str(tmp_path / "idx_1_polygons.geojson")]
-    monkeypatch.setattr(ww3.glob, "glob", lambda pattern: inputs)
-
-    class _Conn:
-        def execute(self, _query):
-            return self
-
-        def close(self):
-            return None
-
-    def _connect(dbfile):
-        with open(dbfile, "w", encoding="utf-8") as f:
-            f.write("x")
-        return _Conn()
-
-    monkeypatch.setattr(ww3.random, "randint", lambda a, b: 789)
-    monkeypatch.setattr(ww3.duckdb, "connect", _connect)
-    monkeypatch.setattr(ww3, "parallel_convert_geojsons", lambda *args, **kwargs: [str(tmp_path / "idx_1_polygons.parquet")])
-    monkeypatch.setattr(ww3, "merge_parquets_sql", lambda *args, **kwargs: {"x": "1"})
-    monkeypatch.setattr(ww3, "ensure_output_dir_for_file", lambda path: None)
-    monkeypatch.setattr(ww3.os, "remove", lambda _p: (_ for _ in ()).throw(OSError("cannot delete temp file")))
-
-    ww3.merge_bboxes_sql(
-        polygons_dir=str(tmp_path),
-        prototype="*_polygons.geojson",
-        output_filepath=str(out),
-        temp_parquet_dir=str(tmp_path / "tmp_parquets"),
-        max_workers=1,
-        insert_batch_size=1,
-        duckdb_threads=1,
-        overwrite=True,
-    )
-
-
 def test_new03_script_skips_main_when_output_file_missing(monkeypatch, tmp_path):
     # FIX [D-1]: script entrypoint should skip clustering if merged parquet is absent.
     cfg = {
-        "annotations": {"overwrite": False},
+        "overwrite_existing": False,
         "paths": {
             "corrected_all_filepath": str(tmp_path / "points.gpkg"),
             "annotations_grid_dir": str(tmp_path / "grids"),
@@ -895,7 +864,7 @@ def test_new03_script_skips_main_when_output_file_missing(monkeypatch, tmp_path)
             return True
         return original_exists(path)
 
-    monkeypatch.setattr(starter, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(starter, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(starter, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(os.path, "exists", _exists)
 
@@ -945,7 +914,7 @@ def test_impact_polygons_main_smoke_writes_outputs(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(ipp.os, "chdir", lambda path: None)
-    monkeypatch.setattr(ipp, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(ipp, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(ipp, "load_config", lambda **kwargs: cfg)
 
     def _read_file(path, columns=None, **kwargs):
@@ -968,7 +937,7 @@ def test_impact_polygons_main_smoke_writes_outputs(monkeypatch, tmp_path):
 
     written = []
     monkeypatch.setattr(gpd.GeoDataFrame, "to_file", lambda self, path, driver="GPKG": written.append(str(path)))
-    monkeypatch.setattr(ipp.sys, "argv", ["prog", "8"])
+    monkeypatch.setattr(sys, "argv", ["prog", "--max-workers", "8"])
 
     ipp.main()
     assert len(written) == 2
@@ -1019,13 +988,13 @@ def test_impact_polygons_main_no_output_branch(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(ipp.os, "chdir", lambda path: None)
-    monkeypatch.setattr(ipp, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(ipp, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(ipp, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(ipp.gpd, "read_file", lambda path, columns=None, **kwargs: pop_gdf.copy() if str(path).endswith("non_served.gpkg") else river_gdf.copy())
     monkeypatch.setattr(ipp, "batch_estimate_utm_epsg", lambda gdf: (np.array([32632]), np.array([50.0])))
     monkeypatch.setattr(ipp, "create_dicts", lambda *args, **kwargs: None)
     monkeypatch.setattr(ipp, "orchestrate_logic", lambda *args, **kwargs: None)
-    monkeypatch.setattr(ipp.sys, "argv", ["prog", "not-an-int"])
+    monkeypatch.setattr(sys, "argv", ["prog"])
 
     ipp.main()
 
@@ -1072,8 +1041,8 @@ def test_new02_elements_timer_and_find_bbox_branches(monkeypatch):
 
 def test_new02_main_smoke_paths(monkeypatch, tmp_path):
     cfg = {
+        "overwrite_existing": False,
         "annotations": {
-            "overwrite": False,
             "retries": 1,
             "max_workers": 1,
             "overpass_urls": [
@@ -1095,7 +1064,7 @@ def test_new02_main_smoke_paths(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(n2.os, "chdir", lambda path: None)
-    monkeypatch.setattr(n2, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(n2, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(n2, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(n2.gpd, "read_file", lambda path: grid.copy())
     monkeypatch.setattr(n2.os, "makedirs", lambda *args, **kwargs: None)
@@ -1189,7 +1158,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(fir, "estimate_utm_epsg", lambda x, y: 3857)
+    monkeypatch.setattr(fir, "estimate_utm_epsg_for_geom", lambda geom: 3857)
     monkeypatch.setattr(fir, "ProcessPoolExecutor", _Exec)
     monkeypatch.setattr(fir, "as_completed", lambda futures: list(futures))
     monkeypatch.setattr(fir, "tqdm", lambda iterable, **kwargs: iterable)
@@ -1202,6 +1171,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
     # Main smoke path
     cfg = {
         "x_distance": 5000,
+        "basin_column_name": "HYBAS_ID",
         "paths": {
             "non_served_above_threshold_outpath": str(tmp_path / "poly.gpkg"),
             "rivershed_output_path": str(tmp_path / "rivers.gpkg"),
@@ -1209,7 +1179,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
         }
     }
     monkeypatch.setattr(fir.os, "chdir", lambda path: None)
-    monkeypatch.setattr(fir, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(fir, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(fir, "load_config", lambda **kwargs: cfg)
 
     def _read_file(path, columns=None, **kwargs):
@@ -1237,7 +1207,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
     monkeypatch.setattr(fir, "orchestrate_river_assignment", lambda p, r, max_workers=1: p.assign(NXT_DIS=[10]))
     monkeypatch.setattr(fir, "ensure_output_dir_for_file", lambda path: None)
     monkeypatch.setattr(gpd.GeoDataFrame, "to_file", lambda self, path, driver="GPKG", index=False: None)
-    monkeypatch.setattr(fir.sys, "argv", ["prog", "not-a-number"])
+    monkeypatch.setattr(sys, "argv", ["prog"])
 
     fir.main()
 
@@ -1245,6 +1215,7 @@ def test_find_intersection_orchestration_and_main_smoke(monkeypatch, tmp_path):
 def test_find_intersection_main_raises_when_missing_crs(monkeypatch, tmp_path):
     cfg = {
         "x_distance": 5000,
+        "basin_column_name": "HYBAS_ID",
         "paths": {
             "non_served_above_threshold_outpath": str(tmp_path / "poly.gpkg"),
             "rivershed_output_path": str(tmp_path / "rivers.gpkg"),
@@ -1252,7 +1223,7 @@ def test_find_intersection_main_raises_when_missing_crs(monkeypatch, tmp_path):
         }
     }
     monkeypatch.setattr(fir.os, "chdir", lambda path: None)
-    monkeypatch.setattr(fir, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(fir, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(fir, "load_config", lambda **kwargs: cfg)
 
     no_crs_poly = gpd.GeoDataFrame({"HYBAS_ID": [1], "geometry": [box(0, 0, 1, 1)]}, geometry="geometry")
@@ -1263,7 +1234,7 @@ def test_find_intersection_main_raises_when_missing_crs(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(fir.gpd, "read_file", lambda path, columns=None, **kwargs: no_crs_poly.copy() if str(path).endswith("poly.gpkg") else ok_rivers.copy())
-    monkeypatch.setattr(fir.sys, "argv", ["prog", "4"])
+    monkeypatch.setattr(sys, "argv", ["prog", "--max-workers", "4"])
 
     with pytest.raises(ValueError):
         fir.main()
@@ -1272,6 +1243,7 @@ def test_find_intersection_main_raises_when_missing_crs(monkeypatch, tmp_path):
 def test_find_intersection_main_rejects_non_positive_workers(monkeypatch, tmp_path):
     cfg = {
         "x_distance": 5000,
+        "basin_column_name": "HYBAS_ID",
         "paths": {
             "non_served_above_threshold_outpath": str(tmp_path / "poly.gpkg"),
             "rivershed_output_path": str(tmp_path / "rivers.gpkg"),
@@ -1279,9 +1251,9 @@ def test_find_intersection_main_rejects_non_positive_workers(monkeypatch, tmp_pa
         }
     }
     monkeypatch.setattr(fir.os, "chdir", lambda path: None)
-    monkeypatch.setattr(fir, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(fir, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(fir, "load_config", lambda **kwargs: cfg)
-    monkeypatch.setattr(fir.sys, "argv", ["prog", "0"])
+    monkeypatch.setattr(sys, "argv", ["prog", "--max-workers", "0"])
     monkeypatch.setattr(
         fir.gpd,
         "read_file",
@@ -1348,10 +1320,12 @@ def test_download_and_vectorize_main_persist_rasters_path(monkeypatch, tmp_path)
             "overture_s3_url": "s3://example/overture.parquet",
             "industrial_raster_persistent_dir": raster_dir,
         },
-        "industrial_vectorize_overwrite": True,
+        "overwrite_existing": True,
         "industrial_min_cells": 20,
         "industrial_persist_rasters": True,
         "industrial_simplify_tolerance": 0.01,
+        "industrial_batch_size": 2000,
+        "industrial_download_chunk_size": 1048576,
         "max_workers": 2,
         "basin_column_name": "HYBAS_ID",
         "sindex_concurrency": False,
@@ -1372,10 +1346,10 @@ def test_download_and_vectorize_main_persist_rasters_path(monkeypatch, tmp_path)
             return state["vectorized_exists"]
         return original_exists(path)
 
-    monkeypatch.setattr(dv, "parse_config_overrides", lambda args=None, argv=None, start_index=1: {})
+    monkeypatch.setattr(dv, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(dv, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(dv.os.path, "exists", _exists)
-    monkeypatch.setattr(dv, "download_file", lambda url, path: None)
+    monkeypatch.setattr(dv, "download_file", lambda *a, **k: None)
     monkeypatch.setattr(dv, "_find_raster_dirs", lambda base: [str(tmp_path / "extracted")])
     monkeypatch.setattr(dv, "_vectorize_and_merge", lambda *args, **kwargs: merged.copy())
     monkeypatch.setattr(dv.gpd, "read_file", lambda path, driver=None: watershed.copy())
@@ -1417,3 +1391,70 @@ def test_download_and_vectorize_main_persist_rasters_path(monkeypatch, tmp_path)
         (f"{vectorized_path}.tmp", vectorized_path),
         (f"{vectorized_path}.tmp", vectorized_path),
     ]
+
+
+def test_add_tile_into_mosaic_clips_on_row_and_column_axes():
+    """Overhanging tiles are clipped by rows/cols, not by band/row counts.
+
+    A single-band tile is (1, rows, cols). Trimming with shape[0] (bands) and
+    shape[1] (rows) - as the previous arithmetic did - either fails to trim at
+    all or trims columns by a row count, shifting tile contents in the mosaic.
+    """
+    import numpy as np
+
+    from src import download_pop as dp
+
+    mosaic = np.zeros((1, 3, 6), dtype="float32")
+    tile = np.arange(1, 13, dtype="float32").reshape(1, 3, 4)
+
+    # Window starts at column 4, so only the tile's first 2 columns fit.
+    dp.add_tile_into_mosaic(mosaic, tile, row_off=0, col_off=4, height=3, width=4)
+
+    assert np.allclose(mosaic[0, :, 4:], np.array([[1, 2], [5, 6], [9, 10]]))
+    assert np.allclose(mosaic[0, :, :4], 0.0)
+
+
+def test_add_tile_into_mosaic_clips_overhanging_rows():
+    import numpy as np
+
+    from src import download_pop as dp
+
+    mosaic = np.zeros((1, 3, 4), dtype="float32")
+    tile = np.ones((1, 3, 4), dtype="float32")
+
+    # Window starts at row 2, so only the tile's first row fits.
+    dp.add_tile_into_mosaic(mosaic, tile, row_off=2, col_off=0, height=3, width=4)
+
+    assert np.allclose(mosaic[0, 2, :], 1.0)
+    assert np.allclose(mosaic[0, :2, :], 0.0)
+
+
+def test_mosaic_large_rasters_places_tiles_side_by_side(tmp_path):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from src import download_pop as dp
+
+    def write_tile(path, x_origin, fill):
+        profile = {
+            "driver": "GTiff", "height": 3, "width": 5, "count": 1,
+            "dtype": "float32", "crs": "EPSG:32632",
+            "transform": from_origin(x_origin, 3, 1, 1),
+        }
+        with rasterio.open(path, "w", **profile) as dst:
+            dst.write(np.full((1, 3, 5), fill, dtype="float32"))
+
+    left, right = tmp_path / "left.tif", tmp_path / "right.tif"
+    write_tile(left, 0, 1.0)
+    write_tile(right, 5, 2.0)
+
+    out = tmp_path / "mosaic.tif"
+    dp.mosaic_large_rasters([str(left), str(right)], str(out))
+
+    with rasterio.open(out) as src:
+        data = src.read(1)
+
+    assert data.shape == (3, 10)
+    assert np.allclose(data[:, :5], 1.0)
+    assert np.allclose(data[:, 5:], 2.0)

@@ -1,36 +1,65 @@
 #!/bin/bash
-# Parallel parameter sweep for create_voronoi (4 jobs Ãƒâ€” 16 CPUs = 64 CPUs total)
+# Parallel parameter sweep for create_voronoi (4 jobs × 16 CPUs = 64 CPUs total)
 #SBATCH --partition=cpu-single
 #SBATCH --time=96:00:00
 #SBATCH --mem=234gb
 #SBATCH --cpus-per-task=64
 #SBATCH --array=0-9
 #SBATCH --job-name=voronoi-parallel-sweep
-#SBATCH --output=logs/voronoi_parallel_sweep_%a.out
-#SBATCH --error=logs/voronoi_parallel_sweep_%a.err
+#SBATCH --output=logs/voronoi_parallel_sweep_%A_%a.out
+#SBATCH --error=logs/voronoi_parallel_sweep_%A_%a.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+
 PYTHON_SCRIPT="src.sensitivity_analysis_scripts.create_voronoi_parallel_sweep"
-APPROACH="${1:-1}"
-VERSION="${2:-}"
-DYNAMIC_BUFFERING="${3:-}"
-DYNAMIC_BUFFER_K="${4:-}"
+APPROACH="1"
+VERSION=""
+DYNAMIC_BUFFERING=""
+DYNAMIC_BUFFER_K=""
 NUM_JOBS=16
 
-mkdir -p "${LOG_DIR}"
-rm -f "${LOG_DIR}/voronoi_parallel_sweep_${SLURM_ARRAY_TASK_ID:-0}.log" \
-      "${LOG_DIR}"/voronoi_parallel_sweep_*.out \
-      "${LOG_DIR}"/voronoi_parallel_sweep_*.err
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/voronoi_parallel_sweep_${SLURM_ARRAY_TASK_ID:-0}.log"
-}
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --approach)
+            APPROACH="$2"
+            shift 2
+            ;;
+        --version)
+            VERSION="$2"
+            shift 2
+            ;;
+        --dynamic-buffering)
+            DYNAMIC_BUFFERING="$2"
+            shift 2
+            ;;
+        --dynamic-buffer-k)
+            DYNAMIC_BUFFER_K="$2"
+            shift 2
+            ;;
+        --num-jobs)
+            NUM_JOBS="$2"
+            shift 2
+            ;;
+        *)
+            echo "ERROR: Unknown argument '$1'" >&2
+            echo "Usage: $0 [--approach <n>] [--version <v>] [--dynamic-buffering <true|false>] [--dynamic-buffer-k <k>] [--num-jobs <n>]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
+CPUS_PER_TASK="${SLURM_CPUS_PER_TASK:-${NUM_JOBS}}"
+MEM_PER_NODE="${SLURM_MEM_PER_NODE:-unknown}"
+init_log "voronoi_parallel_sweep_${TASK_ID}"
+enable_err_trap
+rm -f "${LOG_DIR}"/voronoi_parallel_sweep_*.out \
+      "${LOG_DIR}"/voronoi_parallel_sweep_*.err
+
 if ! [[ "${TASK_ID}" =~ ^[0-9]+$ ]]; then
     log "ERROR: Invalid task id '${TASK_ID}'"
     exit 1
@@ -43,22 +72,25 @@ fi
 log "Starting Voronoi parallel parameter sweep task ${TASK_ID}/9"
 log "Configuration:"
 log "  - Parallel jobs: ${NUM_JOBS}"
-log "  - CPUs per job: $((SLURM_CPUS_PER_TASK / NUM_JOBS))"
-log "  - Total CPUs: ${SLURM_CPUS_PER_TASK}"
-log "  - Total memory: ${SLURM_MEM_PER_NODE}MB"
+log "  - CPUs per job: $((CPUS_PER_TASK / NUM_JOBS))"
+log "  - Total CPUs: ${CPUS_PER_TASK}"
+log "  - Total memory: ${MEM_PER_NODE}MB"
 log "  - Approach: ${APPROACH}"
 log "  - Version: ${VERSION:-default}"
 log "  - Dynamic buffering: ${DYNAMIC_BUFFERING:-default}"
 log "  - Dynamic buffer k: ${DYNAMIC_BUFFER_K:-default}"
 
-log "Installing src module (editable)"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null 2>&1
+#install_package
 
 log "Running parallel sweep with ${NUM_JOBS} concurrent jobs"
-${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${VERSION}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" \
+${PYTHON_CMD} -m "${PYTHON_SCRIPT}" \
+    --task-id "${TASK_ID}" \
+    --version "${VERSION}" \
+    --dynamic-buffering "${DYNAMIC_BUFFERING}" \
+    --dynamic-buffer-k "${DYNAMIC_BUFFER_K}" \
     --approach "${APPROACH}" \
     --num-jobs "${NUM_JOBS}" \
-    2>&1 | tee -a "${LOG_DIR}/voronoi_parallel_sweep_${TASK_ID}.log"
+    2>&1 | tee -a "${LOG_FILE}"
 
 EXIT_CODE=$?
 if [ ${EXIT_CODE} -eq 0 ]; then

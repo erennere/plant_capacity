@@ -22,8 +22,11 @@ Functions are grouped by purpose:
     ``_resolve_configured_callable``
 
 All config values are read directly from the ``cfg`` dict produced by
-``starter.load_config``; no default values are hard-coded here — they live
-exclusively in ``config.yaml``.
+``starter.load_config``. The one exception is ``run_voronoi_approach``, whose
+keyword arguments (``buffer_id_col``, ``scale_weights``, ``only_round``,
+``buffering``, ``method``) carry Python-level defaults; every caller in the
+pipeline passes them explicitly from ``cfg``, so those defaults only apply to
+direct in-process calls.
 """
 
 import os
@@ -33,7 +36,11 @@ import geopandas as gpd
 from shapely import from_wkt, to_wkt, from_wkb
 import shapely
 import logging
-from scipy.spatial import cKDTree
+
+try:
+    from .geo_utils import nearest_neighbor_distances
+except ImportError:  # Support running/importing as a top-level module
+    from geo_utils import nearest_neighbor_distances
 
 logger = logging.getLogger(__name__)
 
@@ -64,20 +71,10 @@ def _compute_mean_2_nnd_web_mercator(gdf):
     tmp = tmp.to_crs('epsg:3857')
 
     coords = np.column_stack((tmp.geometry.x.to_numpy(), tmp.geometry.y.to_numpy()))
-    n = len(coords)
-    if n < 2:
+    if len(coords) < 2:
         return gdf
 
-    # k includes the point itself as distance 0; k=3 gives self + two neighbors.
-    k = min(3, n)
-    tree = cKDTree(coords)
-    distances, _ = tree.query(coords, k=k)
-    if k == 2:
-        mean_dist = distances[:, 1].astype(float)
-    else:
-        mean_dist = np.nanmean(distances[:, 1:3], axis=1).astype(float)
-
-    gdf.loc[valid_idx, 'mean_2_nnd'] = mean_dist
+    gdf.loc[valid_idx, 'mean_2_nnd'] = nearest_neighbor_distances(coords, neighbors=2)
     return gdf
 
 
@@ -145,13 +142,6 @@ def create_output_paths(cfg):
             'WWTP_convex': os.path.join(buffers_dir, f'dissolved_wwtp_convex_hull_v{version}_lvl{level}_bf{buffer}.gpkg'),
             'city_convex': os.path.join(buffers_dir, f'dissolved_city_convex_hull_v{version}_lvl{level}_bf{buffer}.gpkg'),
         },
-        #'voronoi': {
-        #    '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-        #    '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-        #    '1': os.path.join(voronoi_dir, f'appr_1_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-        #    '1_only_round': os.path.join(voronoi_dir, f'appr_1_only_round_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-        #    '2': os.path.join(voronoi_dir, f'appr_2_v{version}_lvl{level}_bf{int(buffer)}{weight_func}.gpkg'),
-        #}
         'voronoi': {
             '0': os.path.join(voronoi_dir, f'appr_0_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
             '0_only_round': os.path.join(voronoi_dir, f'appr_0_only_round_v{version}_lvl{level}_bf{buffer}_{weight_type}{weight_func_suffix}.gpkg'),
@@ -227,12 +217,12 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     Notes
     -----
     Skip-if-exists logic is applied at the top of this function using
-    ``cfg['voronoi_overwrite']``.  The area function, buffer function, and
+    ``cfg['overwrite_existing']``.  The area function, buffer function, and
     their respective kwargs are resolved via ``_resolve_configured_callable``
     using ``cfg['calculate_area_fn']``, ``cfg['calculate_buffer_fn']``,
     ``cfg['area_fn_kwargs']``, and ``cfg['calculate_buffer_kwargs']``.
     """
-    if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
+    if os.path.exists(output_path) and not cfg['overwrite_existing']:
         logger.info(f"Approach {approach_id}: Output already exists at {output_path} and overwrite is False. Skipping.")
         return None, None
 
@@ -241,10 +231,12 @@ def run_voronoi_approach(approach_id, gdf, clipping_gdf, country_df, cfg, distan
     
     try:
         from . import create_voronoi as create_voronoi_module
-        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file, calculate_area, calculate_buffer
+        from .create_voronoi import orchestrate_voronoi_weights, drop_duplicates, calculate_area, calculate_buffer
+        from .utils import ensure_output_dir_for_file, select_industrial_categories
     except ImportError:  # Support running as a top-level script
         import create_voronoi as create_voronoi_module
-        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates, ensure_output_dir_for_file, calculate_area, calculate_buffer
+        from create_voronoi import orchestrate_voronoi_weights, drop_duplicates, calculate_area, calculate_buffer
+        from utils import ensure_output_dir_for_file, select_industrial_categories
 
     site_country_col = site_country_col or cfg['country_output_column']
     country_boundary_col = country_boundary_col or cfg['country_boundary_column']
@@ -344,16 +336,20 @@ def prepare_data(cfg):
     """
     try:
         from .create_voronoi import (
-            drop_duplicates, buffer_geometry, intersects_with_country_db,
+            drop_duplicates, intersects_with_country_db,
             download_overture_maps, intersect_with_polygon_sindex,
-            orchestrate_overlaps, ensure_output_dir_for_file,
+            orchestrate_overlaps,
         )
+        from .geo_utils import buffer_geometry
+        from .utils import ensure_output_dir_for_file, select_industrial_categories
     except ImportError:  # Support running as a top-level script
         from create_voronoi import (
-            drop_duplicates, buffer_geometry, intersects_with_country_db,
+            drop_duplicates, intersects_with_country_db,
             download_overture_maps, intersect_with_polygon_sindex,
-            orchestrate_overlaps, ensure_output_dir_for_file,
+            orchestrate_overlaps,
         )
+        from geo_utils import buffer_geometry
+        from utils import ensure_output_dir_for_file, select_industrial_categories
     
     logger.info("Preparing input data...")
     paths = cfg['paths']
@@ -372,7 +368,7 @@ def prepare_data(cfg):
             crs='epsg:4326',
         )
     else:
-        gdf_bbox = gpd.read_file(paths['corrected_all_filepath'])
+        gdf_bbox = gpd.read_file(paths['annotated_all_filepath'])
         if 'final_geometry' in gdf_bbox.columns:
             gdf_bbox['geometry_wkt'] = gdf_bbox['geometry'].apply(to_wkt)
             gdf_bbox['geometry'] = gdf_bbox['final_geometry']
@@ -390,20 +386,21 @@ def prepare_data(cfg):
     gdf_bbox = _compute_mean_2_nnd_web_mercator(gdf_bbox)
 
     if cfg['remove_industrial']:
-        if 'category_number' in gdf_bbox.columns:
-            initial_count = len(gdf_bbox)
-            industrial_categories = {str(c) for c in cfg['industrial_category_numbers']}
-            industrial_mask = gdf_bbox['category_number'].astype(str).isin(industrial_categories)
-            gdf_bbox = gdf_bbox[~industrial_mask].copy()
-            gdf_bbox[site_id_col] = np.arange(len(gdf_bbox))
-            logger.info(
-                "Removed %s industrial sites based on category_number",
-                initial_count - len(gdf_bbox),
-            )
+        # Discard direction: industrial and mixed-use sites both leave the layer.
+        # The industrial pipeline keeps exactly this set - see
+        # utils.select_industrial_categories.
+        gdf_bbox = select_industrial_categories(
+            gdf_bbox,
+            cfg['industrial_category_numbers'],
+            cfg['mix_use_categories'],
+            keep=False,
+            logger=logger,
+        )
+        gdf_bbox[site_id_col] = np.arange(len(gdf_bbox))
     
-    # Add country codes
-    #if 'ISO_2' not in gdf_bbox.columns:
-    if True:
+    # Add country codes. Rejoining is the default: an inherited country column
+    # from an upstream layer can disagree with the boundary layer in use.
+    if cfg['force_country_rejoin'] or country_output_col not in gdf_bbox.columns:
         if country_output_col in gdf_bbox.columns:
             gdf_bbox = gdf_bbox.drop(columns=[country_output_col])
         if not os.path.exists(paths['overture']):
@@ -425,8 +422,7 @@ def prepare_data(cfg):
         index=basin_gdf.index,
     )
     basin_gdf['basin_area'] = basin_gdf[['geometry']].to_crs(6933).geometry.area
-    #if 'ISO_2' not in basin_gdf.columns:
-    if True:
+    if cfg['force_country_rejoin'] or country_output_col not in basin_gdf.columns:
         if country_output_col in basin_gdf.columns:
             basin_gdf = basin_gdf.drop(columns=[country_output_col])
         if not os.path.exists(paths['overture']):

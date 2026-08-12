@@ -37,7 +37,7 @@ def test_verification_main_writes_ver_unver_and_single_outputs(monkeypatch, tmp_
     )
 
     monkeypatch.setattr(verification_script.os, "chdir", lambda path: None)
-    monkeypatch.setattr(verification_script, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(verification_script, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(verification_script, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(verification_script.os.path, "isdir", lambda path: path == pop_dir)
     monkeypatch.setattr(verification_script.os.path, "exists", lambda path: False)
@@ -79,7 +79,7 @@ def test_verification_main_requires_existing_pop_output_dir(monkeypatch, tmp_pat
     }
 
     monkeypatch.setattr(verification_script.os, "chdir", lambda path: None)
-    monkeypatch.setattr(verification_script, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(verification_script, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(verification_script, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(verification_script.os.path, "isdir", lambda path: False)
 
@@ -110,7 +110,7 @@ def test_verification_main_processes_only_gpkg_files(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(verification_script.os, "chdir", lambda path: None)
-    monkeypatch.setattr(verification_script, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(verification_script, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(verification_script, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(verification_script.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(verification_script.os.path, "exists", lambda path: True)
@@ -188,7 +188,7 @@ def test_hw_comparison_main_dispatches_only_gpkg_files(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(hw_comparison.os, "chdir", lambda path: None)
-    monkeypatch.setattr(hw_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(hw_comparison, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(hw_comparison, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(hw_comparison.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(hw_comparison.os, "listdir", lambda path: ["a.gpkg", "notes.txt"])
@@ -232,7 +232,7 @@ def test_hw_comparison_main_returns_when_verification_dir_missing(monkeypatch, t
     }
 
     monkeypatch.setattr(hw_comparison.os, "chdir", lambda path: None)
-    monkeypatch.setattr(hw_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(hw_comparison, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(hw_comparison, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(hw_comparison.os.path, "isdir", lambda path: False)
     monkeypatch.setattr(
@@ -256,6 +256,7 @@ def test_eu_comparison_main_assigns_nearest_filters_and_dispatches(monkeypatch, 
             "eu_ref_filepath": ref_path,
         },
         "threshold": 500,
+        "eu_reference_factor": 1,
     }
     captured = {}
 
@@ -277,7 +278,7 @@ def test_eu_comparison_main_assigns_nearest_filters_and_dispatches(monkeypatch, 
     )
 
     monkeypatch.setattr(eu_comparison.os, "chdir", lambda path: None)
-    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(eu_comparison, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(eu_comparison.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(eu_comparison.os, "listdir", lambda path: ["eu_case.gpkg", "ignore.txt"])
@@ -298,7 +299,7 @@ def test_eu_comparison_main_assigns_nearest_filters_and_dispatches(monkeypatch, 
     monkeypatch.setattr(
         eu_comparison,
         "orchestrate_single",
-        lambda gdf, approach, plot_args, output_dir, filename, pop_col='POP_SERVED': captured.setdefault(
+        lambda gdf, approach, plot_args, output_dir, filename, pop_col='POP_SERVED', **kwargs: captured.setdefault(
             "orchestrate",
             {
                 "rows": len(gdf),
@@ -332,10 +333,11 @@ def test_eu_comparison_main_returns_when_verification_dir_missing(monkeypatch, t
             "eu_ref_filepath": str(tmp_path / "eu_ref.gpkg"),
         },
         "threshold": 500,
+        "eu_reference_factor": 1,
     }
 
     monkeypatch.setattr(eu_comparison.os, "chdir", lambda path: None)
-    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(eu_comparison, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(eu_comparison.os.path, "isdir", lambda path: False)
     monkeypatch.setattr(
@@ -357,6 +359,7 @@ def test_eu_comparison_main_requires_reference_capacity_column(monkeypatch, tmp_
             "eu_ref_filepath": str(tmp_path / "eu_ref.gpkg"),
         },
         "threshold": 500,
+        "eu_reference_factor": 1,
     }
 
     ref_gdf = gpd.GeoDataFrame(
@@ -366,7 +369,7 @@ def test_eu_comparison_main_requires_reference_capacity_column(monkeypatch, tmp_
     )
 
     monkeypatch.setattr(eu_comparison.os, "chdir", lambda path: None)
-    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(eu_comparison, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(eu_comparison, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(eu_comparison.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(eu_comparison.os, "listdir", lambda path: [])
@@ -498,10 +501,10 @@ def test_eu_orchestrate_single_builds_year_metrics_and_verified_title(monkeypatc
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(eu_comparison.os.path, "exists", lambda path: False)
-    monkeypatch.setattr(eu_comparison.os, "makedirs", lambda path, exist_ok=False: None)
+    monkeypatch.setattr(hw_comparison.os.path, "exists", lambda path: False)
+    monkeypatch.setattr(hw_comparison.os, "makedirs", lambda path, exist_ok=False: None)
     monkeypatch.setattr(
-        eu_comparison,
+        hw_comparison,
         "composite_histogram",
         lambda data, my_dict, title, **kwargs: captured.append(
             {
@@ -519,6 +522,12 @@ def test_eu_orchestrate_single_builds_year_metrics_and_verified_title(monkeypatc
         output_dir=output_dir,
         filename="ver_case.gpkg",
         pop_col="POP_SERVED_EU",
+        qual_pop_default=None,
+        filter_qual_pop=False,
+        upper_quantile_hw_comp=0.95,
+        comp_output_prefix="eu_comp",
+        reference_name="Reference EU",
+        hide_empty_axis=False,
     )
 
     assert len(captured) == 2
@@ -603,15 +612,17 @@ def test_eu_composite_histogram_handles_missing_column_without_crashing(monkeypa
             return None
 
     monkeypatch.setattr(
-        eu_comparison.plt,
+        hw_comparison.plt,
         "subplots",
         lambda *args, **kwargs: (_Fig(), np.array([[_Ax() for _ in range(5)] for _ in range(2)])),
     )
-    monkeypatch.setattr(eu_comparison.plt, "tight_layout", lambda *args, **kwargs: None)
-    monkeypatch.setattr(eu_comparison.plt, "show", lambda: None)
-    monkeypatch.setattr(eu_comparison.plt, "close", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hw_comparison.plt, "tight_layout", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hw_comparison.plt, "show", lambda: None)
+    monkeypatch.setattr(hw_comparison.plt, "close", lambda *args, **kwargs: None)
 
-    eu_comparison.composite_histogram(
+    # hide_empty_axis=False reproduces eu_comparison's call-site behavior;
+    # the _Ax stub above has no axis() method, matching that expectation.
+    hw_comparison.composite_histogram(
         df,
         my_dict,
         title="eu",
@@ -619,10 +630,11 @@ def test_eu_composite_histogram_handles_missing_column_without_crashing(monkeypa
         bins=5,
         lower_quantile=0.0,
         upper_quantile=1.0,
+        hide_empty_axis=False,
     )
 
 
-def test_eu_composite_histogram_uses_tuple_rect_for_tight_layout(monkeypatch):
+def test_composite_histogram_uses_expected_rect_for_tight_layout(monkeypatch):
     df = pd.DataFrame({"2021_NDI": [0.1, 0.2, 0.3]})
     my_dict = {2021: "2021_NDI"}
     seen = {}
@@ -656,34 +668,23 @@ def test_eu_composite_histogram_uses_tuple_rect_for_tight_layout(monkeypatch):
         def suptitle(self, *_args, **_kwargs):
             return None
 
-    original_tight_layout = eu_comparison.plt.tight_layout
-    original_subplots = eu_comparison.plt.subplots
-    original_show = eu_comparison.plt.show
-    original_close = eu_comparison.plt.close
-
     monkeypatch.setattr(
-        eu_comparison.plt,
+        hw_comparison.plt,
         "subplots",
         lambda *args, **kwargs: (_Fig(), np.array([[_Ax() for _ in range(5)] for _ in range(2)])),
     )
-    monkeypatch.setattr(eu_comparison.plt, "tight_layout", lambda rect=None, *args, **kwargs: seen.setdefault("rect", rect))
-    monkeypatch.setattr(eu_comparison.plt, "show", lambda: None)
-    monkeypatch.setattr(eu_comparison.plt, "close", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hw_comparison.plt, "tight_layout", lambda rect=None, *args, **kwargs: seen.setdefault("rect", rect))
+    monkeypatch.setattr(hw_comparison.plt, "show", lambda: None)
+    monkeypatch.setattr(hw_comparison.plt, "close", lambda *args, **kwargs: None)
 
-    try:
-        eu_comparison.composite_histogram(
-            df,
-            my_dict,
-            title="eu",
-            save=False,
-            bins=5,
-            lower_quantile=0.0,
-            upper_quantile=1.0,
-        )
-    finally:
-        monkeypatch.setattr(eu_comparison.plt, "tight_layout", original_tight_layout)
-        monkeypatch.setattr(eu_comparison.plt, "subplots", original_subplots)
-        monkeypatch.setattr(eu_comparison.plt, "show", original_show)
-        monkeypatch.setattr(eu_comparison.plt, "close", original_close)
+    hw_comparison.composite_histogram(
+        df,
+        my_dict,
+        title="eu",
+        save=False,
+        bins=5,
+        lower_quantile=0.0,
+        upper_quantile=1.0,
+    )
 
-    assert seen["rect"] == (0, 0, 1, 0.95)
+    assert seen["rect"] == [0, 0, 1, 0.95]

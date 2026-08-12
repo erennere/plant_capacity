@@ -156,12 +156,10 @@ class TestDownloadPopUtilities:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "output.tif"
             
-            try:
-                result = dp.rasterize_csv(df, str(output), res=100)
-                # Should succeed or return None if dependencies missing
-                assert result is None or isinstance(result, str)
-            except Exception:
-                pass
+            result = dp.rasterize_csv(df, str(output), res=100)
+
+            assert result == str(output)
+            assert output.exists()
 
 
 class TestCreateRastersUtilities:
@@ -200,40 +198,43 @@ class TestCreateRastersUtilities:
             ) as dst:
                 dst.write(data, 1)
             
-            try:
-                result = cr.extract_worldpop_universal(
-                    str(raster_path),
-                    hybas_gdf,
-                    exclude_gdf,
-                    min_pixels=1
-                )
-                # Should return GeoDataFrame or None
-                assert result is None or isinstance(result, gpd.GeoDataFrame)
-            except Exception:
-                pass
+            result = cr.extract_worldpop_universal(
+                str(raster_path),
+                hybas_gdf,
+                exclude_gdf,
+                min_pixels=1
+            )
+
+            assert isinstance(result, gpd.GeoDataFrame)
 
 
 class TestDownloadAndVectorizeUtilities:
     """Test utility functions in download_and_vectorize."""
     
-    def test_download_file_url_validation(self):
-        """Test download_file with various URL formats."""
+    def test_download_file_propagates_http_errors(self):
+        """download_file must not swallow a failed HTTP response."""
         with tempfile.TemporaryDirectory() as tmpdir:
             dest = Path(tmpdir) / "file.txt"
-            
-            # Test with invalid URL (should handle gracefully)
-            try:
-                dv.download_file("http://invalid.nonexistent.url/file.zip", str(dest))
-            except (ConnectionError, OSError, Exception):
-                pass
+
+            response = MagicMock()
+            response.raise_for_status.side_effect = OSError("404 Not Found")
+            session = MagicMock()
+            session.get.return_value = response
+
+            with patch.object(dv, "requests_session_with_retries", return_value=session):
+                with pytest.raises(OSError):
+                    dv.download_file(
+                        "http://invalid.nonexistent.url/file.zip",
+                        str(dest),
+                        chunk_size=8192,
+                    )
+
+            assert not dest.exists()
     
     def test_vectorize_raster_file_missing(self):
         """Test vectorize_raster_file with missing input."""
-        try:
-            result = dv.vectorize_raster_file("/nonexistent/raster.tif")
-            assert result is None or isinstance(result, gpd.GeoDataFrame)
-        except (FileNotFoundError, Exception):
-            pass
+        with pytest.raises(Exception):
+            dv.vectorize_raster_file("/nonexistent/raster.tif")
 
 
 class TestDownloadPopProcessing:
@@ -262,108 +263,122 @@ class TestDownloadPopProcessing:
             ) as dst:
                 dst.write(data, 1)
             
-            try:
-                dp.mosaic_large_rasters([str(src_path)], str(dst_path))
-                # Should copy file
-                assert dst_path.exists()
-            except Exception:
-                pass
+            dp.mosaic_large_rasters([str(src_path)], str(dst_path))
+
+            assert dst_path.exists()
     
     def test_get_urls_returns_dict(self):
         """Test get_urls returns proper structure."""
-        try:
-            result = dp.get_urls()
-            
-            assert isinstance(result, dict)
-            # Should have country codes as keys
-            assert len(result) > 0
-            # Each entry should have URLs
-            for country, urls in result.items():
-                assert isinstance(urls, list)
-                assert len(urls) > 0
-                assert all(isinstance(u, str) for u in urls)
-        except Exception:
-            pass
+        result = dp.get_urls(start_year=2015, end_year=2017)
+
+        assert isinstance(result, dict)
+        assert len(result) > 0
+        for country, urls in result.items():
+            assert isinstance(urls, list)
+            # One 2014 aggregate URL plus one per year in the requested range.
+            assert len(urls) == 4
+            assert all(isinstance(u, str) for u in urls)
+            assert all(u.startswith("https://data.worldpop.org/") for u in urls)
     
-    def test_process_single_country_structure(self):
-        """Test process_single_country handles valid parameters."""
+    def test_process_single_country_returns_none_when_download_fails(self):
+        """A failed download short-circuits before any raster work."""
         country_urls = {
             'USA': ['http://example.com/usa.zip'],
             'CAN': ['http://example.com/can.zip']
         }
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            try:
+            with patch.object(dp, 'download_save_and_unzip_pops', return_value=None) as mock_dl, \
+                 patch.object(dp, 'mosaic_large_rasters') as mock_mosaic:
                 result = dp.process_single_country(country_urls, 'USA', res=30, data_dir=tmpdir)
-                # Should return None or process result
-                assert result is None or isinstance(result, (dict, list, str))
-            except Exception:
-                pass
-    
-    def test_process_all_countries_parallel_structure(self):
-        """Test process_all_countries accepts proper parameters."""
+
+            assert result is None
+            mock_dl.assert_called_once_with(country_urls, 'USA', tmpdir)
+            mock_mosaic.assert_not_called()
+
+    def test_process_all_countries_submits_one_job_per_country(self):
+        """Every country is submitted, and a worker failure is not fatal."""
         country_urls = {
             'USA': ['http://example.com/usa.zip'],
+            'CAN': ['http://example.com/can.zip'],
         }
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                # Use max_workers=1 for testing
-                dp.process_all_countries(country_urls, res=30, max_workers=1, data_dir=tmpdir)
-                # Should complete without error
-                assert True
-            except Exception:
+        submitted = []
+
+        class InlineExecutor:
+            """Runs submitted work in-process so no subprocess or network is used."""
+
+            def __init__(self, *args, **kwargs):
                 pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                return False
+
+            def submit(self, fn, *args, **kwargs):
+                submitted.append(args[1])
+                future = MagicMock()
+                if args[1] == 'CAN':
+                    future.result.side_effect = RuntimeError("worker blew up")
+                else:
+                    future.result.return_value = None
+                return future
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(dp, 'ProcessPoolExecutor', InlineExecutor), \
+                 patch.object(dp, 'as_completed', side_effect=lambda fs: list(fs)):
+                dp.process_all_countries(country_urls, res=30, max_workers=1, data_dir=tmpdir)
+
+        assert sorted(submitted) == ['CAN', 'USA']
 
 
 class TestDownloadPopIntegration:
     """Test integration between download_pop functions."""
     
-    def test_download_pop_main_accepts_parameters(self):
-        """Test main function accepts resolution and worker parameters."""
-        try:
-            # Call with parameters but don't actually download
-            with patch('src.download_pop.process_all_countries'):
-                dp.main(res=30, max_workers=1)
-                assert True
-        except (SystemExit, KeyError, Exception):
-            # May fail due to config loading, but structure should be valid
-            pass
+    def test_download_pop_main_forwards_res_and_workers(self):
+        """main() must pass its res/max_workers through to the pool driver."""
+        with patch.object(dp, 'process_all_countries') as mock_process:
+            dp.main(res=30, max_workers=1)
+
+        mock_process.assert_called_once()
+        country_urls, res, max_workers, data_dir = mock_process.call_args[0]
+        assert res == 30
+        assert max_workers == 1
+        assert isinstance(country_urls, dict) and country_urls
+        assert os.path.isabs(data_dir)
     
     def test_resample_raster_parameter_validation(self):
         """Test resample_raster with mock rasterio."""
-        try:
-            import rasterio
-            from rasterio.transform import from_bounds
-            
-            with tempfile.TemporaryDirectory() as tmpdir:
-                raster_path = Path(tmpdir) / "test.tif"
-                
-                data = np.ones((10, 10), dtype=np.float32)
-                transform = from_bounds(0, 0, 1, 1, 10, 10)
-                
-                with rasterio.open(
-                    str(raster_path), 'w',
-                    driver='GTiff',
-                    height=10, width=10,
-                    count=1, dtype=np.float32,
-                    crs='EPSG:4326',
-                    transform=transform
-                ) as src:
-                    src.write(data, 1)
-                
-                # Test resample_raster
-                with rasterio.open(str(raster_path)) as src:
-                    result = dp.resample_raster(
-                        src,
-                        from_bounds(0, 0, 1, 1, 20, 20),
-                        (20, 20),
-                        'EPSG:4326'
-                    )
-                    assert isinstance(result, np.ndarray)
-                    assert result.shape == (20, 20)
-        except Exception:
-            pass
+        import rasterio
+        from rasterio.transform import from_bounds
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raster_path = Path(tmpdir) / "test.tif"
+
+            data = np.ones((10, 10), dtype=np.float32)
+            transform = from_bounds(0, 0, 1, 1, 10, 10)
+
+            with rasterio.open(
+                str(raster_path), 'w',
+                driver='GTiff',
+                height=10, width=10,
+                count=1, dtype=np.float32,
+                crs='EPSG:4326',
+                transform=transform
+            ) as src:
+                src.write(data, 1)
+
+            # Test resample_raster
+            with rasterio.open(str(raster_path)) as src:
+                result = dp.resample_raster(
+                    src,
+                    from_bounds(0, 0, 1, 1, 20, 20),
+                    (20, 20),
+                    'EPSG:4326'
+                )
+                assert isinstance(result, np.ndarray)
+                assert result.shape == (20, 20)
 
 
 if __name__ == '__main__':

@@ -70,7 +70,7 @@ def test_compute_mean_2_nnd_web_mercator_assigns_positive_distances(sample_sites
 
 def _minimal_run_cfg(**overrides):
     cfg = {
-        "voronoi_overwrite": False,
+        "overwrite_existing": False,
         "country_output_column": "ISO_2",
         "country_boundary_column": "country",
         "site_id_column": "WASTE_ID",
@@ -191,7 +191,7 @@ def test_run_voronoi_approach_writes_tuple_result(monkeypatch, tmp_path):
         lambda *args, **kwargs: (region_df, point_df),
     )
     monkeypatch.setattr(
-        "src.create_voronoi.ensure_output_dir_for_file",
+        "src.utils.ensure_output_dir_for_file",
         lambda path: captured.setdefault("ensured_path", path),
     )
 
@@ -260,7 +260,7 @@ def test_prepare_data_uses_final_geometry_and_filters_industrial_sites(monkeypat
     cfg = {
         "csv_files": False,
         "paths": {
-            "corrected_all_filepath": str(tmp_path / "corrected_all.gpkg"),
+            "annotated_all_filepath": str(tmp_path / "corrected_all.gpkg"),
             "watershed": str(tmp_path / "watersheds.geojson"),
             "overture": str(tmp_path / "overture.parquet"),
             "overture_s3_url": "s3://bucket/overture.parquet",
@@ -272,7 +272,9 @@ def test_prepare_data_uses_final_geometry_and_filters_industrial_sites(monkeypat
         "old_site_id_column": "old_WASTE_ID",
         "basin_column_name": "HYBAS_ID",
         "remove_industrial": True,
+        "force_country_rejoin": True,
         "industrial_category_numbers": ["3"],
+        "mix_use_categories": [],
         "sindex_concurrency": False,
     }
 
@@ -307,7 +309,7 @@ def test_prepare_data_uses_final_geometry_and_filters_industrial_sites(monkeypat
     )
 
     def fake_read_file(path, crs=None):
-        if path == cfg["paths"]["corrected_all_filepath"]:
+        if path == cfg["paths"]["annotated_all_filepath"]:
             return bbox_gdf.copy()
         if path == cfg["paths"]["watershed"]:
             return basin_gdf.copy()
@@ -319,11 +321,11 @@ def test_prepare_data_uses_final_geometry_and_filters_industrial_sites(monkeypat
         return gdf.assign(**{output_country_col: ["DE", "FR"][: len(gdf)]})
 
     monkeypatch.setattr("src.create_voronoi.drop_duplicates", lambda gdf, col: gdf)
-    monkeypatch.setattr("src.create_voronoi.buffer_geometry", lambda geom: geom)
+    monkeypatch.setattr("src.geo_utils.buffer_geometry", lambda geom: geom)
     monkeypatch.setattr("src.create_voronoi.intersects_with_country_db", fake_intersects_with_country_db)
     monkeypatch.setattr("src.create_voronoi.download_overture_maps", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download should not run when overture exists")))
     monkeypatch.setattr("src.create_voronoi.intersect_with_polygon_sindex", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("basin join should not run when HYBAS_ID already exists")))
-    monkeypatch.setattr("src.create_voronoi.ensure_output_dir_for_file", lambda path: None)
+    monkeypatch.setattr("src.utils.ensure_output_dir_for_file", lambda path: None)
     monkeypatch.setattr(pipelines.gpd, "read_file", fake_read_file)
     monkeypatch.setattr(pipelines.pd, "read_parquet", lambda path: country_df.copy())
     monkeypatch.setattr(
@@ -362,7 +364,9 @@ def test_prepare_data_csv_mode_downloads_overture_once_and_exports_expanded_outp
         "old_site_id_column": "old_WASTE_ID",
         "basin_column_name": "HYBAS_ID",
         "remove_industrial": False,
+        "force_country_rejoin": True,
         "industrial_category_numbers": ["3"],
+        "mix_use_categories": [],
         "sindex_concurrency": True,
     }
     state = {
@@ -451,11 +455,11 @@ def test_prepare_data_csv_mode_downloads_overture_once_and_exports_expanded_outp
             state["expanded_gpkg_exists"] = True
 
     monkeypatch.setattr("src.create_voronoi.drop_duplicates", lambda gdf, col: gdf)
-    monkeypatch.setattr("src.create_voronoi.buffer_geometry", lambda geom: geom)
+    monkeypatch.setattr("src.geo_utils.buffer_geometry", lambda geom: geom)
     monkeypatch.setattr("src.create_voronoi.download_overture_maps", fake_download)
     monkeypatch.setattr("src.create_voronoi.intersects_with_country_db", fake_intersects_with_country_db)
     monkeypatch.setattr("src.create_voronoi.intersect_with_polygon_sindex", fake_intersect_with_polygon_sindex)
-    monkeypatch.setattr("src.create_voronoi.ensure_output_dir_for_file", lambda path: None)
+    monkeypatch.setattr("src.utils.ensure_output_dir_for_file", lambda path: None)
     monkeypatch.setattr(pipelines.pd, "read_csv", fake_read_csv)
     monkeypatch.setattr(pipelines.gpd, "read_file", fake_read_file)
     monkeypatch.setattr(pipelines.pd, "read_parquet", lambda path: country_df.copy())

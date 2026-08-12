@@ -11,11 +11,13 @@ import pandas as pd
 import geopandas as gpd
 import zipfile
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file
+    from ..geo_utils import nearest_within_threshold
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file
+    from src.geo_utils import nearest_within_threshold
 
 def assign_to_nearest(gdf_source, gdf_target, threshold=None):
     """Attach nearest target attributes to each source geometry.
@@ -40,23 +42,9 @@ def assign_to_nearest(gdf_source, gdf_target, threshold=None):
     gdf_source = gdf_source.to_crs(gdf_target.crs)
     sindex = gdf_target.sindex
 
-    nearest_matches = []
-    for geom in gdf_source.geometry:
-        if geom is None or geom.is_empty:
-            nearest_matches.append(None)
-            continue
-        try:
-            if threshold is None:
-                nearest_idx = list(sindex.nearest(geom))[1][0]
-            else:
-                nearest = sindex.nearest(geom, max_distance=threshold)
-                if len(nearest[1]) == 0:
-                    nearest_matches.append(None)
-                    continue
-                nearest_idx = nearest[1][0]
-            nearest_matches.append(nearest_idx)
-        except Exception:
-            nearest_matches.append(None)
+    nearest_matches = [
+        nearest_within_threshold(sindex, geom, threshold) for geom in gdf_source.geometry
+    ]
 
     gdf_source['nearest_index'] = nearest_matches
     gdf_source_na = gdf_source[gdf_source['nearest_index'].isna()]
@@ -163,13 +151,7 @@ def merge_new(cfg):
 def parse_args():
     """Parse command-line arguments for merge workflow selection."""
     parser = argparse.ArgumentParser(description='Merge segmentation outputs into geospatial datasets.')
-    parser.add_argument('level', nargs='?', default=None, help='Optional config level override')
-    parser.add_argument('version', nargs='?', default=None, help='Optional config version override')
-    parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
-    parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
-    parser.add_argument('weight_func', nargs='?', default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
-    parser.add_argument('dynamic_buffering', nargs='?', default=None, help='Optional dynamic buffering override (true/false)')
-    parser.add_argument('dynamic_buffer_k', nargs='?', default=None, help='Optional dynamic buffer scaling override')
+    add_standard_override_arguments(parser)
     parser.add_argument(
         '--variant',
         choices=['old', 'new'],
@@ -186,7 +168,6 @@ def main():
     None
         This function dispatches to either the legacy or current merge path.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     args = parse_args()
     overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="merge_seg_results", **overrides)
@@ -198,4 +179,5 @@ def main():
     merge_new(cfg)
 
 if __name__ == '__main__':
+    configure_logging()
     main()

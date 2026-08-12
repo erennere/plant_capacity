@@ -18,59 +18,37 @@
 #SBATCH --mem=192gb
 #SBATCH --cpus-per-task=16
 #SBATCH --array=0-9
+#SBATCH --output=logs/create_rasters_%j.out
+#SBATCH --error=logs/create_rasters_%j.err
 #
 ################################################################################
 
-set -euo pipefail
+set -Eeuo pipefail
 
-# Use current working directory as project root.
-PROJECT_ROOT="$(pwd)"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "create_rasters"
+enable_err_trap
 
-LOG_DIR="${PROJECT_ROOT}/logs"
-cd "$PROJECT_ROOT"
-PYTHON_CMD="python"
 PYTHON_SCRIPT="src.pop_at_risk_river_calculations.create_rasters"
 
-mkdir -p "${LOG_DIR}"
+#install_package
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/create_rasters.log"
+if ! command -v "${PYTHON_CMD}" >/dev/null 2>&1; then
+    log "ERROR: PYTHON_CMD '${PYTHON_CMD}' not found on PATH"
+    exit 1
+fi
 
+export_thread_vars
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/create_rasters.log"
-}
+parse_overrides "$@"
 
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "$PWD" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
-log "Installation complete"
-
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 8)}
-export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
-export MKL_NUM_THREADS=$OMP_NUM_THREADS
-export NUMEXPR_NUM_THREADS=$OMP_NUM_THREADS
-
-#
-# Usage:
-#   ./create_rasters.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level        - Processing level (default: resolved from create_rasters config)
-#   version      - Data version (default: resolved from create_rasters config)
-#   buffer       - Buffer distance in metres (default: resolved from create_rasters config)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
-## Parse optional config override arguments (forwarded after job_index/total_jobs in Python)
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
+build_override_args
 
 # Resolve runtime execution settings through starter.py so section inheritance
 # and CLI overrides apply consistently.
+RASTER_CONFIG=()
 mapfile -t RASTER_CONFIG < <(
     LEVEL_OVERRIDE="${LEVEL}" \
     VERSION_OVERRIDE="${VERSION}" \
@@ -105,46 +83,49 @@ cfg = load_config(
     dynamic_buffer_k=env_value("DYNAMIC_BUFFER_K_OVERRIDE"),
 )
 annotations = cfg.get("annotations") or {}
+print(os.path.abspath("config.yaml"))
 print(annotations.get("default_mode", ""))
 print(annotations.get("max_workers", ""))
 PY
 )
-DEFAULT_MODE="${RASTER_CONFIG[0]:-}"
-CONFIG_MAX_WORKERS="${RASTER_CONFIG[1]:-}"
+RESOLVED_CONFIG_PATH="${RASTER_CONFIG[0]:-}"
+DEFAULT_MODE="${RASTER_CONFIG[1]:-}"
+CONFIG_MAX_WORKERS="${RASTER_CONFIG[2]:-}"
 
-# Fallback if create_rasters.annotations.default_mode is not set.
 if [[ -z "$DEFAULT_MODE" ]]; then
-    if [[ -n "$SLURM_JOB_ID" ]]; then
-        DEFAULT_MODE="array"
-    else
-        DEFAULT_MODE="sequential"
-    fi
+    log "ERROR: Missing create_rasters.annotations.default_mode in config resolution"
+    exit 1
 fi
 
 MODE="${MODE:-$DEFAULT_MODE}"
 
+log "Mode resolution diagnostics:"
+log "  - Working directory: ${PROJECT_ROOT}"
+log "  - Resolved config path: ${RESOLVED_CONFIG_PATH:-unresolved}"
+log "  - Config default_mode: ${DEFAULT_MODE:-unset}"
+log "  - Environment MODE: ${MODE:-unset}"
 log "Execution mode: ${MODE}"
 
-if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
+if [[ "$MODE" == "array" ]] && [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     # Array mode: one index per SLURM task.
     JOB_INDEX="$SLURM_ARRAY_TASK_ID"
-    if [[ -n "$SLURM_ARRAY_TASK_COUNT" ]]; then
-        TOTAL_JOBS="$SLURM_ARRAY_TASK_COUNT"
-    elif [[ -n "$SLURM_ARRAY_TASK_MIN" && -n "$SLURM_ARRAY_TASK_MAX" ]]; then
+    if [[ -n "${SLURM_ARRAY_TASK_COUNT:-}" ]]; then
+        TOTAL_JOBS="${SLURM_ARRAY_TASK_COUNT}"
+    elif [[ -n "${SLURM_ARRAY_TASK_MIN:-}" && -n "${SLURM_ARRAY_TASK_MAX:-}" ]]; then
         TOTAL_JOBS=$((SLURM_ARRAY_TASK_MAX - SLURM_ARRAY_TASK_MIN + 1))
     else
         TOTAL_JOBS=1
     fi
     log "Running raster job ${JOB_INDEX} of ${TOTAL_JOBS} in array mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
+    run_stage "${PYTHON_SCRIPT}" ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --job-index "$JOB_INDEX" --total-jobs "$TOTAL_JOBS" "${OVERRIDE_ARGS[@]}"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
-    if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
+    if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
         log "Sequential mode: skipping task $SLURM_ARRAY_TASK_ID (only task 0 runs)"
         exit 0
     fi
     log "Running raster processing in sequential mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" 0 1 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log"
+    run_stage "${PYTHON_SCRIPT}" ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --job-index 0 --total-jobs 1 "${OVERRIDE_ARGS[@]}"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run indices 0..X-1 concurrently.
     TOTAL_JOBS=${CONFIG_MAX_WORKERS:-${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 1)}}
@@ -154,7 +135,7 @@ elif [[ "$MODE" == "parallel" ]]; then
     
     for ((JOB_INDEX=0; JOB_INDEX<TOTAL_JOBS; JOB_INDEX++)); do
         log "Launching raster job ${JOB_INDEX} in background"
-        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "$JOB_INDEX" "$TOTAL_JOBS" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_rasters.log" &
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --job-index "$JOB_INDEX" --total-jobs "$TOTAL_JOBS" "${OVERRIDE_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}" &
     done
     
     # Wait for all background jobs to complete

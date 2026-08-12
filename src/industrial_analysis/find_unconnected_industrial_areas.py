@@ -13,17 +13,22 @@ Usage:
     python -m src.industrial_analysis.find_unconnected_industrial_areas [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 """
 
+import argparse
 import sys
 import os
 import logging
 from typing import Optional
+
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import geopandas as gpd
 import pandas as pd
 
 try:
-    from ..starter import load_config, parse_config_overrides
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, default_cpu_workers, select_industrial_categories
     from .. import pipelines as _pipelines_module
     from ..pipelines import (
         run_voronoi_approach,
@@ -33,7 +38,8 @@ try:
     )
     from ..create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, default_cpu_workers, select_industrial_categories
     import src.pipelines as _pipelines_module
     from src.pipelines import (
         run_voronoi_approach,
@@ -44,10 +50,6 @@ except ImportError:
     from src.create_voronoi import intersect_with_polygon_sindex, orchestrate_overlaps, drop_duplicates
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s'
-)
 
 
 def load_industrial_areas(cfg: dict) -> Optional[gpd.GeoDataFrame]:
@@ -67,7 +69,7 @@ def load_industrial_areas(cfg: dict) -> Optional[gpd.GeoDataFrame]:
 
 def load_wwtps(cfg: dict, approach_id: str) -> gpd.GeoDataFrame:
     """Load WWTP data and add basin information if missing."""
-    path = cfg['paths']['corrected_all_filepath']
+    path = cfg['paths']['annotated_all_filepath']
     logger.info(f"Loading WTTPs from {path}...")
     
     gdf = gpd.read_file(path, driver='GPKG')
@@ -108,14 +110,9 @@ def filter_industrial_wwtps(cfg: dict, wwtps_gdf: gpd.GeoDataFrame) -> gpd.GeoDa
         return wwtps_gdf
     
     logger.info(f"Filtering WTTPs by industrial categories: {industrial_categories}")
-    industrial_as_str = {str(c) for c in industrial_categories}
-    mix_use_as_str = {str(c) for c in mix_use_categories}
-    mask = wwtps_gdf['category_number'].astype(str).isin(industrial_as_str.union(mix_use_as_str))
-    
-    filtered = wwtps_gdf[mask].copy()
-    logger.info(f"Filtered to {len(filtered)} industrial WTTPs (from {len(wwtps_gdf)} total)")
-    
-    return filtered
+    return select_industrial_categories(
+        wwtps_gdf, industrial_categories, mix_use_categories, keep=True, logger=logger
+    )
 
 
 def run_voronoi_for_wwtps(
@@ -195,15 +192,36 @@ def run_voronoi_for_wwtps(
 
     region_df, _ = result
     if region_df is None:
+        # In boolean mode run_voronoi_approach writes the regions itself and
+        # returns (None, None) on success as well as on failure, so success has
+        # to be established from the output file rather than the return value.
+        if cfg['return_boolean'] and os.path.exists(output_path):
+            region_df = gpd.read_file(output_path)
+            logger.info("Read %d Voronoi polygons back from %s", len(region_df), output_path)
+            return region_df
         logger.error("Voronoi orchestration failed")
         return None
     logger.info(f"Got {len(region_df)} Voronoi polygons directly from orchestration")
     return region_df
 
 
+_WEB_MERCATOR = "EPSG:3857"
+
+
+def _sjoin_chunk_unconnected(
+    chunk: gpd.GeoDataFrame,
+    voronoi_geom: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """Run a left-within sjoin on one chunk and return only unmatched rows."""
+    joined = gpd.sjoin(chunk, voronoi_geom, how='left', predicate='within')
+    unmatched = joined[joined['index_right'].isna()].copy()
+    return unmatched.drop(columns=['index_right'])
+
+
 def find_unconnected_areas(
     industrial_gdf: gpd.GeoDataFrame,
-    voronoi_gdf: gpd.GeoDataFrame
+    voronoi_gdf: gpd.GeoDataFrame,
+    max_workers: int = 1,
 ) -> gpd.GeoDataFrame:
     """
     Identify industrial areas NOT overlapping any WWTP service area.
@@ -214,6 +232,8 @@ def find_unconnected_areas(
         Industrial land use areas.
     voronoi_gdf : geopandas.GeoDataFrame
         WWTP service area polygons.
+    max_workers : int
+        Number of threads for parallel spatial joins.
     
     Returns
     -------
@@ -221,47 +241,55 @@ def find_unconnected_areas(
         Industrial areas with no WWTP service.
     """
     logger.info("Finding unconnected industrial areas...")
-    
-    # Ensure same CRS
-    if industrial_gdf.crs != voronoi_gdf.crs:
-        voronoi_gdf = voronoi_gdf.to_crs(industrial_gdf.crs)
-    
-    # Spatial join: find industrial areas within Voronoi service zones
-    joined = gpd.sjoin(
-        industrial_gdf,
-        voronoi_gdf[['geometry']],
-        how='left',
-        predicate='within'
-    )
-    
-    # Filter to those WITHOUT a match (index_right is NaN)
-    unconnected = joined[joined['index_right'].isna()].copy()
-    unconnected = unconnected.drop(columns=['index_right'])
-    
+
+    original_crs = industrial_gdf.crs
+
+    # Project both layers to Web Mercator for consistent planar geometry during join
+    industrial_merc = industrial_gdf.to_crs(_WEB_MERCATOR)
+    voronoi_merc = voronoi_gdf.to_crs(_WEB_MERCATOR)[['geometry']]
+
+    if max_workers <= 1:
+        unconnected_merc = _sjoin_chunk_unconnected(industrial_merc, voronoi_merc)
+    else:
+        chunk_size = math.ceil(len(industrial_merc) / max_workers)
+        chunks = [
+            industrial_merc.iloc[i : i + chunk_size]
+            for i in range(0, len(industrial_merc), chunk_size)
+        ]
+        logger.info(f"Splitting {len(industrial_merc)} features into {len(chunks)} chunks across {max_workers} workers")
+        parts: list[gpd.GeoDataFrame] = [None] * len(chunks)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {
+                executor.submit(_sjoin_chunk_unconnected, chunk, voronoi_merc): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for future in as_completed(future_to_idx):
+                parts[future_to_idx[future]] = future.result()
+        unconnected_merc = gpd.GeoDataFrame(
+            pd.concat(parts, ignore_index=False),
+            crs=_WEB_MERCATOR,
+        )
+
+    # Reproject back to original CRS
+    unconnected = unconnected_merc.to_crs(original_crs)
+
     logger.info(f"Found {len(unconnected)} unconnected industrial areas (from {len(industrial_gdf)} total)")
-    
+
     return unconnected
 
 
 def main():
     """Identify and save unconnected industrial areas."""
-    import argparse
 
     parser = argparse.ArgumentParser(
         description='Find unconnected industrial areas using Approach 1 Voronoi with industrial-filtered WWTPs'
     )
     parser.add_argument('--approach', nargs='+', type=str, default=None,
                        help='Approach(es) to run: 0 (WWTP no watersheds), 1 (WWTP with watersheds). Default: 1')
-    parser.add_argument('--only_round', action='store_true',
+    parser.add_argument('--only-round', action='store_true',
                        help='Use only round-area weights (same meaning as create_voronoi).')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
-    parser.add_argument('level', nargs='?', default=None, help='Optional config level override')
-    parser.add_argument('version', nargs='?', default=None, help='Optional config version override')
-    parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
-    parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
-    parser.add_argument('weight_func', nargs='?', default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
-    parser.add_argument('dynamic_buffering', nargs='?', default=None, help='Optional dynamic buffering override (true/false)')
-    parser.add_argument('dynamic_buffer_k', nargs='?', default=None, help='Optional dynamic buffer scaling override')
+    add_standard_override_arguments(parser)
 
     args = parser.parse_args()
 
@@ -283,7 +311,7 @@ def main():
     paths_dict = create_output_paths(cfg)
     
     output_path = cfg['paths']['industrial_unconnected_output']
-    overwrite = cfg['industrial_unconnected_overwrite']
+    overwrite = cfg['overwrite_existing']
     
     # Check if output exists and overwrite is disabled
     if os.path.exists(output_path) and not overwrite:
@@ -333,7 +361,10 @@ def main():
                 return False
             
             # Find unconnected areas
-            unconnected = find_unconnected_areas(industrial_gdf, voronoi_gdf)
+            unconnected = find_unconnected_areas(
+                industrial_gdf, voronoi_gdf,
+                max_workers=cfg['unconnected_sjoin_workers'] or default_cpu_workers(),
+            )
         
         # Save output
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -341,7 +372,13 @@ def main():
             os.remove(output_path)
         
         logger.info(f"Writing {len(unconnected)} unconnected areas to {output_path}...")
-        unconnected.to_parquet(output_path, index=False)
+        lower_output_path = output_path.lower()
+        if lower_output_path.endswith('.parquet'):
+            unconnected.to_parquet(output_path, index=False)
+        elif lower_output_path.endswith('.gpkg'):
+            unconnected.to_file(output_path, driver='GPKG', index=False)
+        else:
+            raise ValueError(f"Unsupported industrial_unconnected_output extension: {output_path}")
         logger.info(f"Successfully created {output_path}")
         
         return True
@@ -352,5 +389,6 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_logging()
     success = main()
     sys.exit(0 if success else 1)

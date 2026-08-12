@@ -14,6 +14,13 @@ import yaml
 
 _MISSING = object()
 _FORMATTER = Formatter()
+
+# config.yaml lives next to this module. Resolving relative config paths against
+# it - rather than against the process working directory - is what lets entry
+# points run from anywhere without an os.chdir() call in every main().
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG_FILENAME = "config.yaml"
+CONFIG_PATH_ENV_VAR = "WWTP_SERVICE_PIPELINE_CONFIG"
 _OVERRIDE_FIELDS = (
     ("level", 0, False),
     ("version", 1, False),
@@ -23,6 +30,27 @@ _OVERRIDE_FIELDS = (
     ("dynamic_buffering", 5, False),
     ("dynamic_buffer_k", 6, False),
 )
+_OVERRIDE_FLAG_TO_FIELD = {
+    "--level": "level",
+    "--version": "version",
+    "--buffer": "buffer",
+    "--weight-method": "weight_method",
+    "--weight-func": "weight_func",
+    "--dynamic-buffering": "dynamic_buffering",
+    "--dynamic-buffer-k": "dynamic_buffer_k",
+}
+
+
+def add_standard_override_arguments(parser):
+    """Add the shared named config override flags used across scripts."""
+    parser.add_argument("--level", default=None, help="Optional config level override")
+    parser.add_argument("--version", default=None, help="Optional config version override")
+    parser.add_argument("--buffer", default=None, help="Optional config buffer override")
+    parser.add_argument("--weight-method", dest="weight_method", default=None, help="Optional config weight_method override")
+    parser.add_argument("--weight-func", dest="weight_func", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
+    parser.add_argument("--dynamic-buffering", dest="dynamic_buffering", default=None, help="Optional dynamic buffering override (true/false)")
+    parser.add_argument("--dynamic-buffer-k", dest="dynamic_buffer_k", default=None, help="Optional dynamic buffer scaling override")
+    return parser
 
 
 class ConfigResolutionError(KeyError):
@@ -106,31 +134,65 @@ def _parse_optional_float(value, field_name):
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid {field_name} '{value}'. Must be a number.") from exc
 
-def _collect_raw_overrides(args: Any = None, argv: list[str] | None = None, start_index: int = 1):
-    start_index = int(start_index)
-    if start_index < 0:
-        raise ValueError("start_index must be >= 0")
-
+def _collect_raw_overrides(args: Any = None, argv: list[str] | None = None):
     argv_values: list[str] = list(sys.argv) if argv is None else list(argv)
 
     raw_overrides: dict[str, Any] = {}
-    for field_name, offset, preserve_empty in _OVERRIDE_FIELDS:
-        if args is not None:
-            raw_value = getattr(args, field_name, None)
-        else:
-            index: int = start_index + offset
-            raw_value = next(iter(argv_values[index:index + 1]), None)
+
+    # When scripts pass named flags directly (without argparse in the script),
+    # parse those first so wrappers can standardize on one CLI style.
+    if args is None:
+        named_values: dict[str, Any] = {}
+        idx = 1
+        while idx < len(argv_values):
+            token = argv_values[idx]
+            if not isinstance(token, str):
+                idx += 1
+                continue
+
+            if token in _OVERRIDE_FLAG_TO_FIELD:
+                field_name = _OVERRIDE_FLAG_TO_FIELD[token]
+                next_value = argv_values[idx + 1] if idx + 1 < len(argv_values) else None
+                if isinstance(next_value, str) and next_value.startswith("--"):
+                    next_value = None
+                    idx += 1
+                else:
+                    idx += 2
+                named_values[field_name] = next_value
+                continue
+
+            if token.startswith("--") and "=" in token:
+                flag, flag_value = token.split("=", 1)
+                if flag in _OVERRIDE_FLAG_TO_FIELD:
+                    field_name = _OVERRIDE_FLAG_TO_FIELD[flag]
+                    named_values[field_name] = flag_value
+            idx += 1
+
+        for field_name, _, preserve_empty in _OVERRIDE_FIELDS:
+            raw_overrides[field_name] = _normalize_optional_cli_value(
+                named_values.get(field_name),
+                preserve_empty=preserve_empty,
+            )
+        return raw_overrides
+
+    for field_name, _, preserve_empty in _OVERRIDE_FIELDS:
         raw_overrides[field_name] = _normalize_optional_cli_value(
-            raw_value,
+            getattr(args, field_name, None),
             preserve_empty=preserve_empty,
         )
     return raw_overrides
 
 
 # Public parser used by scripts before load_config()
-def parse_config_overrides(args: Any = None, argv: list[str] | None = None, start_index: int = 1):
-    """Parse optional config overrides for ``load_config``."""
-    raw_overrides = _collect_raw_overrides(args=args, argv=argv, start_index=start_index)
+def parse_config_overrides(args: Any = None, argv: list[str] | None = None):
+    """Parse optional config overrides for ``load_config``.
+
+    Overrides come either from an argparse namespace built with
+    ``add_standard_override_arguments`` or from named ``--flag value`` tokens in
+    ``argv``. Positional overrides are not supported: a stray argv token used to
+    become ``level`` silently, which filed a run's output under the wrong path.
+    """
+    raw_overrides = _collect_raw_overrides(args=args, argv=argv)
 
     return {
         "level": raw_overrides["level"],
@@ -333,7 +395,7 @@ def _derive_runtime_values(cfg: dict, default_distance_additive, default_distanc
         )
 
     if "buffer" in cfg and "dynamic_buffering" in cfg:
-        if cfg["dynamic_buffering"] and cfg.get("dynamic_buffer_k") is None:
+        if cfg["dynamic_buffering"] and cfg["dynamic_buffer_k"] is None:
             raise ValueError("dynamic_buffer_k must be configured when dynamic_buffering is true")
 
         if cfg["dynamic_buffering"]:
@@ -359,7 +421,7 @@ def _derive_runtime_values(cfg: dict, default_distance_additive, default_distanc
             "max_buffer": cfg["max_buffer"],
             "k_min": cfg["k_min"],
             "k_max": cfg["k_max"],
-            "conf_threshold": cfg["detection_confidence_threshold"],
+            "detection_confidence_threshold": cfg["detection_confidence_threshold"],
             "k_value": cfg["dynamic_buffer_k"],
         }
 
@@ -396,7 +458,7 @@ def _format_field_names(template: str) -> list[str]:
 
 
 def _expand_paths(script_name: str, paths_cfg: dict, config_dir: str, cfg: dict, derived: dict) -> dict:
-    raw_data_dir = paths_cfg.get("data_dir")
+    raw_data_dir = paths_cfg["data_dir"]
     context = {}
     if raw_data_dir is not None:
         context["data_dir"] = raw_data_dir
@@ -453,9 +515,25 @@ def get_runtime_params(cfg: dict) -> dict:
     }
 
 
+def resolve_config_path(config=None):
+    """Return the absolute path of the config file to load.
+
+    Resolution order: an explicit ``config`` argument, then the
+    ``WWTP_SERVICE_PIPELINE_CONFIG`` environment variable, then ``config.yaml``
+    next to this module. Relative values are resolved against the package
+    directory, never against the process working directory.
+    """
+    if config is None:
+        config = os.environ.get(CONFIG_PATH_ENV_VAR) or DEFAULT_CONFIG_FILENAME
+    config = os.path.expanduser(str(config))
+    if os.path.isabs(config):
+        return os.path.abspath(config)
+    return os.path.abspath(os.path.join(_PACKAGE_DIR, config))
+
+
 def load_config(
     script_name,
-    config="config.yaml",
+    config=None,
     level=None,
     version=None,
     buffer=None,
@@ -470,7 +548,7 @@ def load_config(
     except ImportError:
         from create_voronoi import default_distance_additive, default_distance_multiplicative
 
-    config_path = os.path.abspath(config)
+    config_path = resolve_config_path(config)
     config_dir = os.path.dirname(config_path)
     raw_config = _load_raw_config(config_path)
 

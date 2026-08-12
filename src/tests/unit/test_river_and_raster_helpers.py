@@ -11,6 +11,7 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import GeometryCollection, LineString, Point, Polygon, box, mapping
 
+from src import geo_utils
 from src.pop_at_risk_river_calculations import create_rasters, find_intersection_river
 
 
@@ -200,14 +201,17 @@ def test_sanitize_polygon_geom_and_sharding_helpers():
 def test_sanitize_polygon_geom_handles_make_valid_fallback_and_nonpolygon_results(monkeypatch):
     class _BrokenGeom:
         is_empty = False
+        # the shared repair_geometry short-circuits on already-valid input, so the
+        # stub has to declare itself invalid to reach the make_valid/buffer path
+        is_valid = False
 
         def buffer(self, distance):
             return None
 
-    monkeypatch.setattr(create_rasters, "make_valid", lambda geom: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(geo_utils, "make_valid", lambda geom: (_ for _ in ()).throw(RuntimeError("boom")))
     assert create_rasters._sanitize_polygon_geom(_BrokenGeom()) is None
 
-    monkeypatch.setattr(create_rasters, "make_valid", lambda geom: geom)
+    monkeypatch.setattr(geo_utils, "make_valid", lambda geom: geom)
     monkeypatch.setattr(create_rasters, "unary_union", lambda geoms: Polygon())
 
     gc = GeometryCollection([Polygon([(0, 0), (1, 0), (0, 1), (0, 0)])])
@@ -312,7 +316,11 @@ def test_geotiff_exists_returns_false_on_open_error(monkeypatch):
 
 
 def test_parse_args_reads_optional_positional(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["prog", "1", "3", "7", "v1", "2000", "linear", "add", "true", "0.5"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["prog", "--job-index", "1", "--total-jobs", "3", "--level", "7"],
+    )
 
     args = create_rasters.parse_args()
 
@@ -382,6 +390,7 @@ def test_create_rasters_main_enriches_watershed_when_country_column_missing(monk
             "non_served_outpath": str(tmp_path / "non_served.gpkg"),
             "csv_output_filepath": str(tmp_path / "stats.gpkg"),
             "watershed": str(tmp_path / "watershed.geojson"),
+            "watershed_with_countries": str(tmp_path / "watershed_with_countries.gpkg"),
             "overture": str(tmp_path / "overture.parquet"),
             "overture_s3_url": "s3://example/overture.parquet",
         },
@@ -434,7 +443,7 @@ def test_create_rasters_main_enriches_watershed_when_country_column_missing(monk
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
 
     assert captured["download"] == (cfg["paths"]["overture_s3_url"], cfg["paths"]["overture"])
-    assert captured["write"][0].endswith("watershed.gpkg")
+    assert captured["write"][0].endswith("watershed_with_countries.gpkg")
     assert captured["write"][1] == "GPKG"
     assert captured["write"][2] is False
     assert captured["orchestrated"] == {"countries": ["DE"], "workers": 2}

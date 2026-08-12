@@ -5,6 +5,7 @@ for polygon and line layers, merges them with DuckDB, and then clusters merged
 polygon features into bounding boxes used by downstream annotation steps.
 """
 
+import argparse
 import os
 import random
 import glob
@@ -19,18 +20,15 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..geo_utils import ensure_duckdb_spatial
+    from ..utils import configure_logging, duckdb_connection, ensure_output_dir_for_file
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.geo_utils import ensure_duckdb_spatial
+    from src.utils import configure_logging, duckdb_connection, ensure_output_dir_for_file
 
 # Configure logging to flush output immediately (important for HPC batch jobs)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    force=True
-)
 logger = logging.getLogger(__name__)
 # Ensure handler flushes after each message
 for handler in logging.root.handlers:
@@ -193,21 +191,23 @@ def convert_geojson_to_parquet(
     if not os.path.exists(temp_parquet) or overwrite:
         try:
             ensure_output_dir_for_file(temp_parquet)
-            temp_conn = duckdb.connect(":memory:")
-            temp_conn.execute("INSTALL SPATIAL; LOAD SPATIAL;")
-            temp_conn.execute(f"""
-            COPY (
-                SELECT *
-                FROM ST_Read('{geojson_file}')
-            ) TO '{temp_parquet}' (FORMAT PARQUET, COMPRESSION ZSTD)
-            """)
-            temp_conn.close()
-            logging.info(f"âœ… Converted {basename} to Parquet")
+            # duckdb_connection closes the connection on every exit path,
+            # including exceptions - a bare duckdb.connect(":memory:") here
+            # leaked whenever execute() raised, inside a ProcessPool worker.
+            with duckdb_connection(in_memory=True) as temp_conn:
+                ensure_duckdb_spatial(temp_conn)
+                temp_conn.execute(f"""
+                COPY (
+                    SELECT *
+                    FROM ST_Read('{geojson_file}')
+                ) TO '{temp_parquet}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                """)
+            logger.info(f"✅ Converted {basename} to Parquet")
         except Exception as e:
-            logging.error(f"âŒ Failed to convert {geojson_file}: {e}")
+            logger.error(f"❌ Failed to convert {geojson_file}: {e}")
             return None
     else:
-        logging.info(f"â­ï¸  Parquet already exists for {basename}, skipping")
+        logger.info(f"⏭️  Parquet already exists for {basename}, skipping")
     
     return temp_parquet
 
@@ -250,7 +250,7 @@ def parallel_convert_geojsons(
                 if parquet_file is not None:
                     parquet_files.append(parquet_file)
             except Exception as e:
-                logging.error(f"Exception in parallel conversion: {e}")
+                logger.error(f"Exception in parallel conversion: {e}")
     return sorted(parquet_files)  # Sort for consistent ordering
 
 
@@ -319,7 +319,7 @@ def merge_parquets_sql(
     schema_results = {}
     
     # Phase 1: Discover all schemas in parallel using separate connections
-    logging.info(f"ðŸ”„ Discovering schemas from {len(parquet_files)} parquets (max_workers={max_workers})...")
+    logger.info(f"🔄 Discovering schemas from {len(parquet_files)} parquets (max_workers={max_workers})...")
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(discover_parquet_schema, pf) for pf in parquet_files]
@@ -330,9 +330,9 @@ def merge_parquets_sql(
                 schema_results[pf] = (grid, col_names, col_types)
                 grid_mapping[pf] = grid
                 basename = os.path.splitext(os.path.basename(pf))[0]
-                logging.info(f"  âœ… {basename}: {len(col_names)} columns")
+                logger.info(f"  ✅ {basename}: {len(col_names)} columns")
             except Exception as e:
-                logging.error(f"âŒ Failed to discover schema: {e}")
+                logger.error(f"❌ Failed to discover schema: {e}")
     
     # Phase 2: Build unified schema (union of all columns) - normalize to lowercase
     all_columns_map = {}  # col_name (lowercase) -> col_type (normalized)
@@ -350,7 +350,7 @@ def merge_parquets_sql(
     all_columns_map['grid'] = 'VARCHAR'
     
     all_columns_ordered = sorted(all_columns_map.keys())
-    logging.info(f"ðŸ“Š Unified schema: {len(all_columns_ordered)} unique columns")
+    logger.info(f"📊 Unified schema: {len(all_columns_ordered)} unique columns")
     
     # Phase 3: Create dataset table with all columns at once (avoids ALTER locks)
     # Deduplicate case-insensitive column names using a set
@@ -365,10 +365,10 @@ def merge_parquets_sql(
     
     conn.execute('DROP TABLE IF EXISTS dataset;')
     conn.execute(f'CREATE TABLE dataset ({", ".join(col_defs)});')
-    logging.info(f"âœ… Created dataset table with unified schema")
+    logger.info(f"✅ Created dataset table with unified schema")
     
     # Phase 4: Load and insert from all parquets using controlled batched UNION ALL inserts.
-    logging.info(f"âš™ï¸  Inserting {len(parquet_files)} parquets into dataset...")
+    logger.info(f"⚙️  Inserting {len(parquet_files)} parquets into dataset...")
     batch_size = max(1, insert_batch_size)
 
     for batch_start in range(0, len(parquet_files), batch_size):
@@ -398,7 +398,7 @@ def merge_parquets_sql(
 
         batch_num = (batch_start // batch_size) + 1
         total_batches = (len(parquet_files) + batch_size - 1) // batch_size
-        logging.info(f"  Inserted batch {batch_num}/{total_batches} ({len(batch_files)} files)")
+        logger.info(f"  Inserted batch {batch_num}/{total_batches} ({len(batch_files)} files)")
     
     return grid_mapping
 
@@ -435,32 +435,30 @@ def merge_bboxes_sql(
     """
     files = glob.glob(os.path.join(polygons_dir, prototype))
     if not files:
-        print(f"âŒ No files found in {polygons_dir}", flush=True)
+        print(f"❌ No files found in {polygons_dir}", flush=True)
         return
 
-    conn = temp_file = None
     os.makedirs(temp_parquet_dir, exist_ok=True)
 
-    try:
-        # Temporary DuckDB file
-        temp_file = f'temp_{random.randint(1, int(1e12))}.db'
-        conn = duckdb.connect(temp_file)
+    # duckdb_connection owns the scratch database's name and its removal on every
+    # exit path, so this function no longer names or deletes a .db itself.
+    with duckdb_connection() as conn:
         conn.execute(f"SET threads TO {int(duckdb_threads)};")
         conn.execute("SET preserve_insertion_order=false;")
         conn.execute("SET memory_limit='220GB';")  # Adjust based on system capabilities
-        conn.execute("SET max_temp_directory_size = '220GB';")  # Use current directory for temp files
-        conn.execute('INSTALL SPATIAL; LOAD SPATIAL;')
+        conn.execute("SET max_temp_directory_size = '220GB';")
+        ensure_duckdb_spatial(conn)
         
-        # 1ï¸âƒ£ Parallelize GeoJSON to Parquet conversion
-        logging.info(f"ðŸ”„ Converting {len(files)} GeoJSON files to Parquet (max_workers={max_workers})...")
+        # 1️⃣ Parallelize GeoJSON to Parquet conversion
+        logger.info(f"🔄 Converting {len(files)} GeoJSON files to Parquet (max_workers={max_workers})...")
         temp_parquet_files = parallel_convert_geojsons(files, temp_parquet_dir, max_workers=max_workers, overwrite=overwrite)
         # FIX [F-2]: guard against empty conversion output to avoid downstream SQL assumptions.
         if not temp_parquet_files:
-            logging.error("No parquet files were generated from input GeoJSON files")
+            logger.error("No parquet files were generated from input GeoJSON files")
             return
-        logging.info(f"âœ… Converted all files. Starting merge...")
+        logger.info(f"✅ Converted all files. Starting merge...")
         
-        # 2ï¸âƒ£ Merge Parquets with parallel schema discovery and unified table creation
+        # 2️⃣ Merge Parquets with parallel schema discovery and unified table creation
         merge_parquets_sql(
             conn,
             temp_parquet_files,
@@ -473,23 +471,20 @@ def merge_bboxes_sql(
                 SELECT * FROM dataset
             ) TO '{output_filepath}' (FORMAT PARQUET, COMPRESSION ZSTD);
             """)
-        logging.info(f"âœ… Exported: {output_filepath}")
-
-    finally:
-        if conn is not None:
-            conn.close()
-        if temp_file is not None and os.path.exists(temp_file):
-            try:
-                # FIX [F-1]: avoid masking the primary failure when temp-file cleanup fails.
-                os.remove(temp_file)
-            except Exception as err:
-                logging.warning("Failed to remove temporary DuckDB file %s: %s", temp_file, err)
+        logger.info(f"✅ Exported: {output_filepath}")
         # Note: temp_parquet_dir is kept for potential reuse; delete if cleanup is needed
 
 
 # ============================================================
 # Main
 # ============================================================
+
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run NEW_03_WASTEWATERJOIN_GEOJSON.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
 
 def main(
     input_path: str,
@@ -511,7 +506,7 @@ def main(
         Label stored in the output ``man_name`` column.
     """
     gdf = load_geodata(input_path)
-    print(f"âœ… Loaded {len(gdf)} polygons", flush=True)
+    print(f"✅ Loaded {len(gdf)} polygons", flush=True)
 
     gdf = compute_centroids(gdf)
     centroids = gdf.centroid.tolist()
@@ -522,11 +517,11 @@ def main(
         tree,
         distance_threshold
     )
-    print(f"âœ… Found {len(clusters)} spatial clusters", flush=True)
+    print(f"✅ Found {len(clusters)} spatial clusters", flush=True)
 
     out_gdf = clusters_to_bboxes(gdf, clusters, label)
     write_geodata(out_gdf, output_path)
-    print(f"âœ… GeoJSON saved to: {output_path}", flush=True)
+    print(f"✅ GeoJSON saved to: {output_path}", flush=True)
 
 # ============================================================
 # Entry point
@@ -535,10 +530,10 @@ def main(
 CRS_OUT = "EPSG:4326"
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    configure_logging()
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="NEW_03_WASTEWATERJOIN_GEOJSON", **overrides)
-    overwrite = cfg["annotations"]["overwrite"]
+    overwrite = cfg["overwrite_existing"]
 
     points_path = cfg["paths"]["corrected_all_filepath"]
     grid_filedir = cfg["paths"]["annotations_grid_dir"]
@@ -602,4 +597,4 @@ if __name__ == "__main__":
             distance_threshold=0.02,
         )
     else:
-        logging.warning("Skipping clustering because merged polygon parquet was not produced: %s", output_filepath)
+        logger.warning("Skipping clustering because merged polygon parquet was not produced: %s", output_filepath)

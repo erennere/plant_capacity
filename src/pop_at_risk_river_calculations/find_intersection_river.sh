@@ -3,43 +3,23 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128gb
 #SBATCH --time=48:00:00
+#SBATCH --output=logs/find_intersection_river_%j.out
+#SBATCH --error=logs/find_intersection_river_%j.err
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+set -Eeuo pipefail
 
-mkdir -p "${LOG_DIR}"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "find_intersection_river"
+enable_err_trap
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/find_intersection_river.log"
+parse_overrides "$@"
 
+build_override_args
 
-#
-# Usage:
-#   ./find_intersection_river.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level        - Processing level (default: from config.yaml arguments.default_level)
-#   version      - Data version (default: from config.yaml arguments.default_version)
-#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
-## Parse optional config override arguments
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/find_intersection_river.log"
-}
-
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/find_intersection_river.log"
+ensure_src_importable
 
 log "Running find_intersection_river with 32 workers"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_intersection_river 32 "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/find_intersection_river.log"
+run_stage "find_intersection_river" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_intersection_river --max-workers 32 "${OVERRIDE_ARGS[@]}"
 log "Completed find_intersection_river"

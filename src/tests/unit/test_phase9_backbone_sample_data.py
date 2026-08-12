@@ -180,7 +180,7 @@ def test_intersection_and_dissolve_backbone_steps():
         crs=watersheds.crs,
     )
 
-    dissolve_result = create_voronoi.dissolve_overlapping_geometries(overlap, radius=0.01, convex=False)
+    dissolve_result = create_voronoi.dissolve_overlapping_geometries_fast(overlap, radius=0.01, convex=False)
 
     if isinstance(dissolve_result, tuple):
         _, dissolved_gdf = dissolve_result

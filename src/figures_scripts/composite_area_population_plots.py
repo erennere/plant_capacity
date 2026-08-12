@@ -11,54 +11,76 @@ Plot B: two scatter plots with 1:1 reference lines
 
 import argparse
 import os
+import logging
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 
 try:
-    from ..starter import load_config, parse_config_overrides
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..utils import clip_to_robust_bounds, configure_logging, ensure_output_dir_for_file, resolve_latest_zonal_sum_column
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
     from src.pipelines import create_pop_output_paths
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.utils import clip_to_robust_bounds, configure_logging, ensure_output_dir_for_file, resolve_latest_zonal_sum_column
+
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_zonal_sum_column(df, preferred):
     """Return preferred zonal-sum column or fallback to latest available year."""
-    if preferred in df.columns:
-        return preferred
-
-    candidates = []
-    for col in df.columns:
-        if not col.endswith("_zonal_sum"):
-            continue
-        try:
-            year = int(col.split("_")[0])
-        except (ValueError, IndexError):
-            year = -1
-        candidates.append((year, col))
-
-    if not candidates:
-        raise KeyError("No '*_zonal_sum' column found in Voronoi population file.")
-
-    candidates.sort(key=lambda x: x[0])
-    return candidates[-1][1]
+    return resolve_latest_zonal_sum_column(
+        df,
+        preferred,
+        missing_message="No '*_zonal_sum' column found in Voronoi population file.",
+    )[1]
 
 
-def clip_outliers(series, lower_q, upper_q):
-    """Drop outliers by quantile clipping for cleaner histograms."""
-    if not (0 <= lower_q < upper_q <= 1):
-        raise ValueError("Quantile bounds must satisfy 0 <= lower_q < upper_q <= 1")
-    s = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-    if s.empty:
-        return s
-    q_lo = float(s.quantile(lower_q))
-    q_hi = float(s.quantile(upper_q))
-    return s[(s >= q_lo) & (s <= q_hi)]
+def filter_countries_by_facility_count(pop_df, boundaries, country_column, min_facility_count):
+    """Filter out countries with too few facilities for stable A/B diagnostics."""
+    if min_facility_count is None:
+        return pop_df.copy(), boundaries.copy(), []
+
+    min_facility_count = int(min_facility_count)
+    if min_facility_count <= 0:
+        return pop_df.copy(), boundaries.copy(), []
+
+    working = pop_df.dropna(subset=[country_column]).copy()
+    country_counts = working.groupby(country_column).size()
+    keep_countries = country_counts[country_counts >= min_facility_count].index
+    removed_countries = country_counts[country_counts < min_facility_count].sort_values(ascending=False).index.tolist()
+
+    filtered_pop = working[working[country_column].isin(keep_countries)].copy()
+    boundary_id_col = "ISO_A2" if "ISO_A2" in boundaries.columns else "ISO_A2_EH"
+    filtered_boundaries = boundaries[boundaries[boundary_id_col].isin(keep_countries)].copy()
+    return filtered_pop, filtered_boundaries, removed_countries
+
+
+def clip_outliers(series, lower_q, upper_q, iqr_factor=1.0):
+    """Drop outliers with combined quantile and IQR filtering."""
+    return clip_to_robust_bounds(series, lower_q, upper_q, iqr_factor=iqr_factor)
+
+
+def _trim_xy_pairs(x_vals, y_vals, lower_q=0.03, upper_q=0.97, iqr_factor=1.0):
+    """Trim paired x/y values jointly so scatter ranges remain informative."""
+    x = pd.to_numeric(pd.Series(x_vals), errors="coerce")
+    y = pd.to_numeric(pd.Series(y_vals), errors="coerce")
+    mask = x.notna() & y.notna() & np.isfinite(x) & np.isfinite(y)
+    if not mask.any():
+        return x.iloc[0:0], y.iloc[0:0]
+
+    x = x[mask]
+    y = y[mask]
+
+    x_trim = clip_outliers(x, lower_q=lower_q, upper_q=upper_q, iqr_factor=iqr_factor)
+    y_trim = clip_outliers(y, lower_q=lower_q, upper_q=upper_q, iqr_factor=iqr_factor)
+    keep_mask = x.index.isin(x_trim.index) & y.index.isin(y_trim.index)
+    return x[keep_mask], y[keep_mask]
 
 
 def _bleach_color(color, amount=0.35):
@@ -89,6 +111,38 @@ def add_one_to_one_line(ax, x_vals, y_vals):
     if hi <= lo:
         hi = lo + 1e-6
     ax.plot([lo, hi], [lo, hi], linestyle="--", linewidth=1.2, color="black", alpha=0.8)
+
+
+def _set_dynamic_axis_limits(ax, values, pad_ratio=0.05):
+    """Set dynamic axis limits from finite values with proportional padding."""
+    clean = pd.to_numeric(pd.Series(values), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if clean.empty:
+        return
+    lo = float(clean.min())
+    hi = float(clean.max())
+    span = hi - lo
+    if span <= 0:
+        span = max(abs(lo), 1.0) * 1e-3
+    pad = span * pad_ratio
+    ax.set_xlim(lo - pad, hi + pad)
+
+
+def _set_dynamic_equal_xy_limits(ax, x_vals, y_vals, pad_ratio=0.05):
+    """Set matching dynamic x/y limits so scatter diagnostics are comparable."""
+    combined = pd.concat([pd.Series(x_vals), pd.Series(y_vals)], axis=0)
+    clean = pd.to_numeric(combined, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if clean.empty:
+        return
+    lo = float(clean.min())
+    hi = float(clean.max())
+    span = hi - lo
+    if span <= 0:
+        span = max(abs(lo), 1.0) * 1e-3
+    pad = span * pad_ratio
+    low_lim = lo - pad
+    high_lim = hi + pad
+    ax.set_xlim(low_lim, high_lim)
+    ax.set_ylim(low_lim, high_lim)
 
 
 def build_country_table(pop_df, boundaries, zonal_col, color_col):
@@ -150,8 +204,8 @@ def make_histogram_plot(pop_df, zonal_col, out_path, lower_q, upper_q):
         np.nan,
     )
 
-    s_left = clip_outliers(pd.Series(ratio_area_pop), lower_q=lower_q, upper_q=upper_q)
-    s_right = clip_outliers(pd.Series(ratio_round_total), lower_q=lower_q, upper_q=upper_q)
+    s_left = clip_outliers(pd.Series(ratio_area_pop), lower_q=lower_q, upper_q=upper_q, iqr_factor=1.0)
+    s_right = clip_outliers(pd.Series(ratio_round_total), lower_q=lower_q, upper_q=upper_q, iqr_factor=1.0)
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), dpi=300)
 
@@ -160,12 +214,14 @@ def make_histogram_plot(pop_df, zonal_col, out_path, lower_q, upper_q):
     axes[0].set_xlabel(f"total_area / {zonal_col}")
     axes[0].set_ylabel("Count")
     axes[0].grid(True, alpha=0.25)
+    _set_dynamic_axis_limits(axes[0], s_left)
 
     axes[1].hist(s_right, bins=60, color="#ffcc80", edgecolor="white", linewidth=0.6)
     axes[1].set_title("Plot A2: Distribution of Circular Fraction", fontsize=12)
     axes[1].set_xlabel("round_area / total_area")
     axes[1].set_ylabel("Count")
     axes[1].grid(True, alpha=0.25)
+    _set_dynamic_axis_limits(axes[1], s_right)
 
     fig.suptitle("Plot A: Facility-Level Ratio Distributions (Outliers Trimmed)", fontsize=14, y=1.02)
     fig.tight_layout()
@@ -181,33 +237,39 @@ def make_scatter_plot(country_df, color_col, out_path):
     color_map = make_category_color_map(country_df[color_col])
     point_colors = country_df[color_col].map(color_map)
 
-    x1 = pd.to_numeric(country_df["ratio_area_pop_agg"], errors="coerce")
-    y1 = pd.to_numeric(country_df["ratio_area_pop_median"], errors="coerce")
+    x1_raw = pd.to_numeric(country_df["ratio_area_pop_agg"], errors="coerce")
+    y1_raw = pd.to_numeric(country_df["ratio_area_pop_median"], errors="coerce")
+    x1, y1 = _trim_xy_pairs(x1_raw, y1_raw, lower_q=0.12, upper_q=0.88, iqr_factor=0.6)
+    country_df_b1 = country_df.loc[x1.index]
 
-    axes[0].scatter(x1, y1, s=46, c=point_colors, alpha=0.9, edgecolors="white", linewidths=0.7)
+    axes[0].scatter(x1, y1, s=46, c=country_df_b1[color_col].map(color_map), alpha=0.9, edgecolors="white", linewidths=0.7)
     add_one_to_one_line(axes[0], x1, y1)
     axes[0].set_title("Plot B1: Aggregate vs Median (Total Area / Population Proxy)", fontsize=12)
     axes[0].set_xlabel("sum(total_area) / sum(zonal_sum)")
     axes[0].set_ylabel("median(total_area / zonal_sum)")
     axes[0].grid(True, alpha=0.3)
+    _set_dynamic_equal_xy_limits(axes[0], x1, y1)
 
-    for _, row in country_df.iterrows():
+    for _, row in country_df_b1.iterrows():
         xx = pd.to_numeric(row["ratio_area_pop_agg"], errors="coerce")
         yy = pd.to_numeric(row["ratio_area_pop_median"], errors="coerce")
         if np.isfinite(xx) and np.isfinite(yy):
             axes[0].text(xx, yy, str(row["ISO_A2"]), fontsize=6.5, color=color_map[str(row[color_col])], alpha=0.9)
 
-    x2 = pd.to_numeric(country_df["ratio_round_total_agg"], errors="coerce")
-    y2 = pd.to_numeric(country_df["ratio_round_total_median"], errors="coerce")
+    x2_raw = pd.to_numeric(country_df["ratio_round_total_agg"], errors="coerce")
+    y2_raw = pd.to_numeric(country_df["ratio_round_total_median"], errors="coerce")
+    x2, y2 = _trim_xy_pairs(x2_raw, y2_raw, lower_q=0.03, upper_q=0.97, iqr_factor=1.0)
+    country_df_b2 = country_df.loc[x2.index]
 
-    axes[1].scatter(x2, y2, s=46, c=point_colors, alpha=0.9, edgecolors="white", linewidths=0.7)
+    axes[1].scatter(x2, y2, s=46, c=country_df_b2[color_col].map(color_map), alpha=0.9, edgecolors="white", linewidths=0.7)
     add_one_to_one_line(axes[1], x2, y2)
     axes[1].set_title("Plot B2: Aggregate vs Median (Circular Fraction)", fontsize=12)
     axes[1].set_xlabel("sum(round_area) / sum(total_area)")
     axes[1].set_ylabel("median(round_area / total_area)")
     axes[1].grid(True, alpha=0.3)
+    _set_dynamic_equal_xy_limits(axes[1], x2, y2)
 
-    for _, row in country_df.iterrows():
+    for _, row in country_df_b2.iterrows():
         xx = pd.to_numeric(row["ratio_round_total_agg"], errors="coerce")
         yy = pd.to_numeric(row["ratio_round_total_median"], errors="coerce")
         if np.isfinite(xx) and np.isfinite(yy):
@@ -216,7 +278,7 @@ def make_scatter_plot(country_df, color_col, out_path):
     handles = []
     labels = []
     for cat, color in color_map.items():
-        handles.append(plt.Line2D([], [], marker="o", linestyle="", color=color, markeredgecolor="white", markersize=7))
+        handles.append(Line2D([], [], marker="o", linestyle="", color=color, markeredgecolor="white", markersize=7))
         labels.append(cat)
 
     if len(labels) <= 20:
@@ -235,22 +297,17 @@ def parse_args():
     parser.add_argument("--approach", type=str, default=None, help="Approach key for create_pop_output_paths (e.g., 0, 1, 2, 1_only_round)")
     parser.add_argument("--color-col", type=str, default="ECONOMY", help="Boundary column used for categorical color coding.")
     parser.add_argument("--zonal-col", type=str, default=None, help="Override zonal-sum column. Defaults to config zonal_sum_default_column.")
-    parser.add_argument("--hist-lower-q", type=float, default=0.01, help="Lower quantile for histogram outlier trimming.")
-    parser.add_argument("--hist-upper-q", type=float, default=0.99, help="Upper quantile for histogram outlier trimming.")
+    parser.add_argument("--hist-lower-q", type=float, default=None,
+                        help="Lower quantile for histogram outlier trimming (default: config plot_outlier_quantiles[0]).")
+    parser.add_argument("--hist-upper-q", type=float, default=None,
+                        help="Upper quantile for histogram outlier trimming (default: config plot_outlier_quantiles[1]).")
 
-    parser.add_argument("level", nargs="?", default=None, help="Optional config level override")
-    parser.add_argument("version", nargs="?", default=None, help="Optional config version override")
-    parser.add_argument("buffer", nargs="?", default=None, help="Optional config buffer override")
-    parser.add_argument("weight_method", nargs="?", default=None, help="Optional config weight_method override")
-    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override")
-    parser.add_argument("dynamic_buffering", nargs="?", default=None, help="Optional dynamic buffering override")
-    parser.add_argument("dynamic_buffer_k", nargs="?", default=None, help="Optional dynamic buffer scaling override")
+    add_standard_override_arguments(parser)
     return parser.parse_args()
 
 
 def main():
     """Entry point for composite ratio figure generation."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     args = parse_args()
     overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="composite_area_population_plots", **overrides)
@@ -268,17 +325,40 @@ def main():
         raise KeyError(f"Missing required columns in pop filepath: {sorted(missing)}")
 
     zonal_col = resolve_zonal_sum_column(pop_df, args.zonal_col or cfg["zonal_sum_default_column"])
+    min_country_facility_count = cfg["min_country_facility_count"]
 
     color_col = args.color_col
     if color_col not in boundaries.columns:
         raise KeyError(f"Color column '{color_col}' was not found in boundaries file.")
 
+    pop_df, boundaries, removed_countries = filter_countries_by_facility_count(
+        pop_df,
+        boundaries,
+        "ISO_2",
+        min_country_facility_count,
+    )
+    if removed_countries:
+        logger.info(
+            "Filtered %s countries with fewer than %s facilities (examples: %s)",
+            len(removed_countries),
+            int(min_country_facility_count),
+            ", ".join(removed_countries[:20]),
+        )
+
+    # Trimming quantiles come from config so this script and pop_at_risk_figures
+    # clip on the same declared values; the CLI flags still override per run.
+    quantiles = cfg["plot_outlier_quantiles"]
+    if not isinstance(quantiles, (list, tuple)) or len(quantiles) != 2:
+        raise ValueError("plot_outlier_quantiles must be a 2-item list like [0.005, 0.995]")
+    lower_q = float(args.hist_lower_q if args.hist_lower_q is not None else quantiles[0])
+    upper_q = float(args.hist_upper_q if args.hist_upper_q is not None else quantiles[1])
+
     make_histogram_plot(
         pop_df=pop_df,
         zonal_col=zonal_col,
         out_path=cfg["paths"]["composite_histogram_filepath"],
-        lower_q=args.hist_lower_q,
-        upper_q=args.hist_upper_q,
+        lower_q=lower_q,
+        upper_q=upper_q,
     )
 
     country_df = build_country_table(pop_df=pop_df, boundaries=boundaries, zonal_col=zonal_col, color_col=color_col)
@@ -290,4 +370,5 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_logging()
     main()

@@ -10,7 +10,6 @@ import os, sys
 import argparse
 import math
 import random
-import requests
 import numpy as np
 import geopandas as gpd
 import pandas as pd
@@ -25,17 +24,27 @@ import logging
 import shapely.wkt
 
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..geo_utils import ensure_duckdb_spatial
+    from ..utils import (
+        configure_logging,
+        duckdb_connection,
+        ensure_output_dir_for_file,
+        requests_session_with_retries,
+    )
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.geo_utils import ensure_duckdb_spatial
+    from src.utils import (
+        configure_logging,
+        duckdb_connection,
+        ensure_output_dir_for_file,
+        requests_session_with_retries,
+    )
+
+logger = logging.getLogger(__name__)
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
 
 def safe_wkt_load(wkt_wtr):
     """Parse WKT text into a Shapely geometry, returning None on bad rows."""
@@ -48,6 +57,10 @@ def safe_wkt_load(wkt_wtr):
     
 BING_API_KEY = os.environ.get("BING_API_KEY", "")
 BING_IMAGERY_URL = "https://dev.virtualearth.net/REST/v1/Imagery/Map/Aerial"
+# Bundled asset, resolved against the package rather than the working directory.
+FONT_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dejavu-sans.book.ttf"
+)
 RESOLUTIONS = { 
     1 :	78271.52,   
     2 :	39135.76,	
@@ -92,6 +105,11 @@ transformer = Transformer.from_crs(
     "EPSG:4326", "EPSG:3857", always_xy=True
 )
 
+# Shared across the thread pool in parallel_download - requests.Session is
+# safe for concurrent use, and this centralizes the retry policy instead of
+# leaving the timeout as the only defense against a flaky tile server.
+_bing_session = requests_session_with_retries()
+
 def download_bing_image(center_lon, center_lat):
     """Download one imagery tile centered on the provided lon/lat coordinates."""
     url = (
@@ -100,7 +118,7 @@ def download_bing_image(center_lon, center_lat):
         f"?mapSize={IMAGE_SIZE[0]},{IMAGE_SIZE[1]}"
         f"&key={BING_API_KEY}"
     )
-    r = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+    r = _bing_session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
     r.raise_for_status()
     return Image.open(BytesIO(r.content)).convert("RGB")
 
@@ -209,18 +227,18 @@ def log_gdf_preview(name, gdf, columns, n=5):
     """Log a small preview of selected GeoDataFrame columns for debugging."""
     available_cols = [c for c in columns if c in gdf.columns]
     if not available_cols:
-        logging.info("%s columns not found. available=%s", name, list(gdf.columns))
+        logger.info("%s columns not found. available=%s", name, list(gdf.columns))
         return
 
-    logging.info("%s columns: %s", name, available_cols)
+    logger.info("%s columns: %s", name, available_cols)
     if gdf.empty:
-        logging.info("%s is empty", name)
+        logger.info("%s is empty", name)
         return
 
     preview = gdf[available_cols].head(n).to_string(index=False)
-    logging.info("%s sample rows:\n%s", name, preview)
+    logger.info("%s sample rows:\n%s", name, preview)
 
-def split_grids_for_instance(grids, instance_id, num_instances=10, split_seed=42):
+def split_grids_for_instance(grids, instance_id, num_instances, split_seed):
     """Deterministically shuffle and split grids into disjoint worker chunks."""
     if num_instances <= 0:
         raise ValueError("num_instances must be > 0")
@@ -237,7 +255,7 @@ def draw_annotations(image, annotations, fontsize=12):
     """Orchestrates drawing, ensuring lines are drawn before polygon labels."""
     image = image.convert("RGBA")
     
-    font = ImageFont.truetype("dejavu-sans.book.ttf", fontsize)
+    font = ImageFont.truetype(FONT_PATH, fontsize)
 
     # 1. Draw Rotated Lines First
     #  (Alpha Compositing)
@@ -392,7 +410,7 @@ def process_bbox(idx, bbox_geom, img_idx, poly_gdf, cols, line_gdf, line_cols, o
             image.save(out_path, dpi=(DPI, DPI))
         return idx, len(annotations), None
     except Exception as e:
-        logging.exception("bbox %s failed", idx)
+        logger.exception("bbox %s failed", idx)
         return idx, 0, str(e)
     
 def annotate_bboxes_parallel(bbox_gdf, poly_gdf, cols, line_gdf, line_cols, output_dir, images_dir, files):
@@ -417,7 +435,7 @@ def annotate_bboxes_parallel(bbox_gdf, poly_gdf, cols, line_gdf, line_cols, outp
     files : Any
         Unused compatibility parameter retained by the current call signature.
     """
-    logging.info("Queued %s bboxes for annotation", len(bbox_gdf))
+    logger.info("Queued %s bboxes for annotation", len(bbox_gdf))
     required_cols = {'idx', 'img_idx', 'geometry'}
     missing_cols = required_cols.difference(bbox_gdf.columns)
     if missing_cols:
@@ -442,14 +460,24 @@ def annotate_bboxes_parallel(bbox_gdf, poly_gdf, cols, line_gdf, line_cols, outp
                 )
             )
 
+        errors = []
         for future in as_completed(futures):
             idx, n, err = future.result()
             if err:
-                logging.error("bbox %s failed: %s", idx, err)
+                logger.error("bbox %s failed: %s", idx, err)
+                errors.append((idx, err))
             else:
-                logging.info("bbox %s done (%s tags)", idx, n)
+                logger.info("bbox %s done (%s tags)", idx, n)
+
+    if errors:
+        first_idx, first_err = errors[0]
+        raise RuntimeError(
+            f"{len(errors)} of {len(futures)} bbox annotation task(s) failed; "
+            f"first failure was bbox {first_idx}: {first_err}"
+        )
 
 if __name__ == "__main__":
+    configure_logging()
     parser = argparse.ArgumentParser(
         description="Annotate Bing images for a deterministic subset of grids."
     )
@@ -467,29 +495,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--split-seed",
         type=int,
-        default=42,
-        help="Seed used for deterministic random grid split (default: 42).",
+        default=None,
+        help="Seed for the deterministic random grid split (default: config annotations.random_seed).",
     )
-    parser.add_argument("level", nargs="?", default=None, help="Optional config level override")
-    parser.add_argument("version", nargs="?", default=None, help="Optional config version override")
-    parser.add_argument("buffer", nargs="?", default=None, help="Optional config buffer override")
-    parser.add_argument("weight_method", nargs="?", default=None, help="Optional config weight_method override")
-    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
-    parser.add_argument("dynamic_buffering", nargs="?", default=None, help="Optional dynamic buffering override (true/false)")
-    parser.add_argument("dynamic_buffer_k", nargs="?", default=None, help="Optional dynamic buffer scaling override")
+    add_standard_override_arguments(parser)
     args = parser.parse_args()
 
-    logging.info("Starting Bing annotation pipeline")
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    logger.info("Starting Bing annotation pipeline")
     try:
         overrides = parse_config_overrides(args=args)
     except ValueError as exc:
         parser.error(str(exc))
 
     cfg = load_config(script_name="download_bing_annotate", **overrides)
-    logging.info("Configuration loaded")
+    logger.info("Configuration loaded")
 
     annotations_cfg = cfg["annotations"]
+    if args.split_seed is None:
+        args.split_seed = int(annotations_cfg["random_seed"])
     CELL_SIZE = int(annotations_cfg["cell_size"])
     FACTOR = float(annotations_cfg["factor"])
     image_size_px = int(annotations_cfg["image_size_px"])
@@ -499,7 +522,12 @@ if __name__ == "__main__":
     RES_Y = RESOLUTIONS[ZOOM_LEVEL]
     BASE_Z17_RES = float(annotations_cfg["base_z17_resolution"])
     BING_IMAGERY_URL = annotations_cfg["bing_imagery_url"]
-    BING_API_KEY = annotations_cfg["bing_api_key"] or BING_API_KEY
+    BING_API_KEY = os.environ.get("BING_API_KEY", "")
+    if not BING_API_KEY:
+        raise RuntimeError(
+            "BING_API_KEY is not set. Export the Bing Maps key in the environment "
+            "before running download_bing_annotate; it is never read from config.yaml."
+        )
     MAX_WORKERS = int(annotations_cfg["max_workers"])
     GEOREFERENCED = bool(annotations_cfg["georeferenced"])
     FONTSIZE = int(annotations_cfg["fontsize"])
@@ -542,7 +570,7 @@ if __name__ == "__main__":
         how='inner'
     )
     bbox_gdf = bbox_gdf[bbox_gdf.geometry.is_valid & ~bbox_gdf.geometry.is_empty]
-    logging.info("Prepared %s valid bounding boxes", len(bbox_gdf))
+    logger.info("Prepared %s valid bounding boxes", len(bbox_gdf))
     output_dir = cfg["paths"]["annotated_images_output_dir"]
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
@@ -555,151 +583,153 @@ if __name__ == "__main__":
     cols_string = ','.join(poly_cols)
     line_cols_string = ','.join(line_cols)
 
-    conn = duckdb.connect(f'temp_{int(random.randint(0, int(1e6)))}.db')
-    conn.execute('INSTALL SPATIAL; LOAD SPATIAL;')
-    logging.info("DuckDB initialized with SPATIAL extension")
+    # duckdb_connection owns the scratch database for the whole run; the
+    # previous randomly-named temp_*.db was never removed.
+    with duckdb_connection() as conn:
+        ensure_duckdb_spatial(conn)
+        logger.info("DuckDB initialized with SPATIAL extension")
 
-    grids = bbox_gdf['idx'].unique().tolist()
-    logging.info("Found %s total grids", len(grids))
+        grids = bbox_gdf['idx'].unique().tolist()
+        logger.info("Found %s total grids", len(grids))
 
-    grids = split_grids_for_instance(
-        grids,
-        instance_id=args.instance_id,
-        num_instances=args.num_instances,
-        split_seed=args.split_seed,
-    )
-    logging.info(
-        "Instance %s/%s will process %s grids (seed=%s)",
-        args.instance_id,
-        args.num_instances,
-        len(grids),
-        args.split_seed,
-    )
-    if not grids:
-        logging.info("No grids assigned to this instance. Exiting.")
-        sys.exit(0)
-
-    for i in range(0, len(grids), 2 * MAX_WORKERS):
-        sub_grids = grids[i : i + 2 * MAX_WORKERS]
-        if not sub_grids:
-            continue
-
-        logging.info(
-            "Processing grid batch %s-%s (%s grids)",
-            i,
-            i + len(sub_grids) - 1,
-            len(sub_grids),
+        grids = split_grids_for_instance(
+            grids,
+            instance_id=args.instance_id,
+            num_instances=args.num_instances,
+            split_seed=args.split_seed,
         )
+        logger.info(
+            "Instance %s/%s will process %s grids (seed=%s)",
+            args.instance_id,
+            args.num_instances,
+            len(grids),
+            args.split_seed,
+        )
+        if not grids:
+            logger.info("No grids assigned to this instance. Exiting.")
+            sys.exit(0)
 
-        # --- Polygons ---
-        poly_file_columns = {}
-        all_poly_columns = set()
-        for grid in sub_grids:
-            polygon_file = f"idx_{grid}_polygons.geojson"
-            path = f"{geojson_file_dir}/{polygon_file}"
-            if polygon_file not in geojson_files:
+        for i in range(0, len(grids), 2 * MAX_WORKERS):
+            sub_grids = grids[i : i + 2 * MAX_WORKERS]
+            if not sub_grids:
                 continue
-            cols = conn.execute(f"DESCRIBE SELECT * FROM ST_READ('{path}')").df()["column_name"].tolist()
-            poly_file_columns[grid] = cols
-            all_poly_columns.update(cols)
 
-        all_poly_columns = sorted(all_poly_columns - {"geom"})  # remove geom from attributes
+            logger.info(
+                "Processing grid batch %s-%s (%s grids)",
+                i,
+                i + len(sub_grids) - 1,
+                len(sub_grids),
+            )
 
-        poly_queries = []
-        for grid, cols in poly_file_columns.items():
-            polygon_file = f"{geojson_file_dir}/idx_{grid}_polygons.geojson"
-            select_cols = []
-
-            for c in all_poly_columns:
-                if c not in poly_cols:
+            # --- Polygons ---
+            poly_file_columns = {}
+            all_poly_columns = set()
+            for grid in sub_grids:
+                polygon_file = f"idx_{grid}_polygons.geojson"
+                path = f"{geojson_file_dir}/{polygon_file}"
+                if polygon_file not in geojson_files:
                     continue
-                if c in cols:
-                    select_cols.append(c)
-                else:
-                    select_cols.append(f"NULL AS {c}")
+                cols = conn.execute(f"DESCRIBE SELECT * FROM ST_READ('{path}')").df()["column_name"].tolist()
+                poly_file_columns[grid] = cols
+                all_poly_columns.update(cols)
+
+            all_poly_columns = sorted(all_poly_columns - {"geom"})  # remove geom from attributes
+
+            poly_queries = []
+            for grid, cols in poly_file_columns.items():
+                polygon_file = f"{geojson_file_dir}/idx_{grid}_polygons.geojson"
+                select_cols = []
+
+                for c in all_poly_columns:
+                    if c not in poly_cols:
+                        continue
+                    if c in cols:
+                        select_cols.append(c)
+                    else:
+                        select_cols.append(f"NULL AS {c}")
             
-            if select_cols:
-                select_clause = ", ".join(select_cols) + ", "
-                poly_queries.append(f"""
-                    SELECT
-                        {select_clause}
-                        ST_AsText(geom) AS geometry,
-                        '{grid}' AS grid
-                    FROM ST_READ('{polygon_file}')
-                """)
-            else:
-                poly_queries.append(f"""
-                    SELECT
-                        ST_AsText(geom) AS geometry,
-                        '{grid}' AS grid
-                    FROM ST_READ('{polygon_file}')
-                """)
-
-        poly_query = " UNION ALL ".join(poly_queries)
-        poly_df = conn.execute(poly_query).df()
-        poly_df = poly_df.dropna(subset=["geometry"])
-        poly_df["geometry"] = poly_df["geometry"].apply(safe_wkt_load)
-        poly_gdf = gpd.GeoDataFrame(poly_df, geometry="geometry", crs=4326).to_crs(3857)
-        poly_gdf["grid"] = poly_gdf["grid"].astype(int)
-
-        logging.info("Loaded %s polygon records in current batch", len(poly_gdf))
-        log_gdf_preview("poly_gdf", poly_gdf, ["grid", "geometry"])
-
-        # --- Lines ---
-        line_file_columns = {}
-        all_line_columns = set()
-        for grid in sub_grids:
-            line_file = f"idx_{grid}_lines.geojson"
-            path = f"{geojson_file_dir}/{line_file}"
-            if line_file not in geojson_files:
-                continue
-            cols = conn.execute(f"DESCRIBE SELECT * FROM ST_READ('{path}')").df()["column_name"].tolist()
-            line_file_columns[grid] = cols
-            all_line_columns.update(cols)
-
-        all_line_columns = sorted(all_line_columns - {"geom"})
-
-        line_queries = []
-        for grid, cols in line_file_columns.items():
-            line_file = f"{geojson_file_dir}/idx_{grid}_lines.geojson"
-            select_cols = []
-
-            for c in all_line_columns:
-                if c not in line_cols:
-                    continue
-                if c in cols:
-                    select_cols.append(c)
+                if select_cols:
+                    select_clause = ", ".join(select_cols) + ", "
+                    poly_queries.append(f"""
+                        SELECT
+                            {select_clause}
+                            ST_AsText(geom) AS geometry,
+                            '{grid}' AS grid
+                        FROM ST_READ('{polygon_file}')
+                    """)
                 else:
-                    select_cols.append(f"NULL AS {c}")
+                    poly_queries.append(f"""
+                        SELECT
+                            ST_AsText(geom) AS geometry,
+                            '{grid}' AS grid
+                        FROM ST_READ('{polygon_file}')
+                    """)
 
-            if select_cols:
-                select_clause = ", ".join(select_cols) + ", "
-                line_queries.append(f"""
-                    SELECT
-                        {select_clause}
-                        ST_AsText(geom) AS geometry,
-                        '{grid}' AS grid
-                    FROM ST_READ('{line_file}')
-                """)
-            else:
-                line_queries.append(f"""
-                    SELECT
-                        ST_AsText(geom) AS geometry,
-                        '{grid}' AS grid
-                    FROM ST_READ('{line_file}')
-                """)
+            poly_query = " UNION ALL ".join(poly_queries)
+            poly_df = conn.execute(poly_query).df()
+            poly_df = poly_df.dropna(subset=["geometry"])
+            poly_df["geometry"] = poly_df["geometry"].apply(safe_wkt_load)
+            poly_gdf = gpd.GeoDataFrame(poly_df, geometry="geometry", crs=4326).to_crs(3857)
+            poly_gdf["grid"] = poly_gdf["grid"].astype(int)
 
-        line_query = " UNION ALL ".join(line_queries)
-        line_df = conn.execute(line_query).df()
-        line_df = line_df.dropna(subset=["geometry"])
-        line_df["geometry"] = line_df["geometry"].apply(safe_wkt_load)
-        line_gdf = gpd.GeoDataFrame(line_df, geometry="geometry", crs=4326).to_crs(3857)
-        line_gdf["grid"] = line_gdf["grid"].astype(int)
+            logger.info("Loaded %s polygon records in current batch", len(poly_gdf))
+            log_gdf_preview("poly_gdf", poly_gdf, ["grid", "geometry"])
 
-        logging.info("Loaded %s line records in current batch", len(line_gdf))
-        log_gdf_preview("lines_gdf", line_gdf, ["grid", "geometry"])
-        batch_bbox_gdf = bbox_gdf[bbox_gdf['idx'].isin(sub_grids)].copy()
+            # --- Lines ---
+            line_file_columns = {}
+            all_line_columns = set()
+            for grid in sub_grids:
+                line_file = f"idx_{grid}_lines.geojson"
+                path = f"{geojson_file_dir}/{line_file}"
+                if line_file not in geojson_files:
+                    continue
+                cols = conn.execute(f"DESCRIBE SELECT * FROM ST_READ('{path}')").df()["column_name"].tolist()
+                line_file_columns[grid] = cols
+                all_line_columns.update(cols)
 
-        annotate_bboxes_parallel(batch_bbox_gdf, poly_gdf, ["man_made", "landuse", "industrial", "power", "resource", "water"], line_gdf, ["waterway", "man_made", "landuse", "industrial", "power", "resource", "water"], 
-                        output_dir, images_dir, files)
-    logging.info("Annotation pipeline finished")
+            all_line_columns = sorted(all_line_columns - {"geom"})
+
+            line_queries = []
+            for grid, cols in line_file_columns.items():
+                line_file = f"{geojson_file_dir}/idx_{grid}_lines.geojson"
+                select_cols = []
+
+                for c in all_line_columns:
+                    if c not in line_cols:
+                        continue
+                    if c in cols:
+                        select_cols.append(c)
+                    else:
+                        select_cols.append(f"NULL AS {c}")
+
+                if select_cols:
+                    select_clause = ", ".join(select_cols) + ", "
+                    line_queries.append(f"""
+                        SELECT
+                            {select_clause}
+                            ST_AsText(geom) AS geometry,
+                            '{grid}' AS grid
+                        FROM ST_READ('{line_file}')
+                    """)
+                else:
+                    line_queries.append(f"""
+                        SELECT
+                            ST_AsText(geom) AS geometry,
+                            '{grid}' AS grid
+                        FROM ST_READ('{line_file}')
+                    """)
+
+            line_query = " UNION ALL ".join(line_queries)
+            line_df = conn.execute(line_query).df()
+            line_df = line_df.dropna(subset=["geometry"])
+            line_df["geometry"] = line_df["geometry"].apply(safe_wkt_load)
+            line_gdf = gpd.GeoDataFrame(line_df, geometry="geometry", crs=4326).to_crs(3857)
+            line_gdf["grid"] = line_gdf["grid"].astype(int)
+
+            logger.info("Loaded %s line records in current batch", len(line_gdf))
+            log_gdf_preview("lines_gdf", line_gdf, ["grid", "geometry"])
+            batch_bbox_gdf = bbox_gdf[bbox_gdf['idx'].isin(sub_grids)].copy()
+
+            annotate_bboxes_parallel(batch_bbox_gdf, poly_gdf, ["man_made", "landuse", "industrial", "power", "resource", "water"], line_gdf, ["waterway", "man_made", "landuse", "industrial", "power", "resource", "water"], 
+                            output_dir, images_dir, files)
+        logger.info("Annotation pipeline finished")

@@ -52,12 +52,8 @@ class TestGeometryValidation:
     
     def test_is_valid_geom_with_non_finite_coordinates(self):
         """Test validation with NaN coordinates."""
-        try:
-            point = Point(np.inf, 0)
-            result = cv.is_valid_geom(point)
-            assert isinstance(result, bool)
-        except Exception:
-            pass
+        point = Point(np.inf, 0)
+        assert cv.is_valid_geom(point) is False
     
     def test_is_valid_geom_with_linestring(self):
         """Test validation of linestring."""
@@ -89,12 +85,10 @@ class TestBufferGeometry:
     def test_buffer_geometry_invalid_polygon(self):
         """Test handling of invalid polygon."""
         # Create self-intersecting polygon
-        try:
-            invalid_poly = Polygon([(0, 0), (1, 1), (1, 0), (0, 1)])
-            result = cv.buffer_geometry(invalid_poly)
-            assert result is not None
-        except Exception:
-            pass
+        invalid_poly = Polygon([(0, 0), (1, 1), (1, 0), (0, 1)])
+        result = cv.buffer_geometry(invalid_poly)
+        assert result is not None
+        assert result.is_valid
 
 
 class TestCentroidExtraction:
@@ -213,12 +207,11 @@ class TestClusterPointIndices:
         """Test clustering with empty input."""
         geoms = []
         
-        try:
-            clusters = cv.cluster_point_indices(geoms, threshold=1.0)
-            assert len(clusters) == 0
-        except (ValueError, Exception):
-            # Empty input may raise ValueError
-            pass
+        # Empty input reaches cKDTree with a (0,) array and raises. This pins
+        # current behaviour, which is identical in the frozen baseline tree;
+        # callers are expected to pre-filter. See notes/BASELINE_DIFF_AUDIT.md.
+        with pytest.raises(ValueError):
+            cv.cluster_point_indices(geoms, threshold=1.0)
 
 
 class TestClusterPoints:
@@ -234,13 +227,17 @@ class TestClusterPoints:
             crs='EPSG:4326'
         )
         
-        try:
-            result = cv.cluster_points(gdf, threshold=2.0)
-            
-            assert isinstance(result, gpd.GeoDataFrame)
-            assert len(result) > 0
-        except Exception:
-            pass
+        result = cv.cluster_points(gdf, threshold=2.0)
+
+        # cluster_points concatenates GeoDataFrame slices with plain DataFrames
+        # built from single rows, so the result degrades to a plain DataFrame
+        # and loses its CRS despite the docstring promising a GeoDataFrame.
+        # Both production callers re-wrap it, so this is pinned rather than
+        # fixed; identical in the frozen baseline tree.
+        assert isinstance(result, pd.DataFrame)
+        assert not isinstance(result, gpd.GeoDataFrame)
+        assert len(result) == 2
+        assert result['weights'].sum() == 3.0
     
     def test_cluster_points_preserves_weights(self):
         """Test that clustering preserves weight sum."""
@@ -252,13 +249,10 @@ class TestClusterPoints:
             crs='EPSG:4326'
         )
         
-        try:
-            result = cv.cluster_points(gdf, threshold=1.0)
-            
-            # Total weight should be preserved
-            assert result['weights'].sum() == 30.0
-        except Exception:
-            pass
+        result = cv.cluster_points(gdf, threshold=1.0)
+
+        # Total weight should be preserved
+        assert result['weights'].sum() == 30.0
     
     def test_cluster_points_with_null_columns(self):
         """Test clustering with NaN values."""
@@ -271,12 +265,9 @@ class TestClusterPoints:
             crs='EPSG:4326'
         )
         
-        try:
-            result = cv.cluster_points(gdf, threshold=2.0)
-            
-            assert len(result) > 0
-        except Exception:
-            pass
+        result = cv.cluster_points(gdf, threshold=2.0)
+
+        assert len(result) > 0
 
 
 class TestCreateRanges:
@@ -284,42 +275,30 @@ class TestCreateRanges:
     
     def test_create_ranges_basic(self):
         """Test basic range creation."""
-        try:
-            result = cv.create_ranges(0, 10, step=1)
-            
-            assert isinstance(result, np.ndarray)
-            assert len(result) > 0
-            assert result[0] >= 0 and result[-1] <= 10
-        except Exception:
-            pass
+        result = cv.create_ranges(0, 10, step=1)
+
+        assert isinstance(result, np.ndarray)
+        assert len(result) > 0
+        assert result[0] >= 0 and result[-1] <= 10
     
     def test_create_ranges_single_value(self):
         """Test range with same start and end."""
-        try:
-            result = cv.create_ranges(5, 5, step=1)
-            
-            assert isinstance(result, np.ndarray)
-        except Exception:
-            pass
+        result = cv.create_ranges(5, 5, step=1)
+
+        assert isinstance(result, np.ndarray)
     
     def test_create_ranges_negative_bounds(self):
         """Test range with negative bounds."""
-        try:
-            result = cv.create_ranges(-10, 10, step=5)
-            
-            assert result[0] >= -10
-            assert result[-1] <= 10
-        except Exception:
-            pass
+        result = cv.create_ranges(-10, 10, step=5)
+
+        assert result[0] >= -10
+        assert result[-1] <= 10
     
     def test_create_ranges_small_step(self):
         """Test range with very small step."""
-        try:
-            result = cv.create_ranges(0, 1, step=0.01, min_step=0.001)
-            
-            assert len(result) > 1
-        except Exception:
-            pass
+        result = cv.create_ranges(0, 1, step=0.01, min_step=0.001)
+
+        assert len(result) > 1
 
 
 class TestDropDuplicates:
@@ -388,12 +367,9 @@ class TestEnsureOutputDir:
     
     def test_ensure_output_dir_empty_path(self):
         """Test with empty/current path."""
-        try:
-            cv.ensure_output_dir_for_file("output.txt")
-            # Should not raise error
-            assert True
-        except Exception:
-            pass
+        # A bare filename has no directory component; this must be a no-op
+        # rather than an error.
+        cv.ensure_output_dir_for_file("output.txt")
 
 
 class TestGeometryContainsPoints:
@@ -499,12 +475,9 @@ class TestVoronoiIntegration:
         valid_count = sum(1 for g in gdf.geometry if cv.is_valid_geom(g))
         assert valid_count == 4
         
-        # Try clustering
-        try:
-            result = cv.cluster_points(gdf, threshold=20.0)
-            assert len(result) > 0
-        except Exception:
-            pass
+        # Cluster
+        result = cv.cluster_points(gdf, threshold=20.0)
+        assert len(result) > 0
     
     def test_geometry_validation_pipeline(self):
         """Test geometry validation pipeline."""

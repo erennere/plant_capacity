@@ -3,16 +3,18 @@
 #SBATCH --time=24:00:00
 #SBATCH --mem=8gb
 #SBATCH --cpus-per-task=4
+#SBATCH --output=logs/composite_area_population_plots_%j.out
+#SBATCH --error=logs/composite_area_population_plots_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "composite_area_population_plots"
+enable_err_trap
+
 PYTHON_SCRIPT="src.figures_scripts.composite_area_population_plots"
-
-mkdir -p "${LOG_DIR}"
-rm -f "${LOG_DIR}/composite_area_population_plots.log"
 
 #
 # Usage:
@@ -23,26 +25,17 @@ rm -f "${LOG_DIR}/composite_area_population_plots.log"
 # Optional plotting args:
 #   approach  - key from create_pop_output_paths: 0 | 1 | 2 | 0_only_round | 1_only_round
 #   color_col - boundary column used for color coding (default: ECONOMY)
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
+parse_overrides "$@"
 APPROACH="${8:-}"
 COLOR_COL="${9:-ECONOMY}"
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/composite_area_population_plots.log"
-}
+build_override_args
 
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/composite_area_population_plots.log"
+ensure_src_importable
 
 CMD=(
     "${PYTHON_CMD}" -m "${PYTHON_SCRIPT}"
-    "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}"
+    "${OVERRIDE_ARGS[@]}"
     --color-col "${COLOR_COL}"
 )
 
@@ -51,5 +44,5 @@ if [[ -n "${APPROACH}" ]]; then
 fi
 
 log "Running composite area/population plots"
-"${CMD[@]}" 2>&1 | tee -a "${LOG_DIR}/composite_area_population_plots.log"
+"${CMD[@]}" 2>&1 | tee -a "${LOG_FILE}"
 log "Completed composite area/population plots"

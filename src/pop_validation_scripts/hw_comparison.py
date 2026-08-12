@@ -3,6 +3,7 @@
 The script builds yearly comparison metrics for verification subsets and saves
 histogram panels for both normalized-difference and multiplicative views.
 """
+import argparse
 import os
 import logging
 import re
@@ -12,14 +13,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def ndvi(df, col1, col2, new_col, small_value=0.001):
     """Compute a normalized difference index between two numeric columns."""
@@ -84,7 +84,7 @@ def replace_inf(df, col):
 
 def composite_histogram(data, my_dict, title, output_filepath=None, save=False, dpi=300,
                         ylabel='N_WWTPs', xlabel=None, bins=100, lower_quantile=0.01, upper_quantile=0.95,
-                        fontsize=26, small_fontsize=18):
+                        fontsize=26, small_fontsize=18, hide_empty_axis=True):
     """Plot a grid of histograms for multiple year-specific comparison columns.
 
     Quantile clipping is applied per column before plotting so extreme outliers
@@ -101,8 +101,9 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
         # CHECK IF COLUMN EXISTS AND HAS DATA
         if col_name not in data.columns or data[col_name].dropna().empty:
             logger.warning(f"Column '{col_name}' is missing or empty in the data. Skipping plot for year {year}.")
-            ax.set_title(f'{year} (No Data)')   
-            ax.axis('off') # Hide empty plots
+            ax.set_title(f'{year} (No Data)')
+            if hide_empty_axis:
+                ax.axis('off') # Hide empty plots
             continue
         
         color = pastel_colors[i]
@@ -151,8 +152,10 @@ def composite_histogram(data, my_dict, title, output_filepath=None, save=False, 
     plt.show()
     plt.close(fig)
 
-def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='POP_SERVED'):
-    """Compute HydroWaste comparison metrics for one verification file.
+def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='POP_SERVED',
+                        qual_pop_default='1.0', filter_qual_pop=True, upper_quantile_hw_comp=1,
+                        comp_output_prefix='hw_comp', reference_name='HydroWaste', hide_empty_axis=True):
+    """Compute reference-comparison metrics for one verification file.
 
     Parameters
     ----------
@@ -168,6 +171,20 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
         Source verification filename.
     pop_col : str, default='POP_SERVED'
         Population reference column used for comparisons.
+    qual_pop_default : str | None, default='1.0'
+        Value used to backfill a missing ``QUAL_POP`` column. ``None`` skips
+        backfilling entirely (the EU comparison has no such column).
+    filter_qual_pop : bool, default=True
+        Whether to additionally require ``QUAL_POP == '1.0'`` when selecting
+        rows for comparison.
+    upper_quantile_hw_comp : float, default=1
+        Upper quantile used to clip the multiplicative-comparison histogram.
+    comp_output_prefix : str, default='hw_comp'
+        Filename prefix for the multiplicative-comparison plot.
+    reference_name : str, default='HydroWaste'
+        Reference dataset name used in plot titles.
+    hide_empty_axis : bool, default=True
+        Whether ``composite_histogram`` should hide empty subplot axes.
     """
     if pop_col not in gdf.columns:
         raise KeyError(f"Missing required population column '{pop_col}'")
@@ -176,8 +193,8 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
     ndi_dict = {}
     HW_comp_dict = {}
     gdf['indx'] = range(len(gdf))
-    if 'QUAL_POP' not in gdf.columns:
-        gdf['QUAL_POP'] = '1.0'
+    if qual_pop_default is not None and 'QUAL_POP' not in gdf.columns:
+        gdf['QUAL_POP'] = qual_pop_default
 
     verified = 'single'
     if 'unver' in filename:
@@ -187,7 +204,7 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
-    
+
     for year, col in years_and_cols.items():
         if year == 2014:
             continue
@@ -195,12 +212,11 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
         HW_comp_col = f'{year}_HW_comp'
         ndi_dict[year] = ndi_col
         HW_comp_dict[year] = HW_comp_col
-        
-       # pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna())]#] & (gdf['QUAL_POP'] == '1.0')]
-        #logging.warning(pop_file[[pop_col, col, 'QUAL_POP']])
 
-        pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna()) & (gdf['QUAL_POP'] == '1.0')]
-        #logging.warning(pop_file[[pop_col, col]])
+        if filter_qual_pop:
+            pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna()) & (gdf['QUAL_POP'] == '1.0')]
+        else:
+            pop_file = gdf[(gdf[pop_col].notna()) & (gdf[col].notna())]
 
         pop_file = ndvi(pop_file, col, pop_col, ndi_col)
         pop_file = multiples(pop_file, col, pop_col, HW_comp_col)
@@ -213,22 +229,28 @@ def orchestrate_single(gdf, approach, plot_args, output_dir, filename, pop_col='
             on='indx',
             how='left'
         )
-    
-    ylabel = 'N_WWTPs' 
+
+    ylabel = 'N_WWTPs'
     xlabel_ndi = 'NDI'
     xlabel_hW_comp = r'$\alpha$'
     upper_quantile_ndi = 0.99
-    upper_quantile_hw_comp = 1
     ndi_output_filepath = os.path.join(output_dir, f"ndi_{filename.replace('.gpkg', '.png')}")
-    hw_comp_output_filepath = os.path.join(output_dir, f"hw_comp_{filename.replace('.gpkg', '.png')}")
+    hw_comp_output_filepath = os.path.join(output_dir, f"{comp_output_prefix}_{filename.replace('.gpkg', '.png')}")
 
-    ndi_title = f'Normalized Difference Index (NDI) w.r.t. HydroWaste, approach: {approach}\n ver: {verified}'
-    hw_comp_title = fr'Population = $\alpha\cdot$HydroWaste, approach: {approach}' + f'\n ver: {verified}'
+    ndi_title = f'Normalized Difference Index (NDI) w.r.t. {reference_name}, approach: {approach}\n ver: {verified}'
+    hw_comp_title = fr'Population = $\alpha\cdot${reference_name}, approach: {approach}' + f'\n ver: {verified}'
     composite_histogram(gdf, ndi_dict, ndi_title, output_filepath=ndi_output_filepath, ylabel=ylabel, xlabel=xlabel_ndi,
-                         upper_quantile=upper_quantile_ndi, **plot_args)
+                         upper_quantile=upper_quantile_ndi, hide_empty_axis=hide_empty_axis, **plot_args)
     composite_histogram(gdf, HW_comp_dict, hw_comp_title, output_filepath=hw_comp_output_filepath, ylabel=ylabel, xlabel=xlabel_hW_comp,
-                        upper_quantile=upper_quantile_hw_comp, **plot_args)
-    
+                        upper_quantile=upper_quantile_hw_comp, hide_empty_axis=hide_empty_axis, **plot_args)
+
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run hw_comparison.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Load verification files and export HydroWaste comparison histograms.
 
@@ -238,8 +260,7 @@ def main():
         The function iterates over configured verification files and writes the
         generated comparison plots to disk.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="hw_comparison", **overrides)
     ver_dir = cfg['paths']['verification_dir']
     plots_dir = cfg['paths']['hw_plots_dir']
@@ -264,4 +285,5 @@ def main():
         orchestrate_single(gdf, approach, plot_args, plots_dir, filename, pop_col)
 
 if __name__ == '__main__':
+    configure_logging()
     main()

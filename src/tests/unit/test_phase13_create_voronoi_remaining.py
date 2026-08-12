@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import math
 import runpy
 import sys
@@ -14,9 +15,20 @@ from pyproj import CRS
 from shapely.geometry import GeometryCollection, LineString, Point, Polygon, box
 
 from src import create_voronoi as cv
+from src import geo_utils
 
 
 pytestmark = pytest.mark.unit
+
+
+def _fake_duckdb_connection(conn):
+    """Build a fake replacement for cv.duckdb_connection yielding ``conn``."""
+
+    @contextlib.contextmanager
+    def _cm(*args, **kwargs):
+        yield conn
+
+    return _cm
 
 
 def test_estimate_utm_epsg_and_crs_fallback_paths(monkeypatch):
@@ -30,7 +42,7 @@ def test_estimate_utm_epsg_and_crs_fallback_paths(monkeypatch):
             raise RuntimeError("boom")
         return original_from_epsg(epsg)
 
-    monkeypatch.setattr(cv.CRS, "from_epsg", fail_for_utm)
+    monkeypatch.setattr(geo_utils.CRS, "from_epsg", fail_for_utm)
     assert cv.estimate_utm_epsg(0, 10) == 3857
 
     empty = gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326")
@@ -149,7 +161,7 @@ def _patch_main_dependencies(monkeypatch, tmp_path, args_namespace, overwrite=Tr
     ).to_csv(cities_fp, index=False)
 
     cfg = {
-        "voronoi_overwrite": overwrite,
+        "overwrite_existing": overwrite,
         "city_voronoi": True,
         "weight_func": "mult",
         "weight_method": "linear",
@@ -270,9 +282,14 @@ def test_create_voronoi_main_run_path_import_fallback(monkeypatch, tmp_path):
     import src.pipelines as pipelines
     import src.starter as starter
 
+    import src.geo_utils as geo_utils_module
+    import src.utils as utils_module
+
     # Make top-level imports in run_path fallback resolve cleanly.
     monkeypatch.setitem(sys.modules, "starter", starter)
     monkeypatch.setitem(sys.modules, "pipelines", pipelines)
+    monkeypatch.setitem(sys.modules, "geo_utils", geo_utils_module)
+    monkeypatch.setitem(sys.modules, "utils", utils_module)
 
     args = argparse.Namespace(
         approach=["0"],
@@ -295,24 +312,32 @@ def test_create_voronoi_main_run_path_import_fallback(monkeypatch, tmp_path):
 def test_download_overture_maps_success_and_failure(monkeypatch, tmp_path):
     calls = []
 
-    def _ok_sql(query):
-        calls.append(query)
+    class _OkConn:
+        def execute(self, query):
+            return None
 
-        class _Result:
-            def df(self):
-                return pd.DataFrame()
+        def sql(self, query):
+            calls.append(query)
 
-        return _Result()
+            class _Result:
+                def df(self):
+                    return pd.DataFrame()
 
-    monkeypatch.setattr(cv.duckdb, "sql", _ok_sql)
+            return _Result()
+
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_OkConn()))
     out_fp = tmp_path / "overture" / "countries.parquet"
     cv.download_overture_maps("s3://dummy/countries.parquet", str(out_fp))
     assert calls
 
-    def _fail_sql(query):
-        raise RuntimeError("duckdb fail")
+    class _FailConn:
+        def execute(self, query):
+            return None
 
-    monkeypatch.setattr(cv.duckdb, "sql", _fail_sql)
+        def sql(self, query):
+            raise RuntimeError("duckdb fail")
+
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_FailConn()))
     cv.download_overture_maps("s3://dummy/countries.parquet", str(out_fp))
 
 
@@ -330,12 +355,16 @@ def test_intersects_with_country_db_non_empty(monkeypatch):
         def df(self):
             return self._frame
 
-    def _fake_sql(query):
-        if "SELECT" in query.upper():
-            return _DuckResult(pd.DataFrame({"geometry": [Point(0, 0).wkt], "ISO_2": ["DE"]}))
-        return _DuckResult(pd.DataFrame())
+    class _Conn:
+        def execute(self, query):
+            return None
 
-    monkeypatch.setattr(cv.duckdb, "sql", _fake_sql)
+        def sql(self, query):
+            if "SELECT" in query.upper():
+                return _DuckResult(pd.DataFrame({"geometry": [Point(0, 0).wkt], "ISO_2": ["DE"]}))
+            return _DuckResult(pd.DataFrame())
+
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_Conn()))
     out = cv.intersects_with_country_db(gdf, "dummy.parquet", output_country_col="ISO_2")
     assert "ISO_2" in out.columns
     assert out["ISO_2"].iloc[0] == "DE"
@@ -387,7 +416,7 @@ def test_intersect_with_polygons_db_success_path(monkeypatch):
         def close(self):
             return None
 
-    monkeypatch.setattr(cv.duckdb, "connect", lambda database: _Conn())
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_Conn()))
     monkeypatch.setattr(cv.np.random, "randint", lambda low, high: 1)
     out = cv.intersect_with_polygons_db(df, polygons, ["buffer_id"], df_join_col="ISO_2", polygon_join_col="ISO_2")
     assert "buffer_id" in out.columns
@@ -461,12 +490,16 @@ def test_create_voronoi_main_city_country_enrichment_and_failure_exit(monkeypatc
         def df(self):
             return self._frame
 
-    def _fake_sql(query):
-        if "SELECT" in query.upper() and "FROM data a" in query:
-            return _DuckResult(pd.DataFrame({"geometry": [Point(0, 0).wkt], "ISO_2": ["DE"]}))
-        return _DuckResult(pd.DataFrame())
+    class _Conn:
+        def execute(self, query):
+            return None
 
-    monkeypatch.setattr(cv.duckdb, "sql", _fake_sql)
+        def sql(self, query):
+            if "SELECT" in query.upper() and "FROM data a" in query:
+                return _DuckResult(pd.DataFrame({"geometry": [Point(0, 0).wkt], "ISO_2": ["DE"]}))
+            return _DuckResult(pd.DataFrame())
+
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_Conn()))
 
     real_exists = cv.os.path.exists
 
@@ -633,7 +666,7 @@ def test_estimate_utm_crs_linestring_and_epsg_failure(monkeypatch):
         def centroid(self):
             return Point(float("nan"), float("nan"))
 
-    original_from_epsg = cv.CRS.from_epsg
+    original_from_epsg = geo_utils.CRS.from_epsg
 
     def _patched_from_epsg(epsg):
         if epsg != 3857:
@@ -641,7 +674,7 @@ def test_estimate_utm_crs_linestring_and_epsg_failure(monkeypatch):
         return original_from_epsg(epsg)
 
     monkeypatch.setattr(gpd.GeoSeries, "unary_union", property(lambda self: _FakeUnion()))
-    monkeypatch.setattr(cv.CRS, "from_epsg", _patched_from_epsg)
+    monkeypatch.setattr(geo_utils.CRS, "from_epsg", _patched_from_epsg)
     assert cv.estimate_utm_crs(gdf).to_epsg() == 3857
 
 
@@ -830,14 +863,13 @@ def test_db_parallel_and_weights_fallback_branches(monkeypatch):
         def close(self):
             return None
 
-    monkeypatch.setattr(cv.duckdb, "connect", lambda database: _ConnFail())
-    monkeypatch.setattr(cv.np.random, "randint", lambda low, high: 2)
-    monkeypatch.setattr(cv.os.path, "exists", lambda p: True)
-    removed = []
-    monkeypatch.setattr(cv.os, "remove", lambda p: removed.append(str(p)))
-    out = cv.intersect_with_polygons_db(df.copy(), poly.copy(), "X", df_join_col="ISO_2", polygon_join_col="X")
-    assert "utm" in out.columns
-    assert removed
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_ConnFail()))
+    # A failed DuckDB intersection re-raises instead of returning the half-built
+    # frame (WKT geometries, dropped null rows, requested columns absent). The
+    # scratch database is owned by utils.duckdb_connection, so this module neither
+    # names nor removes one.
+    with pytest.raises(RuntimeError, match="duckdb boom"):
+        cv.intersect_with_polygons_db(df.copy(), poly.copy(), "X", df_join_col="ISO_2", polygon_join_col="X")
 
     par_df = gpd.GeoDataFrame({"geometry": [Point(0, 0), None]}, geometry="geometry", crs="EPSG:4326")
     par_poly = gpd.GeoDataFrame({"geometry": [box(-1, -1, 1, 1)]}, geometry="geometry", crs="EPSG:4326")
@@ -850,15 +882,10 @@ def test_db_parallel_and_weights_fallback_branches(monkeypatch):
 
 
 def test_dissolve_overlap_and_main_remaining_branches(monkeypatch, tmp_path):
-    # dissolve_overlapping_geometries empty and utm=None paths
-    assert cv.dissolve_overlapping_geometries(gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326"), 10) is None
-
-    subdf = gpd.GeoDataFrame({"some_id": [1], "geometry": [Point(0, 0)]}, geometry="geometry", crs="EPSG:4326")
-    monkeypatch.setattr(cv, "estimate_utm_crs", lambda g: None)
-    assert cv.dissolve_overlapping_geometries(subdf, 10, convex=True) is None
     assert cv.dissolve_overlapping_geometries_fast(gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326"), 10) == ([], None)
 
-    # orchestrate_overlaps future handling + cache-write warning path
+    # orchestrate_overlaps future handling + cache-write warning path.
+    # A worker returning None is now counted as an error rather than skipped.
     class _FutNone:
         def result(self):
             return None
@@ -929,7 +956,7 @@ def test_dissolve_overlap_and_main_remaining_branches(monkeypatch, tmp_path):
     import src.starter as starter
     import src.pipelines as pipelines
     monkeypatch.setattr(starter, "load_config", lambda **kwargs: {
-        "voronoi_overwrite": False,
+        "overwrite_existing": False,
         "city_voronoi": False,
         "weight_func": "mult",
         "weight_method": "linear",
@@ -1013,7 +1040,7 @@ def test_remaining_cluster_and_db_crs_branches(monkeypatch):
         def close(self):
             return None
 
-    monkeypatch.setattr(cv.duckdb, "connect", lambda database: _Conn())
+    monkeypatch.setattr(cv, "duckdb_connection", _fake_duckdb_connection(_Conn()))
     monkeypatch.setattr(cv.np.random, "randint", lambda low, high: 3)
     monkeypatch.setattr(gpd.GeoDataFrame, "to_crs", lambda self, crs: self)
     monkeypatch.setattr(cv.os.path, "exists", lambda p: False)
@@ -1223,17 +1250,6 @@ def test_residual_dissolve_and_overlap_orchestration_lines(monkeypatch, tmp_path
     monkeypatch.setattr(cv, "tqdm", lambda it, **kwargs: it)
     monkeypatch.setattr(cv, "estimate_utm_crs", lambda g: CRS.from_epsg(32632))
 
-    subdf = gpd.GeoDataFrame(
-        {
-            "some_id": [1, 1, 2],
-            "geometry": [Point(0, 0), Point(0.001, 0.001), Point(0.0015, 0.0015)],
-        },
-        geometry="geometry",
-        crs="EPSG:4326",
-    )
-    out = cv.dissolve_overlapping_geometries(subdf, radius=50, convex=True)
-    assert out is not None
-
     class _ExecNone:
         def __init__(self, max_workers=None):
             self.max_workers = max_workers
@@ -1408,18 +1424,6 @@ def test_residual_orchestrate_voronoi_weights_lines(monkeypatch, tmp_path):
 def test_final_residual_dissolve_and_orchestrate_none_result(monkeypatch):
     monkeypatch.setattr(cv, "tqdm", lambda it, **kwargs: it)
     monkeypatch.setattr(cv, "estimate_utm_crs", lambda g: CRS.from_epsg(32632))
-
-    # Distinct IDs with overlapping bounds to drive inner overlap branches.
-    subdf = gpd.GeoDataFrame(
-        {
-            "some_id": [1, 2],
-            "geometry": [Point(0.0, 0.0), Point(0.00001, 0.00001)],
-        },
-        geometry="geometry",
-        crs="EPSG:4326",
-    )
-    res = cv.dissolve_overlapping_geometries(subdf, radius=500, convex=False)
-    assert res is not None
 
     # Explicitly drive `if result is None: continue` in orchestration worker loop.
     df = gpd.GeoDataFrame(

@@ -32,10 +32,14 @@ def test_download_file_stream_and_vectorize_raster(tmp_path, monkeypatch):
             yield b"ghi"
             yield b"jkl"
 
-    monkeypatch.setattr(dav.requests, "get", lambda *args, **kwargs: _Resp())
+    class _Session:
+        def get(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(dav, "requests_session_with_retries", lambda *a, **k: _Session())
 
     out = tmp_path / "download.bin"
-    dav.download_file("https://example.test/file", str(out))
+    dav.download_file("https://example.test/file", str(out), chunk_size=1024)
     assert out.exists()
     assert out.read_bytes() == b"abcdefghijkl"
 
@@ -169,7 +173,7 @@ def test_bing_image_helpers_and_drawing(tmp_path, monkeypatch):
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr(dba.requests, "get", lambda *args, **kwargs: _Resp())
+    monkeypatch.setattr(dba._bing_session, "get", lambda *args, **kwargs: _Resp())
 
     downloaded = dba.download_bing_image(0.0, 0.0)
     assert downloaded.size == (64, 64)

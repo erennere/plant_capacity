@@ -95,7 +95,7 @@ def test_convert_geojson_to_parquet_success_path(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ww3.os.path, "exists", lambda path: False)
     monkeypatch.setattr(ww3, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
-    monkeypatch.setattr(ww3.duckdb, "connect", lambda _: _Conn())
+    monkeypatch.setattr(ww3.duckdb, "connect", lambda *a, **k: _Conn())
 
     result = ww3.convert_geojson_to_parquet("idx_1_polygons.geojson", str(tmp_path), overwrite=False)
 
@@ -115,12 +115,12 @@ def test_convert_geojson_to_parquet_failure_and_existing_skip(monkeypatch, tmp_p
 
     monkeypatch.setattr(ww3.os.path, "exists", lambda path: False)
     monkeypatch.setattr(ww3, "ensure_output_dir_for_file", lambda path: None)
-    monkeypatch.setattr(ww3.duckdb, "connect", lambda _: _FailConn())
+    monkeypatch.setattr(ww3.duckdb, "connect", lambda *a, **k: _FailConn())
 
     assert ww3.convert_geojson_to_parquet("idx_2_polygons.geojson", str(tmp_path), overwrite=False) is None
 
     monkeypatch.setattr(ww3.os.path, "exists", lambda path: True)
-    monkeypatch.setattr(ww3.duckdb, "connect", lambda _: pytest.fail("duckdb.connect should not be called"))
+    monkeypatch.setattr(ww3.duckdb, "connect", lambda *a, **k: pytest.fail("duckdb.connect should not be called"))
 
     skipped = ww3.convert_geojson_to_parquet("idx_3_polygons.geojson", str(tmp_path), overwrite=False)
 
@@ -171,7 +171,7 @@ def test_merge_parquets_sql_ignores_schema_discovery_failures(monkeypatch):
 
 def test_new03_script_entrypoint_runs_merge_tasks_and_calls_main(monkeypatch, tmp_path):
     cfg = {
-        "annotations": {"overwrite": False},
+        "overwrite_existing": False,
         "paths": {
             "corrected_all_filepath": str(tmp_path / "points.gpkg"),
             "annotations_grid_dir": str(tmp_path / "grids"),
@@ -213,9 +213,9 @@ def test_new03_script_entrypoint_runs_merge_tasks_and_calls_main(monkeypatch, tm
 
     monkeypatch.setattr(os, "chdir", lambda path: None)
     monkeypatch.setattr(os.path, "exists", fake_exists)
-    monkeypatch.setattr(starter, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(starter, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(starter, "load_config", lambda **kwargs: cfg)
-    monkeypatch.setattr(create_voronoi, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
+    monkeypatch.setattr("src.utils.ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
     monkeypatch.setattr(pd, "read_parquet", lambda path: df.copy())
     monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
     monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", lambda max_workers=None: _Executor(max_workers=max_workers, eager_results=False))

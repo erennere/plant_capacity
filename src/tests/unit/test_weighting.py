@@ -324,7 +324,12 @@ def test_orchestrate_voronoi_weights_output_mode_overwrite_clears_temp_checkpoin
     assert replace_calls == [(str(temp_output_path), str(output_path))]
 
 
-def test_initialize_voronoi_weights_additive_mode_scales_by_auto_weight_factor(monkeypatch):
+def test_initialize_voronoi_weights_additive_mode_pins_factor_to_one():
+    """Additive scaling is pinned to 1.0, matching the frozen baseline tree.
+
+    ``auto_weight_scale`` is deliberately left uncalled there (the call site is
+    commented out), so weights pass through unscaled. This guards that parity.
+    """
     df = gpd.GeoDataFrame(
         {
             "weights": [0.25, 0.75],
@@ -334,8 +339,6 @@ def test_initialize_voronoi_weights_additive_mode_scales_by_auto_weight_factor(m
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(create_voronoi, "auto_weight_scale", lambda points: 10.0)
-
     weights, factor = create_voronoi.initialize_voronoi_weights(
         df,
         create_voronoi.default_distance_additive,
@@ -343,5 +346,5 @@ def test_initialize_voronoi_weights_additive_mode_scales_by_auto_weight_factor(m
         points=[(0, 0), (1, 0)],
     )
 
-    assert factor == pytest.approx(10.0)
-    assert weights == pytest.approx(np.array([2.5, 7.5]))
+    assert factor == pytest.approx(1.0)
+    assert weights == pytest.approx(np.array([0.25, 0.75]))

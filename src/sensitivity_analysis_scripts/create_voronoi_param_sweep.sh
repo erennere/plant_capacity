@@ -6,20 +6,20 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --array=0-9
 #SBATCH --job-name=voronoi-sweep
-#SBATCH --output=logs/voronoi_sweep_%a.out
-#SBATCH --error=logs/voronoi_sweep_%a.err
+#SBATCH --output=logs/voronoi_sweep_%A_%a.out
+#SBATCH --error=logs/voronoi_sweep_%A_%a.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+
 PYTHON_SCRIPT="src.create_voronoi"
 APPROACH="1"
-VERSION="${1:-}"
-DYNAMIC_BUFFERING="${2:-}"
-DYNAMIC_BUFFER_K="${3:-}"
 SHUFFLE_SEED="${SHUFFLE_SEED:-42}"
+
+parse_overrides "$@"
 
 # Parameter grids
 LEVELS=(6 7 8 9)
@@ -28,14 +28,11 @@ WEIGHT_METHODS=("linear" "logarithmic" "square_root" "sigmoid")
 BUFFERS=(9000 11000 13000 15000)
 DYNAMIC_K_VALUES=(0.6 0.7 0.8)
 
-mkdir -p "${LOG_DIR}"
-rm -f "${LOG_DIR}/voronoi_sweep_${SLURM_ARRAY_TASK_ID:-0}.log" "${LOG_DIR}"/voronoi_sweep_*.out "${LOG_DIR}"/voronoi_sweep_*.err
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/voronoi_sweep_${SLURM_ARRAY_TASK_ID:-0}.log"
-}
-
 TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
+init_log "voronoi_sweep_${TASK_ID}"
+enable_err_trap
+rm -f "${LOG_DIR}"/voronoi_sweep_*.out "${LOG_DIR}"/voronoi_sweep_*.err
+
 if ! [[ "${TASK_ID}" =~ ^[0-9]+$ ]]; then
     log "ERROR: Invalid task id '${TASK_ID}'"
     exit 1
@@ -47,54 +44,25 @@ fi
 
 log "Starting Voronoi parameter sweep task ${TASK_ID}/9 (approach=${APPROACH}, shuffle_seed=${SHUFFLE_SEED})"
 
-log "Installing src module (editable)"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null
+ensure_src_importable
 
 run_count=0
 mapfile -t ASSIGNED_COMBOS < <(
-    "${PYTHON_CMD}" - "${TASK_ID}" "${SHUFFLE_SEED}" <<'PY'
-import random
+    "${PYTHON_CMD}" -c "
 import sys
-
-task_id = int(sys.argv[1])
-seed = int(sys.argv[2])
-
-levels = [6, 7, 8, 9]
-weight_funcs = ["mult", "add", ""]
-weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
-buffers = [9000, 11000, 13000, 15000]
-dynamic_k_values = [0.6, 0.7, 0.8]
-
-combos = []
-for level in levels:
-    for weight_func in weight_funcs:
-        for weight_method in weight_methods:
-            # When weight_func is empty the distance weighting is disabled,
-            # so weight_method has no effect on the output. Only include
-            # one canonical method (linear) to avoid redundant runs.
-            if weight_func == "" and weight_method != "linear":
-                continue
-
-            # (a) Rigid buffering regime.
-            for buffer in buffers:
-                combos.append((level, buffer, weight_method, weight_func, "false", ""))
-
-            # (b) Dynamic buffering regime by k-values.
-            for k in dynamic_k_values:
-                combos.append((level, 9000, weight_method, weight_func, "true", str(k)))
-
-random.Random(seed).shuffle(combos)
-
-for idx, (level, buffer, weight_method, weight_func, dynamic_buffering, dynamic_buffer_k) in enumerate(combos):
-    if idx % 10 == task_id:
-        wf = weight_func if weight_func != "" else "__EMPTY__"
-        dbk = dynamic_buffer_k if dynamic_buffer_k != "" else "__EMPTY__"
-        print(f"{level}\t{buffer}\t{weight_method}\t{wf}\t{dynamic_buffering}\t{dbk}")
-PY
+from src.sensitivity_analysis_scripts.create_voronoi_parallel_sweep import print_task_combinations
+print_task_combinations(int(sys.argv[1]), int(sys.argv[2]))
+" "${TASK_ID}" "${SHUFFLE_SEED}"
 )
 
 for combo in "${ASSIGNED_COMBOS[@]}"; do
     IFS=$'\t' read -r level buffer weight_method weight_func dynamic_buffering dynamic_buffer_k <<< "${combo}"
+    level="${level//$'\r'/}"
+    buffer="${buffer//$'\r'/}"
+    weight_method="${weight_method//$'\r'/}"
+    weight_func="${weight_func//$'\r'/}"
+    dynamic_buffering="${dynamic_buffering//$'\r'/}"
+    dynamic_buffer_k="${dynamic_buffer_k//$'\r'/}"
     if [[ "${weight_func}" == "__EMPTY__" ]]; then
         weight_func=""
     fi
@@ -103,8 +71,20 @@ for combo in "${ASSIGNED_COMBOS[@]}"; do
     fi
     run_count=$((run_count + 1))
     log "Run ${run_count}: level=${level} buffer=${buffer} weight_method=${weight_method} weight_func='${weight_func}' dynamic_buffering=${dynamic_buffering} dynamic_buffer_k=${dynamic_buffer_k}"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${level}" "${VERSION}" "${buffer}" "${weight_method}" "${weight_func}" "${dynamic_buffering}" "${dynamic_buffer_k}" --approach "${APPROACH}" \
-        2>&1 | tee -a "${LOG_DIR}/voronoi_sweep_${TASK_ID}.log"
+    cmd=(
+        "${PYTHON_CMD}" -m "${PYTHON_SCRIPT}"
+        --level "${level}"
+        --version "${VERSION}"
+        --buffer "${buffer}"
+        --weight-method "${weight_method}"
+        --weight-func "${weight_func}"
+        --dynamic-buffering "${dynamic_buffering}"
+        --approach "${APPROACH}"
+    )
+    if [[ -n "${dynamic_buffer_k}" ]]; then
+        cmd+=(--dynamic-buffer-k "${dynamic_buffer_k}")
+    fi
+    "${cmd[@]}" 2>&1 | tee -a "${LOG_FILE}"
 done
 
 log "Completed task ${TASK_ID}. Executed ${run_count} parameter combinations."

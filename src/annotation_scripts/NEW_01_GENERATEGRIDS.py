@@ -4,6 +4,7 @@ The output grid is derived from the current `corrected_all_filepath` point layer
 and uses the configured annotation cell size and scale factor.
 """
 
+import argparse
 import logging
 import os
 import geopandas as gpd
@@ -12,11 +13,13 @@ from shapely.geometry import box
 from shapely import Point
 
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file
+
+logger = logging.getLogger(__name__)
 
 def point_to_square(geom, half):
     """Return a square polygon centered on a point geometry."""
@@ -26,6 +29,13 @@ def point_to_square(geom, half):
         geom.x - half, geom.y - half,
         geom.x + half, geom.y + half
     )
+
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run NEW_01_GENERATEGRIDS.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
 
 def main(cell_size, half, points_path, output_path):
     """Read points, expand them to square tiles, and write a GeoPackage grid.
@@ -56,14 +66,14 @@ def main(cell_size, half, points_path, output_path):
         output_path,
         driver="GPKG"
     )
-    print(f"âœ… Created {cell_size:.2f} m Ã— {cell_size:.2f} m grid squares (Zoom 17, 3072Ã—3072 px).")
+    print(f"✅ Created {cell_size:.2f} m × {cell_size:.2f} m grid squares (Zoom 17, 3072×3072 px).")
 
 if __name__ == '__main__':
-    logging.info("Starting Bing annotation pipeline")
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    configure_logging()
+    logger.info("Starting Bing annotation pipeline")
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="NEW_01_GENERATEGRIDS", **overrides)
-    logging.info("Configuration loaded")
+    logger.info("Configuration loaded")
 
     cell_size = int(cfg["annotations"]["cell_size"])
     factor = float(cfg["annotations"]["factor"])

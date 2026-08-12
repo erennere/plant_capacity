@@ -5,7 +5,7 @@
 # Can run locally by specifying file index, or in SLURM job array mode
 #
 # Usage:
-#   ./add_pop.sh <index> [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
+#   ./add_pop.sh --index <index> [--level <n>] [--version <v>] [--buffer <m>] [--weight-method <method>] [--weight-func <func>] [--dynamic-buffering <true|false>] [--dynamic-buffer-k <k>]
 #   sbatch add_pop.sh              (SLURM array job - uses SLURM_ARRAY_TASK_ID)
 #
 # SLURM Configuration
@@ -15,38 +15,53 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --array=0-12
 #SBATCH --job-name=add-pop-array
-#SBATCH --output=logs/add_pop_%a.out
-#SBATCH --error=logs/add_pop_%a.err
+#SBATCH --output=logs/add_pop_%A_%a.out
+#SBATCH --error=logs/add_pop_%A_%a.err
 
-set -euo pipefail  # Exit on error, undefined vars, pipe failures
+set -Eeuo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Configuration
-PROJECT_ROOT="$(pwd)"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "add_pop_array"
+enable_err_trap
+rm -f "${LOG_DIR}"/add_pop_*.out "${LOG_DIR}"/add_pop_*.err
 
-LOG_DIR="${PROJECT_ROOT}/logs"
 PYTHON_SCRIPT="src.add_pop"
-PYTHON_CMD="python"
 
-# Parse optional config override arguments
-LEVEL="${2:-}"
-VERSION="${3:-}"
-BUFFER="${4:-}"
-WEIGHT_METHOD="${5:-}"
-WEIGHT_FUNC="${6:-}"
-DYNAMIC_BUFFERING="${7:-}"
-DYNAMIC_BUFFER_K="${8:-}"
+# Parse arguments (named index + named overrides)
+INDEX_ARG=""
+OVERRIDE_INPUT=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --index)
+            if [[ $# -lt 2 ]]; then
+                log "ERROR: --index requires a value"
+                exit 1
+            fi
+            INDEX_ARG="$2"
+            shift 2
+            ;;
+        --level|--version|--buffer|--weight-method|--weight-func|--dynamic-buffering|--dynamic-buffer-k)
+            if [[ $# -lt 2 ]]; then
+                log "ERROR: $1 requires a value"
+                exit 1
+            fi
+            OVERRIDE_INPUT+=("$1" "$2")
+            shift 2
+            ;;
+        *)
+            log "ERROR: Unknown argument '$1'"
+            log "Usage: $0 --index <file_index> [--level <n>] [--version <v>] [--buffer <m>] [--weight-method <method>] [--weight-func <func>] [--dynamic-buffering <true|false>] [--dynamic-buffer-k <k>]"
+            exit 1
+            ;;
+    esac
+done
 
-# Create log directory
-mkdir -p "${LOG_DIR}"
+parse_overrides "${OVERRIDE_INPUT[@]}"
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/add_pop_array.log" "${LOG_DIR}"/add_pop_*.out "${LOG_DIR}"/add_pop_*.err
-
-
-# Logging function
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/add_pop_array.log"
-}
+build_override_args
 
 log "=========================================="
 log "Population Data Integration Task Started"
@@ -60,15 +75,15 @@ if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     log "Running in SLURM job array"
     log "Job array ID: ${SLURM_ARRAY_JOB_ID:-unknown}"
     log "Array task ID: ${TASK_ID}"
-elif [[ $# -ge 1 ]]; then
-    # Local mode with command-line argument
-    TASK_ID="$1"
+elif [[ -n "${INDEX_ARG}" ]]; then
+    # Local mode with explicit named argument
+    TASK_ID="${INDEX_ARG}"
     log "Running in local mode"
-    log "Task ID from command-line: ${TASK_ID}"
+    log "Task ID from --index: ${TASK_ID}"
 else
     # No task ID provided
     log "ERROR: Task ID not provided"
-    log "Usage: $0 <file_index> [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]"
+    log "Usage: $0 --index <file_index> [--level <n>] [--version <v>] [--buffer <m>] [--weight-method <method>] [--weight-func <func>] [--dynamic-buffering <true|false>] [--dynamic-buffer-k <k>]"
     log "   or: sbatch $0 (SLURM mode)"
     exit 1
 fi
@@ -81,12 +96,10 @@ fi
 
 log "Python command: ${PYTHON_CMD}"
 
-# Install package in editable mode before running modules
-log "Installing src module (editable)"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}"
+ensure_src_importable
 
 # Validate Python script exists
-if ! python -c "import ${PYTHON_SCRIPT}" &> /dev/null; then
+if ! "${PYTHON_CMD}" -c "import ${PYTHON_SCRIPT}" &> /dev/null; then
     log "ERROR: Python script not found or cannot be imported: ${PYTHON_SCRIPT}"
     exit 1
 fi
@@ -103,7 +116,7 @@ log "Processing Voronoi file index: ${TASK_ID}"
 # Run the population data integration
 START_TIME=$(date +%s)
 
-if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${TASK_ID}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}"; then
+if ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" --index "${TASK_ID}" "${OVERRIDE_ARGS[@]}"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     log "=========================================="

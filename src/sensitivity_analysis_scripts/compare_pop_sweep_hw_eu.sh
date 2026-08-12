@@ -5,31 +5,25 @@
 #SBATCH --mem=64gb
 #SBATCH --cpus-per-task=8
 #SBATCH --job-name=compare-pop-sweep-hw-eu
-#SBATCH --output=logs/compare_pop_sweep_hw_eu.out
-#SBATCH --error=logs/compare_pop_sweep_hw_eu.err
+#SBATCH --output=logs/compare_pop_sweep_hw_eu_%j.out
+#SBATCH --error=logs/compare_pop_sweep_hw_eu_%j.err
 # Usage:
 #   bash src/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "compare_pop_sweep_hw_eu"
+enable_err_trap
+
 PYTHON_MODULE="src.sensitivity_analysis_scripts.compare_pop_sweep_hw_eu"
 MAX_WORKERS="${SLURM_CPUS_PER_TASK:-8}"
 
-mkdir -p "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/compare_pop_sweep_hw_eu.log"
-export COMPARE_POP_SWEEP_MAX_WORKERS="${MAX_WORKERS}"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_FILE}"
-}
-
-log "Installing src module (editable)"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null
+#install_package
 
 log "Running HW/EU sensitivity analysis for all pop-output GPKGs (workers=${MAX_WORKERS})"
-${PYTHON_CMD} -m "${PYTHON_MODULE}" "$@" 2>&1 | tee -a "${LOG_FILE}"
+run_stage "${PYTHON_MODULE}" ${PYTHON_CMD} -m "${PYTHON_MODULE}" "$@"
 
 log "Completed HW/EU sensitivity analysis"

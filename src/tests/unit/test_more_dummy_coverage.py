@@ -137,7 +137,11 @@ def test_download_file_and_unzip_dispatch(monkeypatch, tmp_path):
         def iter_content(self, chunk_size=8192):
             yield b"abc"
 
-    monkeypatch.setattr(download_pop.requests, "get", lambda *args, **kwargs: _Resp())
+    class _Session:
+        def get(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(download_pop, "requests_session_with_retries", lambda *a, **k: _Session())
     out = tmp_path / "f.bin"
     assert download_pop.download_file("http://x", str(out)) is True
     assert out.exists()

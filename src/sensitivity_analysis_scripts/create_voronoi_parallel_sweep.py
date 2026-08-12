@@ -6,7 +6,7 @@ Runs 4 instances of create_voronoi.py in parallel, each handling a subset
 of parameter combinations. Designed to be called from SLURM array jobs.
 
 Usage:
-    python -m src.sensitivity_analysis_scripts.create_voronoi_parallel_sweep [TASK_ID] [VERSION] [DYNAMIC_BUFFERING] [DYNAMIC_BUFFER_K] [--approach APPROACH]
+    python -m src.sensitivity_analysis_scripts.create_voronoi_parallel_sweep --task-id <id> [--version <v>] [--dynamic-buffering <true|false>] [--dynamic-buffer-k <k>] [--approach APPROACH]
 
 Parameters:
     TASK_ID: SLURM array task ID (0-9)
@@ -27,9 +27,11 @@ from typing import List, Tuple
 
 try:
     from ..starter import load_config
+    from ..utils import configure_logging
     from ..pipelines import create_output_paths
 except ImportError:
     from src.starter import load_config
+    from src.utils import configure_logging
     from src.pipelines import create_output_paths
 
 # Setup logging
@@ -51,7 +53,7 @@ def setup_logging(log_dir: str, task_id: int) -> logging.Logger:
     return logger
 
 
-def generate_parameter_combinations() -> List[Tuple[int, str, int, str, str, str, str]]:
+def generate_parameter_combinations(weight_func_filter: str = "all") -> List[Tuple[int, str, int, str, str, str, str]]:
     """Generate all parameter combinations for the sweep.
 
     Combination tuple:
@@ -59,7 +61,16 @@ def generate_parameter_combinations() -> List[Tuple[int, str, int, str, str, str
          dynamic_buffering, dynamic_buffer_k)
     """
     levels = [6, 7, 8, 9]
-    weight_funcs = ["mult", "add", ""]
+    if weight_func_filter == "all":
+        weight_funcs = ["mult", "add", ""]
+    elif weight_func_filter == "add":
+        weight_funcs = ["add"]
+    elif weight_func_filter == "mult":
+        weight_funcs = ["mult"]
+    elif weight_func_filter == "none":
+        weight_funcs = [""]
+    else:
+        raise ValueError("weight_func_filter must be one of: all, add, mult, none")
     weight_methods = ["linear", "logarithmic", "square_root", "sigmoid"]
     rigid_buffers = [9000, 11000, 13000, 15000]
     dynamic_k_values = [0.6, 0.7, 0.8]
@@ -113,6 +124,36 @@ def filter_combinations_by_task(
     return [combo for idx, combo in enumerate(shuffled) if idx % num_tasks == task_id]
 
 
+def print_task_combinations(
+    task_id: int,
+    shuffle_seed: int,
+    weight_func_filter: str = "all",
+    num_tasks: int = 10,
+) -> None:
+    """Print this task's assigned combinations as tab-separated lines.
+
+    Emits ``level``, ``buffer``, ``weight_method``, ``weight_func``,
+    ``dynamic_buffering``, ``dynamic_buffer_k`` per line (the ``version``
+    field of the combination tuple is dropped - the sweep .sh wrappers
+    supply their own version via config/CLI override). Empty strings are
+    encoded as ``__EMPTY__`` since the .sh wrappers parse this with a
+    tab-delimited ``read`` that a genuinely blank field would confuse.
+
+    This is the single source of truth for the sweep parameter grid used
+    by the sweep .sh wrapper scripts (create_voronoi_param_sweep.sh,
+    add_pop_param_sweep.sh, industrial_analysis_sweep.sh); they call this
+    via ``python -c`` instead of each reimplementing the grid.
+    """
+    combinations = generate_parameter_combinations(weight_func_filter)
+    assigned = filter_combinations_by_task(
+        combinations, task_id, num_tasks=num_tasks, shuffle_seed=shuffle_seed
+    )
+    for level, _version, buffer, weight_method, weight_func, dynamic_buffering, dynamic_buffer_k in assigned:
+        wf = weight_func if weight_func != "" else "__EMPTY__"
+        dbk = dynamic_buffer_k if dynamic_buffer_k != "" else "__EMPTY__"
+        print(f"{level}\t{buffer}\t{weight_method}\t{wf}\t{dynamic_buffering}\t{dbk}")
+
+
 def split_combinations_into_jobs(
     combinations: List[Tuple[int, str, int, str, str, str, str]],
     num_jobs: int = 4
@@ -156,7 +197,6 @@ def run_voronoi_job(
     Returns:
         List of parameter combinations that failed after retries
     """
-    os.chdir(project_root)
     sys.path.insert(0, project_root)
 
     log_msg = f"Job {job_id}: Starting with {len(combinations)} parameter combinations"
@@ -197,12 +237,31 @@ def run_voronoi_job(
             logger.debug(f"[Job {job_id}] {log_msg}")
 
             # Build command
+            # Only append optional flags that carry a value. An unset override
+            # is None/"" here, and subprocess.run raises TypeError on a None
+            # argv entry, which the broad except below would report as an
+            # opaque per-job exception rather than a bad command.
             cmd = [
-                sys.executable, "-m", "src.create_voronoi",
-                str(level), version, str(buffer), weight_method, weight_func,
-                combo_dynamic_buffering, combo_dynamic_buffer_k,
-                "--approach", approach
+                sys.executable,
+                "-m",
+                "src.create_voronoi",
+                "--level",
+                str(level),
+                "--buffer",
+                str(buffer),
+                "--weight-method",
+                weight_method,
+                "--weight-func",
+                weight_func,
+                "--approach",
+                approach,
             ]
+            if version:
+                cmd.extend(["--version", version])
+            if combo_dynamic_buffering:
+                cmd.extend(["--dynamic-buffering", combo_dynamic_buffering])
+            if combo_dynamic_buffer_k:
+                cmd.extend(["--dynamic-buffer-k", combo_dynamic_buffer_k])
             env = os.environ.copy()
             env["WWTP_SERVICE_PIPELINE_LOG_LEVEL"] = "INFO"
 
@@ -325,14 +384,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Parallel parameter sweep executor for create_voronoi"
     )
-    parser.add_argument("task_id", nargs="?", type=int, default=None,
+    parser.add_argument("--task-id", type=int, default=None,
                        help="SLURM array task ID (0-9)")
-    parser.add_argument("version", nargs="?", default="",
+    parser.add_argument("--version", default="",
                        help="Optional config version")
-    parser.add_argument("dynamic_buffering", nargs="?", default="",
-                       help="Backward-compatible positional arg (ignored; sweep grid controls this)")
-    parser.add_argument("dynamic_buffer_k", nargs="?", default="",
-                       help="Backward-compatible positional arg (ignored; sweep grid controls this)")
+    parser.add_argument("--dynamic-buffering", default="",
+                       help="Optional global dynamic buffering override")
+    parser.add_argument("--dynamic-buffer-k", default="",
+                       help="Optional global dynamic buffer k override")
     parser.add_argument("--approach", type=str, default="1",
                        help="Approach to run (default: 1)")
     parser.add_argument("--num-jobs", type=int, default=4,
@@ -341,6 +400,9 @@ def main():
                        help="Retries per failed parameter run (default: 2)")
     parser.add_argument("--shuffle-seed", type=int, default=42,
                        help="Seed for deterministic random assignment across 10 tasks")
+    parser.add_argument("--weight-func-filter", type=str, default="all",
+                       choices=["all", "add", "mult", "none"],
+                       help="Optional weight_func subset for the sweep grid")
     
     args = parser.parse_args()
     
@@ -354,17 +416,21 @@ def main():
         sys.exit(1)
     
     # Setup paths and logging
-    project_root = os.getcwd()
+    # Anchored to this file, not the working directory: the sweep writes logs and
+    # runs an editable install against it, and both must resolve the same way no
+    # matter where the job was launched from.
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log_dir = os.path.join(project_root, "logs")
     logger = setup_logging(log_dir, task_id)
     
     logger.info(f"Starting parallel Voronoi sweep (task {task_id}/9, approach={args.approach})")
     logger.info(f"Initial parallel jobs: {args.num_jobs}")
     logger.info(f"Shuffle seed: {args.shuffle_seed}")
+    logger.info(f"Weight function filter: {args.weight_func_filter}")
     if args.dynamic_buffering or args.dynamic_buffer_k:
         logger.info(
-            "Dynamic buffering positional overrides were provided but are ignored; "
-            "sweep combinations define rigid and dynamic modes explicitly."
+            "Dynamic buffering global overrides were provided; "
+            "sweep combinations still define rigid and dynamic modes explicitly."
         )
     
     try:
@@ -378,7 +444,7 @@ def main():
         )
         
         # Generate and filter combinations
-        all_combinations = generate_parameter_combinations()
+        all_combinations = generate_parameter_combinations(weight_func_filter=args.weight_func_filter)
         task_combinations = filter_combinations_by_task(
             all_combinations,
             task_id,
@@ -439,4 +505,5 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_logging()
     main()

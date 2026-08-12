@@ -18,64 +18,33 @@
 #SBATCH --mem=192gb
 #SBATCH --cpus-per-task=16
 #SBATCH --array=0-2
+#SBATCH --output=logs/create_voronoi_%j.out
+#SBATCH --error=logs/create_voronoi_%j.err
 #
 ################################################################################
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # Change to project root from the current working directory.
-PROJECT_ROOT="$(pwd)"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "create_voronoi"
+enable_err_trap
 
-cd "$PROJECT_ROOT"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
 PYTHON_SCRIPT="src.create_voronoi"
 
-mkdir -p "${LOG_DIR}"
+ensure_src_importable
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/create_voronoi.log"
+export_thread_vars
 
+parse_overrides "$@"
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/create_voronoi.log"
-}
-
-log "Installing src module"
-# Install package in editable mode before running modules
-${PYTHON_CMD} -m pip install -e "$PROJECT_ROOT" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
-log "Installation complete"
-
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 8)}
-export OPENBLAS_NUM_THREADS=$OMP_NUM_THREADS
-export MKL_NUM_THREADS=$OMP_NUM_THREADS
-export NUMEXPR_NUM_THREADS=$OMP_NUM_THREADS
-
-#
-# Usage:
-#   ./create_voronoi.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level         - Processing level (default: resolved from create_voronoi config)
-#   version       - Data version (default: resolved from create_voronoi config)
-#   buffer        - Buffer distance in metres (default: resolved from create_voronoi config)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func   - Distance mode: mult | add | "" (empty = default multiplicative)
-#
-# Approaches: 0 (WWTP no watersheds), 1 (WWTP with watersheds), 2 (cities)
-# Use --only_round flag to pass to Python for round-area weights.
-## Parse optional config override arguments
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
+build_override_args
 
 # Determine execution mode: environment default + config override
 # Defaults: array on HPC, sequential on local
-if [[ -n "$SLURM_JOB_ID" ]]; then
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     DEFAULT_MODE="array"
 else
     DEFAULT_MODE="sequential"
@@ -123,20 +92,20 @@ MODE=${MODE:-$DEFAULT_MODE}
 
 log "Execution mode: ${MODE}"
 
-if [[ "$MODE" == "array" ]] && [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
+if [[ "$MODE" == "array" ]] && [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     # Array job mode: one approach per SLURM task
     APPROACHES=('0' '1' '2')
     APPROACH="${APPROACHES[$SLURM_ARRAY_TASK_ID]}"
     log "Running approach ${APPROACH} in array mode (task ${SLURM_ARRAY_TASK_ID})"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+    run_stage "${PYTHON_SCRIPT}" ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${OVERRIDE_ARGS[@]}" --approach "$APPROACH"
 elif [[ "$MODE" == "sequential" ]]; then
     # Sequential: only run on task 0 (skip other array tasks if present)
-    if [[ -n "$SLURM_ARRAY_TASK_ID" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
+    if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] && [[ $SLURM_ARRAY_TASK_ID -ne 0 ]]; then
         log "Sequential mode: skipping task $SLURM_ARRAY_TASK_ID (only task 0 runs)"
         exit 0
     fi
     log "Running all approaches in sequential mode"
-    ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log"
+    run_stage "${PYTHON_SCRIPT}" ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${OVERRIDE_ARGS[@]}"
 elif [[ "$MODE" == "parallel" ]]; then
     # Parallel: run multiple approaches concurrently on different CPUs
     log "Running all approaches in parallel mode"
@@ -146,7 +115,7 @@ elif [[ "$MODE" == "parallel" ]]; then
     for APPROACH in "${APPROACHES[@]}"; do
         log "Launching approach ${APPROACH} in background"
         # Launch approach in background
-        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_DIR}/create_voronoi.log" &
+        ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${OVERRIDE_ARGS[@]}" --approach "$APPROACH" 2>&1 | tee -a "${LOG_FILE}" &
     done
     
     # Wait for all background jobs to complete

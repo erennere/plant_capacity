@@ -4,20 +4,21 @@ The script parses model text responses into structured fields and joins them to
 the main geospatial table via the numeric identifier encoded in image names.
 """
 
+import argparse
 import os
 import re
 
 import geopandas as gpd
 import pandas as pd
 
-from src.starter import load_config, parse_config_overrides
-from src.create_voronoi import ensure_output_dir_for_file
+from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+from src.utils import configure_logging, ensure_output_dir_for_file
 
 def decode_gen_text(text):
     """Parse model output text into category number/name and justification.
 
-    Expected format is roughly:
-    "<category_number>.<category_name>: <justification>"
+    Expected format is:
+    "Analysis: ...\\n\\nDecision: <number>. <name>\\nJustification: <justification>"
 
     The parser is tolerant to malformed rows and returns ``None`` values when a
     reliable parse is not possible.
@@ -25,15 +26,18 @@ def decode_gen_text(text):
     if not isinstance(text, str):
         return None, None, None
 
-    left_right = text.split(":", 1)
-    left = left_right[0].strip()
-    justification = left_right[1].strip() if len(left_right) > 1 else None
-
     category_number = None
     category_name = None
-    context = [part.strip() for part in left.split(".", 1)]
-    if len(context) == 2:
-        category_number, category_name = context
+    justification = None
+
+    decision_match = re.search(r"Decision:\s*(\d+)\.\s*(.+?)(?:\n|$)", text)
+    if decision_match:
+        category_number = decision_match.group(1).strip()
+        category_name = decision_match.group(2).strip()
+
+    justification_match = re.search(r"Justification:\s*(.+)", text, re.DOTALL)
+    if justification_match:
+        justification = justification_match.group(1).strip()
 
     def _clean_field(value):
         if not isinstance(value, str):
@@ -55,6 +59,13 @@ def parse_idx_from_image_name(image_name):
     match = re.search(r"(\d+)$", stem)
     return int(match.group(1)) if match else None
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run merge_annotations.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Load annotations, merge parsed labels onto WWTP points, and overwrite output.
 
@@ -63,8 +74,7 @@ def main():
     None
         The merged geospatial output is written back to the configured dataset.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="merge_annotations", **overrides)
 
     image_input_dir = cfg['paths']['annotated_images_output_dir']
@@ -86,9 +96,7 @@ def main():
         raise KeyError("Missing required 'idx' column in corrected_all dataset")
     points_df['idx'] = points_df['idx'].astype(int)
 
-    # Avoid duplicated *_x/*_y columns on repeated script runs.
     annotation_cols = ['category_number', 'category_name', 'justification']
-    points_df = points_df.drop(columns=annotation_cols, errors='ignore')
 
     df['idx'] = df['image'].apply(parse_idx_from_image_name)
     df = df[df['idx'].notna()].copy()
@@ -96,11 +104,21 @@ def main():
     df.drop(columns=['filepath', 'gen_text'], inplace=True)
 
     # Merge parsed annotations onto the geospatial points table.
+    # Existing annotation values in points_df are kept unless overridden by df.
     merged_df = gpd.GeoDataFrame(pd.merge(points_df, df, on='idx', how='left'), geometry='geometry', crs=points_df.crs)
-    ensure_output_dir_for_file(cfg['paths']['corrected_all_filepath'])
-    merged_df.to_file(index=False, driver='GPKG', filename=cfg['paths']['corrected_all_filepath'])
+    for col in annotation_cols:
+        col_x, col_y = f"{col}_x", f"{col}_y"
+        if col_x in merged_df.columns and col_y in merged_df.columns:
+            merged_df[col] = merged_df[col_y].where(merged_df[col_y].notna(), merged_df[col_x])
+            merged_df.drop(columns=[col_x, col_y], inplace=True)
+    # Write to a NEW path, never back onto corrected_all_filepath: that was a
+    # self-loop (read and overwrite the same file) that destroyed the
+    # distinction between annotated and unannotated data on every re-run.
+    ensure_output_dir_for_file(cfg['paths']['annotated_all_filepath'])
+    merged_df.to_file(index=False, driver='GPKG', filename=cfg['paths']['annotated_all_filepath'])
 
 if __name__ == "__main__":
+    configure_logging()
     main()  
 
 

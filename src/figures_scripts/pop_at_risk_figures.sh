@@ -3,45 +3,26 @@
 #SBATCH --time=24:00:00
 #SBATCH --mem=8gb
 #SBATCH --cpus-per-task=8
+#SBATCH --output=logs/pop_at_risk_figures_%j.out
+#SBATCH --error=logs/pop_at_risk_figures_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "pop_at_risk_figures"
+enable_err_trap
+
+parse_overrides "$@"
+
+build_override_args
+
 PYTHON_SCRIPT="src.figures_scripts.pop_at_risk_figures"
 
-mkdir -p "${LOG_DIR}"
-
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/pop_at_risk_figures.log"
-
-#
-# Usage:
-#   ./pop_at_risk_figures.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level         - Processing level (default: from config.yaml arguments.default_level)
-#   version       - Data version (default: from config.yaml arguments.default_version)
-#   buffer        - Buffer distance in metres (default: from config.yaml params.buffer)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func   - Distance mode: mult | add | "" (empty = default multiplicative)
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
-}
-
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
+ensure_src_importable
 
 log "Running pop_at_risk_figures"
-${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_at_risk_figures.log"
+run_stage "${PYTHON_SCRIPT}" ${PYTHON_CMD} -m "${PYTHON_SCRIPT}" "${OVERRIDE_ARGS[@]}"
 
 log "Completed pop_at_risk_figures"

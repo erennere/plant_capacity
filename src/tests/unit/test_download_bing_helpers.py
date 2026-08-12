@@ -36,9 +36,9 @@ def test_split_grids_for_instance_is_deterministic_and_validates():
 
     assert split_a == split_b
     with pytest.raises(ValueError):
-        dba.split_grids_for_instance(grids, instance_id=0, num_instances=0)
+        dba.split_grids_for_instance(grids, instance_id=0, num_instances=0, split_seed=1)
     with pytest.raises(ValueError):
-        dba.split_grids_for_instance(grids, instance_id=5, num_instances=4)
+        dba.split_grids_for_instance(grids, instance_id=5, num_instances=4, split_seed=1)
 
 
 def test_draw_annotations_and_georef_write(monkeypatch, tmp_path):

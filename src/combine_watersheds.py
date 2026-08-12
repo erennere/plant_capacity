@@ -5,6 +5,7 @@ geospatial layer from each archive, concatenates the results, and writes a
 combined watershed dataset for the configured level.
 """
 
+import argparse
 import os
 import zipfile
 import tempfile
@@ -12,11 +13,11 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 try:
-    from .starter import load_config, parse_config_overrides
-    from .create_voronoi import ensure_output_dir_for_file
+    from .starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from .utils import configure_logging, ensure_output_dir_for_file
 except ImportError:  # Support running as a top-level script
-    from starter import load_config, parse_config_overrides
-    from create_voronoi import ensure_output_dir_for_file
+    from starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from utils import configure_logging, ensure_output_dir_for_file
 
 def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg"):
     """Extract readable geospatial files from zip archives and merge them."""
@@ -27,6 +28,7 @@ def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg
     output_path.mkdir(parents=True, exist_ok=True)
 
     merged_frames = []
+    zips_without_layer = []
 
     for zip_file in zip_dir.glob("*.zip"):
         print(f"Processing {zip_file.name}")
@@ -34,12 +36,10 @@ def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
 
-            try:
-                with zipfile.ZipFile(zip_file, 'r') as z:
-                    z.extractall(tmpdir)
-            except zipfile.BadZipFile:
-                print(f"Skipping bad zip file: {zip_file}")
-                continue
+            # A corrupt archive is a hard error: silently skipping it produced a
+            # merged layer that was quietly missing a whole watershed level.
+            with zipfile.ZipFile(zip_file, 'r') as z:
+                z.extractall(tmpdir)
 
             # Walk through extracted contents to find geographic files
             for root, dirs, files in os.walk(tmpdir):
@@ -58,42 +58,63 @@ def extract_and_merge_geodata(zip_dir, output_path, output_filename="merged.gpkg
                 if added_from_zip:
                     break
 
-    if merged_frames:
-        merged_gdf = gpd.GeoDataFrame(
-            pd.concat(merged_frames, ignore_index=True),
-            geometry="geometry",
-            crs=merged_frames[0].crs,
+        if not added_from_zip:
+            zips_without_layer.append(zip_file.name)
+
+    if zips_without_layer:
+        raise RuntimeError(
+            f"No readable geospatial layer found in {len(zips_without_layer)} archive(s) "
+            f"under {zip_dir}: {', '.join(sorted(zips_without_layer))}"
         )
-        out_file = output_path / output_filename
-        ensure_output_dir_for_file(out_file)
-        merged_gdf.to_file(os.path.abspath(out_file), driver="GPKG")
-        print(f"\n✅ Merged GeoDataFrame written to {out_file}")
-    else:
-        print("\n⚠️ No valid geospatial files found.")
+    if not merged_frames:
+        raise RuntimeError(f"No zip archives to merge under {zip_dir}")
+
+    merged_gdf = gpd.GeoDataFrame(
+        pd.concat(merged_frames, ignore_index=True),
+        geometry="geometry",
+        crs=merged_frames[0].crs,
+    )
+    out_file = output_path / output_filename
+    ensure_output_dir_for_file(out_file)
+    merged_gdf.to_file(os.path.abspath(out_file), driver="GPKG")
+    print(f"\n✅ Merged GeoDataFrame written to {out_file}")
+
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(
+        description="Merge watershed zip archives into one GeoPackage per level."
+    )
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
 
 def main():
     """Load config overrides and build the configured combined watershed layer."""
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    overrides = parse_config_overrides(start_index=1)
-    cfg = load_config(script_name="combine_watersheds", **overrides)
-    levels_root = os.path.dirname(cfg["paths"]["watersheds_zip_dir"])
-    if not os.path.isdir(levels_root):
-        raise FileNotFoundError(f"Watershed levels root not found: {levels_root}")
+    args = parse_args()
+    overrides = parse_config_overrides(args=args)
 
-    levels = [k for k in os.listdir(levels_root)
-              if os.path.isdir(os.path.join(levels_root, k))]
+    if overrides.get("level") is not None:
+        # An explicit --level must be honored, not discarded in favor of
+        # discovering every lvl* directory - see combine_watersheds F1.
+        levels = [str(overrides["level"])]
+    else:
+        cfg = load_config(script_name="combine_watersheds", **overrides)
+        levels_root = os.path.dirname(cfg["paths"]["watersheds_zip_dir"])
+        if not os.path.isdir(levels_root):
+            raise FileNotFoundError(f"Watershed levels root not found: {levels_root}")
+        levels = [
+            k.replace('lvl', '') for k in os.listdir(levels_root)
+            if k.startswith('lvl') and os.path.isdir(os.path.join(levels_root, k))
+        ]
+
     for level in levels:
-        if not level.startswith('lvl'):
-            continue
-        level = level.replace('lvl', '')
-        level_overrides = {
-            "level": level,
-            "version": overrides["version"],
-            "buffer": overrides["buffer"],
-            "weight_method": overrides["weight_method"],
-            "weight_func": overrides["weight_func"],
-        }
-        cfg = load_config(script_name="combine_watersheds", **level_overrides)
+        # Reuse the parsed overrides wholesale so no field can be dropped here -
+        # the hand-rolled dict this replaced silently discarded dynamic_buffering
+        # and dynamic_buffer_k.
+        cfg = load_config(
+            script_name="combine_watersheds",
+            **{**overrides, "level": level},
+        )
         extract_and_merge_geodata(
             cfg["paths"]["watersheds_zip_dir"],
             os.path.dirname(cfg['paths']['watershed']),
@@ -101,5 +122,6 @@ def main():
         )
 
 if __name__ == '__main__':
+    configure_logging()
     main()
 

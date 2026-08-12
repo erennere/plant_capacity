@@ -6,7 +6,7 @@ merges outputs into a final GeoPackage.
 """
 
 import os
-import sys
+import argparse
 import logging
 import traceback
 import numpy as np
@@ -17,14 +17,21 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from shapely.geometry import Polygon
 try:
-    from ..starter import get_runtime_params, load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, get_runtime_params, load_config, parse_config_overrides
+    from ..utils import configure_logging, ensure_output_dir_for_file
+    from ..geo_utils import batch_estimate_utm_epsg
 except ImportError:
-    from src.starter import get_runtime_params, load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, get_runtime_params, load_config, parse_config_overrides
+    from src.utils import configure_logging, ensure_output_dir_for_file
+    from src.geo_utils import batch_estimate_utm_epsg
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+def impact_polygons_output_path(base_path, radius):
+    """Canonical path of one radius's impact-polygon GeoPackage."""
+    return base_path.replace(".gpkg", f"_{int(float(radius))}.gpkg")
+
 
 # --- Global Placeholders (Populated by initializer in workers) ---
 next_dict = {}
@@ -125,18 +132,6 @@ def init_worker(shared_next, shared_geom, shared_lat, shared_level, shared_dis):
     level_dict = shared_level
     discharge_dict = shared_dis
 
-def batch_estimate_utm_epsg(gdf):
-    """Estimate UTM EPSG and latitude arrays from geometry centroids."""
-    centroids = gdf.geometry.centroid
-    lons, lats = centroids.x, centroids.y
-    zones = (np.floor((lons + 180) / 6) + 1).astype(int)
-    epsg_codes = np.where(lats >= 0, 32600 + zones, 32700 + zones)
-    
-    invalid_mask = (lats > 84) | (lats < -80) | (lons < -180) | (lons > 180)
-    if invalid_mask.any():
-        epsg_codes[invalid_mask] = 3857
-    return epsg_codes, lats
-
 def calculate_load_ratio(
     pop,
     dis_av_cms,
@@ -175,7 +170,7 @@ def calculate_load_ratio(
     Discharge is converted from cubic meters per second to liters per second
     before the concentration ratio is computed.
     """
-    # convert g/day â†’ mg/s
+    # convert g/day → mg/s
     org_per_pop = org_per_pop / 86.4
 
     # handle Series input (vectorized mode)
@@ -186,7 +181,7 @@ def calculate_load_ratio(
             dis = dis.where(dis != 0, least_discharge_cms)
         else:
             dis[(dis == 0) | np.isnan(dis)] = least_discharge_cms
-        dis *= 1000  # mÂ³/s â†’ l/s
+        dis *= 1000  # m³/s → l/s
         if load is None:
             load = pop * org_per_pop / dis
         return load / c_limit
@@ -195,7 +190,7 @@ def calculate_load_ratio(
     else:
         if dis_av_cms is None or dis_av_cms == 0:
             dis_av_cms = least_discharge_cms
-        dis_av_cms *= 1000  # mÂ³/s â†’ l/s
+        dis_av_cms *= 1000  # m³/s → l/s
         if load is None:
             load = pop * org_per_pop / dis_av_cms if pop is not None else 0
         return load / c_limit
@@ -213,7 +208,7 @@ def calculate_kt(lat, base_k=0.23, theta=1.047):
     temp = 28 * np.cos(np.radians(abs(lat)))
     return base_k * (theta**(temp - 20))
 
-def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0, c_limit=5.0, base_k=0.23, theta=1.047, impact_radii=[1000, 2000]):
+def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0, c_limit=5.0, base_k=0.23, theta=1.047, impact_radii=[1000, 2000], next_state_dict=None):
     """Generate plume polygons for one river segment and return the exit load.
 
     Parameters
@@ -234,6 +229,9 @@ def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0,
         Temperature adjustment factor.
     impact_radii : list[float], default=[1000, 2000]
         Plume half-widths to materialize around the segment.
+    next_state_dict : dict | None, default=None
+        Optional segment-state dictionary for this basin task. When omitted,
+        the global topology dictionary is used.
 
     Returns
     -------
@@ -241,11 +239,13 @@ def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0,
         Tuple ``(polygons, exit_load)`` where ``polygons`` is a list of plume
         polygons or ``None`` when no plume survives the concentration threshold.
     """
-    if rid not in next_dict or rid not in geom_dict or rid not in discharge_dict:
+    state_dict = next_dict if next_state_dict is None else next_state_dict
+
+    if rid not in state_dict or rid not in geom_dict or rid not in discharge_dict:
         return None, 0.0
     
     if start_load_ratio is None:
-        _, start_load_ratio = next_dict[rid]
+        _, start_load_ratio = state_dict[rid]
     else:
         start_load_ratio = float(start_load_ratio)
 
@@ -261,7 +261,8 @@ def generate_single_segment_plume(rid, lat, start_load_ratio=None, step_m=100.0,
     
     times = distances / velocity_m_day
     load_ratios = start_load_ratio * np.exp(-kt * times)
-    mask = load_ratios / c_limit >= 1.0
+    # load_ratios is already normalized by c_limit upstream, so threshold at 1.0 directly.
+    mask = load_ratios >= 1.0
 
     # 2. Handle Truncation if plume dies mid-segment
     if not np.all(mask):
@@ -384,7 +385,8 @@ def create_impact_polygons(pop_chunk, main_riv, nxt_dis_col, model_params=None):
                     c_limit=c_limit,
                     base_k=base_k,
                     theta=theta,
-                    impact_radii=impact_radii
+                    impact_radii=impact_radii,
+                    next_state_dict=local_next_dict,
                 )
 
                 # Hand over residual load to immediate downstream segment within this basin.
@@ -554,17 +556,50 @@ def main():
 
     CLI usage::
 
-        python -m ...impact_polygons_pop <max_workers> [level] [version]
-                                         [buffer] [weight_method] [weight_func]
+        python -m ...impact_polygons_pop --max-workers 64 [--level ... --version ...]
 
     ``weight_func`` accepts ``mult``, ``add``, or ``""`` for default.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=2)
+    parser = argparse.ArgumentParser(
+        description="Generate downstream impact polygons from non-served population data."
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=64,
+        help="Maximum worker processes for plume generation and dissolve",
+    )
+    parser.add_argument(
+        "--radius",
+        default=None,
+        help=(
+            "Optional impact radius (must match one of "
+            "impact_polygons_pop_params.impact_radii in config.yaml); process "
+            "only this one radius instead of every configured radius. Unset "
+            "processes the full configured list - unchanged from the default."
+        ),
+    )
+    add_standard_override_arguments(parser)
+    args = parser.parse_args()
+
+    overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="impact_polygons_pop", **overrides)
     model_params = get_runtime_params(cfg)
+
+    if args.radius is not None:
+        requested_radius = float(args.radius)
+        configured_radii = model_params['impact_radii']
+        if not any(requested_radius == radius for radius in configured_radii):
+            raise ValueError(
+                f"Unknown --radius '{args.radius}'; expected one of "
+                f"{sorted(int(radius) for radius in configured_radii)} "
+                "(impact_polygons_pop_params.impact_radii)."
+            )
+        model_params['impact_radii'] = [requested_radius]
+        logger.info("Restricting to single --radius override: %s", requested_radius)
+
     logger.info("Using runtime model params: %s", model_params)
-    
+
     # 1. Load Data
     logger.info("Loading datasets")
     
@@ -609,7 +644,7 @@ def main():
     create_dicts(river_gdf, 'NEXT_DOWN', 'HYRIV_ID', 'MAIN_RIV', 'DIS_AV_CMS', 'env_load')
     
     # 4. Process
-    max_workers = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 64
+    max_workers = int(args.max_workers)
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
     results = orchestrate_logic(
@@ -622,7 +657,7 @@ def main():
     
     if results is not None:
         for radius, gdf in results.items():
-            output_path = cfg['paths']['impact_pop_polygons_outpath'].replace(".gpkg", f"_{str(int(radius))}.gpkg")
+            output_path = impact_polygons_output_path(cfg['paths']['impact_pop_polygons_outpath'], radius)
             ensure_output_dir_for_file(output_path)
             gdf.to_file(output_path, driver='GPKG')
             logger.info("Process complete. Wrote %s geometries for radius %s", len(gdf), radius)
@@ -630,4 +665,5 @@ def main():
         logger.warning("No output generated")
 
 if __name__ == "__main__":
+    configure_logging()
     main()

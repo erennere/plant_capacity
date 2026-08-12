@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import runpy
+import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -148,6 +149,47 @@ def test_generate_single_segment_plume_ignores_polygon_creation_errors(monkeypat
 
     assert polygons is None
     assert exit_load == 0.0
+
+
+def test_generate_single_segment_plume_uses_normalized_threshold_without_second_c_limit_division():
+    ipp.next_dict = {1: (0, 4.0)}
+    ipp.geom_dict = {1: LineString([(0.0, 0.0), (200.0, 0.0)])}
+    ipp.discharge_dict = {1: 1.0}
+
+    polygons, exit_load = ipp.generate_single_segment_plume(
+        1,
+        lat=5.0,
+        c_limit=5.0,
+        step_m=100.0,
+        impact_radii=[1000.0],
+    )
+
+    assert polygons is not None
+    assert len(polygons) == 1
+    assert polygons[0].is_valid
+    assert exit_load >= 0.0
+
+
+def test_generate_single_segment_plume_uses_provided_local_next_state_dict(monkeypatch):
+    ipp.next_dict = {}
+    ipp.geom_dict = {1: LineString([(0.0, 0.0), (200.0, 0.0)])}
+    ipp.discharge_dict = {1: 1.0}
+
+    local_next_dict = {1: (0, 4.0)}
+    polygons, exit_load = ipp.generate_single_segment_plume(
+        1,
+        lat=5.0,
+        start_load_ratio=None,
+        c_limit=5.0,
+        step_m=100.0,
+        impact_radii=[1000.0],
+        next_state_dict=local_next_dict,
+    )
+
+    assert polygons is not None
+    assert len(polygons) == 1
+    assert polygons[0].is_valid
+    assert exit_load >= 0.0
 
 
 def test_create_impact_polygons_returns_empty_for_empty_chunk_and_missing_levels():
@@ -397,7 +439,7 @@ def test_main_rejects_non_positive_workers(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(ipp.os, "chdir", lambda path: None)
-    monkeypatch.setattr(ipp, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(ipp, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(ipp, "load_config", lambda **kwargs: cfg)
     monkeypatch.setattr(
         ipp.gpd,
@@ -406,10 +448,111 @@ def test_main_rejects_non_positive_workers(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(ipp, "batch_estimate_utm_epsg", lambda gdf: (np.array([32632]), np.array([50.0])))
     monkeypatch.setattr(ipp, "create_dicts", lambda *args, **kwargs: None)
-    monkeypatch.setattr(ipp.sys, "argv", ["prog", "0"])
+    monkeypatch.setattr(sys, "argv", ["prog", "--max-workers", "0"])
 
     with pytest.raises(ValueError, match="max_workers"):
         ipp.main()
+
+
+def _radius_override_main(monkeypatch, tmp_path, argv):
+    """Run ipp.main() with the plumbing stubbed, returning the radii it used.
+
+    Shared by the --radius cases below: everything downstream of the override
+    is faked out so the assertion is purely about which radii reach
+    orchestrate_logic and which files get written.
+    """
+    cfg = {
+        "paths": {
+            "non_served_nxt_river_outpath": str(tmp_path / "non_served.gpkg"),
+            "rivershed_output_path": str(tmp_path / "rivers.gpkg"),
+            "impact_pop_polygons_outpath": str(tmp_path / "impact.gpkg"),
+        },
+        "impact_polygons_pop_params": _runtime_params(),
+    }
+    pop_gdf = gpd.GeoDataFrame(
+        {
+            "NXT_DIS": [1],
+            "pop_sum": [10],
+            "country": ["DE"],
+            "utm": [32632],
+            "geometry": [Point(10, 50)],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    river_gdf = gpd.GeoDataFrame(
+        {
+            "HYRIV_ID": [1],
+            "NEXT_DOWN": [0],
+            "MAIN_RIV": [1],
+            "DIS_AV_CMS": [1.0],
+            "geometry": [LineString([(10, 50), (10.1, 50.1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    seen = {}
+    written = []
+
+    def fake_orchestrate(pop, id_col, main_col, max_workers=1, model_params=None):
+        seen["impact_radii"] = list(model_params["impact_radii"])
+        return {
+            radius: gpd.GeoDataFrame(
+                {"geometry": [box(0, 0, 1, 1)]}, geometry="geometry", crs="EPSG:4326"
+            )
+            for radius in model_params["impact_radii"]
+        }
+
+    monkeypatch.setattr(ipp.os, "chdir", lambda path: None)
+    monkeypatch.setattr(ipp, "parse_config_overrides", lambda *a, **k: {})
+    monkeypatch.setattr(ipp, "load_config", lambda **kwargs: cfg)
+    monkeypatch.setattr(
+        ipp.gpd,
+        "read_file",
+        lambda path, columns=None, **kwargs: pop_gdf.copy() if str(path).endswith("non_served.gpkg") else river_gdf.copy(),
+    )
+    monkeypatch.setattr(ipp, "batch_estimate_utm_epsg", lambda gdf: (np.array([32632]), np.array([50.0])))
+    monkeypatch.setattr(ipp, "create_dicts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ipp, "orchestrate_logic", fake_orchestrate)
+    monkeypatch.setattr(ipp, "ensure_output_dir_for_file", lambda path: None)
+    monkeypatch.setattr(
+        gpd.GeoDataFrame, "to_file", lambda self, path, driver="GPKG": written.append(str(path))
+    )
+    monkeypatch.setattr(sys, "argv", argv)
+
+    ipp.main()
+    return cfg, seen, written
+
+
+def test_main_without_radius_processes_every_configured_radius(monkeypatch, tmp_path):
+    """Unset --radius leaves the configured radii list untouched."""
+    cfg, seen, written = _radius_override_main(monkeypatch, tmp_path, ["prog"])
+
+    assert seen["impact_radii"] == [1000.0, 2000.0]
+    assert sorted(written) == sorted(
+        ipp.impact_polygons_output_path(cfg["paths"]["impact_pop_polygons_outpath"], r)
+        for r in (1000.0, 2000.0)
+    )
+
+
+def test_main_with_radius_processes_only_that_radius(monkeypatch, tmp_path):
+    """--radius restricts the run to one radius and one output file."""
+    cfg, seen, written = _radius_override_main(
+        monkeypatch, tmp_path, ["prog", "--radius", "2000"]
+    )
+
+    assert seen["impact_radii"] == [2000.0]
+    assert written == [
+        ipp.impact_polygons_output_path(cfg["paths"]["impact_pop_polygons_outpath"], 2000.0)
+    ]
+    # The helper is what main() uses, so this pins the actual on-disk name too.
+    assert written[0].endswith("impact_2000.gpkg")
+
+
+def test_main_rejects_radius_not_in_configured_list(monkeypatch, tmp_path):
+    """An unconfigured --radius fails loudly instead of silently doing nothing."""
+    with pytest.raises(ValueError, match="Unknown --radius"):
+        _radius_override_main(monkeypatch, tmp_path, ["prog", "--radius", "1234"])
 
 
 def test_impact_polygons_script_entrypoint_runs_main_guard(monkeypatch):
@@ -417,7 +560,7 @@ def test_impact_polygons_script_entrypoint_runs_main_guard(monkeypatch):
 
     module_path = Path(__file__).resolve().parents[3] / "src" / "pop_at_risk_river_calculations" / "impact_polygons_pop.py"
 
-    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(starter_mod, "load_config", lambda **kwargs: {"paths": {}, "impact_polygons_pop_params": _runtime_params()})
 
     with pytest.raises(KeyError, match="non_served_nxt_river_outpath"):

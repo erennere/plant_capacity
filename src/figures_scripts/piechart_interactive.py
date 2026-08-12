@@ -4,6 +4,7 @@ The map combines a choropleth, Voronoi polygon tooltips, and country-level pie
 markers to provide a lightweight interactive overview for communication outputs.
 """
 
+import argparse
 import os
 import numpy as np
 import geopandas as gpd
@@ -13,88 +14,41 @@ from branca.element import Template, MacroElement
 import math
 
 try:
-    from ..starter import load_config, parse_config_overrides
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..utils import configure_logging, ensure_output_dir_for_file, industrial_category_mask, resolve_latest_zonal_sum_column
+    from ._shared import SUM_ONLY, ensure_population_percentage_column
+    from . import _shared
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
     from src.pipelines import create_pop_output_paths
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.utils import configure_logging, ensure_output_dir_for_file, industrial_category_mask, resolve_latest_zonal_sum_column
+    from src.figures_scripts._shared import SUM_ONLY, ensure_population_percentage_column
+    from src.figures_scripts import _shared
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
     """Aggregate per-facility metrics to country-level totals for mapping."""
-    gdf = gdf.copy()
-    agg_dict = {f"{agg_column}_sum": "sum"}
-    if is_pop:
-        gdf = gdf.dropna(subset=[country_column, agg_column])
-        aggregated = gdf.groupby(country_column)[agg_column].agg(**agg_dict).reset_index()
-    else:
-        if industrial_column is None: raise ValueError("industrial_column required")
-        gdf = gdf.dropna(subset=[country_column, agg_column, industrial_column])
-        grouped = gdf.groupby([country_column, industrial_column])[agg_column].agg(**agg_dict).reset_index()
-        ind = grouped[grouped[industrial_column] == True].drop(columns=[industrial_column]).reset_index(drop=True)
-        res = grouped[grouped[industrial_column] != True].drop(columns=[industrial_column]).reset_index(drop=True)
-        ind = ind.rename(columns={c: f"IND_{c}" for c in ind.columns if c != country_column})
-        res = res.rename(columns={c: f"RES_{c}" for c in res.columns if c != country_column})
-        aggregated = res.merge(ind, on=country_column, how="left")
-    return aggregated
+    return _shared.aggregate_by_country(
+        gdf, country_column, agg_column,
+        industrial_column=industrial_column, is_pop=is_pop, stats=SUM_ONLY,
+    )
+
 
 def calculate_size(value, min_value, max_value, min_size, max_size):
     """Map a numeric value to a marker size within a configured range."""
-    if value <= 0:
-        return min_size
-    if max_value <= min_value:
-        return min_size
-    return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
-
-
-def ensure_population_percentage_column(df, preferred_col="population_served_index", zonal_sum_col="2024_zonal_sum"):
-    """Ensure a population-served percentage column exists and return its name."""
-    if preferred_col in df.columns:
-        return preferred_col
-
-    # Common fallback: derive from absolute served/total population columns.
-    if {'population_served', 'population_total'}.issubset(df.columns):
-        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
-        num = pd.to_numeric(df['population_served'], errors='coerce')
-        df[preferred_col] = (num / denom).fillna(0)
-        return preferred_col
-
-    # Secondary fallback: use aggregated latest zonal sum as served estimate.
-    zonal_sum_sum_col = f"{zonal_sum_col}_sum"
-    if {zonal_sum_sum_col, 'population_total'}.issubset(df.columns):
-        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
-        num = pd.to_numeric(df[zonal_sum_sum_col], errors='coerce')
-        df[preferred_col] = (num / denom).fillna(0)
-        return preferred_col
-
-    raise KeyError(
-        "Could not derive population-served percentage. Expected one of: "
-        "'population_served_index', ('population_served' + 'population_total'), "
-        f"or ('{zonal_sum_sum_col}' + 'population_total')."
+    return _shared.calculate_size(
+        value, min_value, max_value, min_size, max_size,
+        scale='linear', degenerate='min', floor_nonpositive=True,
     )
 
 
 def resolve_zonal_sum_column(df, preferred):
     """Resolve preferred zonal-sum column with fallback to latest available year."""
-    if preferred in df.columns:
-        return preferred
-
-    candidate_cols = []
-    for col in df.columns:
-        if not col.endswith('_zonal_sum'):
-            continue
-        try:
-            year = int(col.split('_')[0])
-        except (ValueError, IndexError):
-            year = -1
-        candidate_cols.append((year, col))
-
-    if not candidate_cols:
-        raise KeyError("No '*_zonal_sum' column found in population layer.")
-
-    candidate_cols.sort(key=lambda x: x[0])
-    return candidate_cols[-1][1]
+    return resolve_latest_zonal_sum_column(
+        df,
+        preferred,
+        missing_message="No '*_zonal_sum' column found in population layer.",
+    )[1]
 
 def get_pie_svg(res_vals, ind_vals, size_px):
     """Return an inline SVG donut chart for one country marker.
@@ -125,10 +79,16 @@ def get_pie_svg(res_vals, ind_vals, size_px):
         <circle cx="50" cy="50" r="18" fill="white" />
     </svg>'''
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run piechart_interactive.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Assemble the interactive served-population and WWTP-type overview map."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="piechart_interactive", **overrides)
 
     # Path Setup
@@ -152,8 +112,17 @@ def main():
     
     # Clean population for Voronoi tooltips
     pop_gdf[agg_col] = pop_gdf[agg_col].fillna(0).round(0)
-    industrial_categories = {str(c) for c in cfg['industrial_category_numbers']}
-    pop_gdf[ind_col] = pop_gdf['category_number'].astype(str).isin(industrial_categories)
+    # Mixed-use counts as industrial here too, so this split matches the
+    # unconnected-industrial layer instead of disagreeing with it.
+    industrial_mask = industrial_category_mask(
+        pop_gdf, cfg['industrial_category_numbers'], cfg['mix_use_categories']
+    )
+    if industrial_mask is None:
+        raise KeyError(
+            "Column 'category_number' is required to split industrial from "
+            f"residential sites; columns present: {sorted(pop_gdf.columns)}"
+        )
+    pop_gdf[ind_col] = industrial_mask
 
     pop_df_no_geom = pop_gdf.drop('geometry', axis=1)
     agg_ds = []
@@ -221,14 +190,14 @@ def main():
         popup_html = f"""
         <div style="font-family: sans-serif; font-size: 11px; width: 220px;">
             <b style="font-size: 13px;">{row['country']}</b><br>
-            <b>Total WWTP Area:</b> {total_km2:,.2f} kmÂ²<br>
+            <b>Total WWTP Area:</b> {total_km2:,.2f} km&sup2;<br>
             <b>Pop (2024):</b> {row.get('population_total', 0):,.0f}<br><hr style="margin:4px 0;">
             <b>Pop Served:</b> {row.get('population_served', 0):,.0f}<br>
             <b>Pop Served [%]:</b> {row.get(pop_col, 0):,.1f}%<br><hr style="margin:4px 0;">
-            <span style="color:#3182bd;">â—</span> Res Circular: {r1:,.2f} kmÂ²<br>
-            <span style="color:#9ecae1;">â– </span> Res Rect: {r2:,.2f} kmÂ²<br>
-            <span style="color:#e6550d;">â—</span> Ind Circular: {i1:,.2f} kmÂ²<br>
-            <span style="color:#fdae6b;">â– </span> Ind Rect: {i2:,.2f} kmÂ²
+            <span style="color:#3182bd;">&#9679;</span> Res Circular: {r1:,.2f} km&sup2;<br>
+            <span style="color:#9ecae1;">&#9632;</span> Res Rect: {r2:,.2f} km&sup2;<br>
+            <span style="color:#e6550d;">&#9679;</span> Ind Circular: {i1:,.2f} km&sup2;<br>
+            <span style="color:#fdae6b;">&#9632;</span> Ind Rect: {i2:,.2f} km&sup2;
         </div>
         """
         folium.Marker(
@@ -299,9 +268,9 @@ def main():
             <div style="position: absolute; bottom: 0; width: 60px; height: 60px; border: 1.5px solid #444; border-radius: 50%;"></div>
             <div style="position: absolute; bottom: 0; left: 10px; width: 40px; height: 40px; border: 1.5px solid #444; border-radius: 50%;"></div>
             <div style="position: absolute; bottom: 0; left: 20px; width: 20px; height: 20px; border: 1.5px solid #444; border-radius: 50%;"></div>
-            <div style="position: absolute; left: 75px; bottom: 48px; font-size: 11px;">â€” {leg_high:,.0f} kmÂ²</div>
-            <div style="position: absolute; left: 75px; bottom: 28px; font-size: 11px;">â€” {leg_mid:,.1f} kmÂ²</div>
-            <div style="position: absolute; left: 75px; bottom: 8px; font-size: 11px;">â€” {leg_low:,.1f} kmÂ²</div>
+            <div style="position: absolute; left: 75px; bottom: 48px; font-size: 11px;">&mdash; {leg_high:,.0f} km&sup2;</div>
+            <div style="position: absolute; left: 75px; bottom: 28px; font-size: 11px;">&mdash; {leg_mid:,.1f} km&sup2;</div>
+            <div style="position: absolute; left: 75px; bottom: 8px; font-size: 11px;">&mdash; {leg_low:,.1f} km&sup2;</div>
         </div>
     </div>
     {{% endmacro %}}
@@ -313,4 +282,6 @@ def main():
     ensure_output_dir_for_file(cfg['paths']['interactive_piechart_html_filepath'])
     m.save(cfg['paths']['interactive_piechart_html_filepath'])
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    configure_logging()
+    main()

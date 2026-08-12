@@ -4,53 +4,30 @@
 #SBATCH --mem=16gb
 #SBATCH --cpus-per-task=4
 #SBATCH --array=0
+#SBATCH --output=logs/comparison_%j.out
+#SBATCH --error=logs/comparison_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-# Configuration
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "pop_validation_comparison"
+enable_err_trap
 
-mkdir -p "${LOG_DIR}"
+parse_overrides "$@"
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/pop_validation_comparison.log"
+build_override_args
 
-
-#
-# Usage:
-#   ./comparison.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level        - Processing level (default: from config.yaml arguments.default_level)
-#   version      - Data version (default: from config.yaml arguments.default_version)
-#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
-## Parse optional config override arguments
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/pop_validation_comparison.log"
-}
-
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/pop_validation_comparison.log"
+ensure_src_importable
 
 log "Running verification_script"
-${PYTHON_CMD} -m src.pop_validation_scripts.verification_script "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_validation_comparison.log"
+run_stage "verification_script" ${PYTHON_CMD} -m src.pop_validation_scripts.verification_script "${OVERRIDE_ARGS[@]}"
 
 log "Running hw_comparison"
-${PYTHON_CMD} -m src.pop_validation_scripts.hw_comparison "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_validation_comparison.log"
+run_stage "hw_comparison" ${PYTHON_CMD} -m src.pop_validation_scripts.hw_comparison "${OVERRIDE_ARGS[@]}"
 
 log "Running eu_comparison"
-${PYTHON_CMD} -m src.pop_validation_scripts.eu_comparison "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/pop_validation_comparison.log"
+run_stage "eu_comparison" ${PYTHON_CMD} -m src.pop_validation_scripts.eu_comparison "${OVERRIDE_ARGS[@]}"
 
 log "All pop validation comparisons completed"

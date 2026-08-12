@@ -12,6 +12,7 @@ Files are shown as aliases (F001, F002, ...). The alias mapping is written to
 CSV outside the plots so charts remain readable when many files are compared.
 """
 
+import argparse
 import logging
 import os
 import re
@@ -25,19 +26,20 @@ import pandas as pd
 import seaborn as sns
 
 try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..utils import configure_logging, default_cpu_workers, ensure_output_dir_for_file, resolve_latest_zonal_sum_column
+    from ..geo_utils import load_eu_reference_layer
     from ..pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf
     from ..data_merge.merge_seg_results import assign_to_nearest
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.utils import configure_logging, default_cpu_workers, ensure_output_dir_for_file, resolve_latest_zonal_sum_column
+    from src.geo_utils import load_eu_reference_layer
     from src.pop_validation_scripts.hw_comparison import ndvi, multiples, replace_inf
     from src.data_merge.merge_seg_results import assign_to_nearest
 
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 _REF_GDF = None
@@ -47,9 +49,12 @@ _THRESHOLD = None
 def parse_pop_output_path(filepath):
     """Extract sensitivity parameters encoded in a pop-output filepath."""
     normalized = str(filepath).replace("\\", "/")
+    # Buffer token supports both static integer (e.g., bf2500) and
+    # dynamic-k form (e.g., bfk0_75 or bfk0.75).
+    buffer_token_pattern = r"(?:\d+|k\d+(?:[._]\d+)*)"
     path_pattern = (
         r"/pop_voronoi_layers/v(?P<version>[^/]+)/lvl(?P<level>\d+)/"
-        r"bf(?P<buffer>\d+)/(?P<weight_type>[^/]+)/(?P<filename>[^/]+)$"
+        rf"bf(?P<buffer>{buffer_token_pattern})(?:/(?P<weight_type>[^/]+))?/(?P<filename>[^/]+)$"
     )
     path_match = re.search(path_pattern, normalized)
     if not path_match:
@@ -58,11 +63,15 @@ def parse_pop_output_path(filepath):
     filename = path_match.group("filename")
     file_pattern = (
         r"^(?:pop_added_)?appr_(?P<approach>[012])(?P<only_round>_only_round)?"
-        r"_v(?P<file_version>[^_]+)_lvl(?P<file_level>\d+)_bf(?P<file_buffer>\d+)"
+        rf"_v(?P<file_version>[^_]+)_lvl(?P<file_level>\d+)_bf(?P<file_buffer>{buffer_token_pattern})"
         r"(?P<weight_func>.*?)\.gpkg$"
     )
     file_match = re.match(file_pattern, filename)
     if not file_match:
+        return None
+
+    # Guard against malformed paths where directory and filename disagree.
+    if file_match.group("file_buffer") != path_match.group("buffer"):
         return None
 
     return {
@@ -70,8 +79,8 @@ def parse_pop_output_path(filepath):
         "filename": filename,
         "version": path_match.group("version"),
         "level": int(path_match.group("level")),
-        "buffer": int(path_match.group("buffer")),
-        "weight_type": path_match.group("weight_type"),
+        "buffer": path_match.group("buffer"),
+        "weight_type": path_match.group("weight_type") or "",
         "approach": file_match.group("approach"),
         "only_round": bool(file_match.group("only_round")),
         "weight_func": file_match.group("weight_func"),
@@ -94,6 +103,7 @@ def list_pop_output_files(data_dir):
         return []
 
     records = []
+    parse_failures = []
     seen_empty_wf = set()
     for filepath in sorted(root.rglob("*.gpkg")):
         if Path(filepath).name.startswith('temp_'):
@@ -101,6 +111,7 @@ def list_pop_output_files(data_dir):
 
         params = parse_pop_output_path(filepath)
         if params is None:
+            parse_failures.append(str(filepath).replace("\\", "/"))
             continue
 
         if params["weight_func"] == "":
@@ -115,6 +126,15 @@ def list_pop_output_files(data_dir):
             seen_empty_wf.add(key)
 
         records.append(params)
+
+    if not records and parse_failures:
+        logger.warning(
+            "Found %d GPKG files under %s but none matched expected naming/path patterns. "
+            "Examples: %s",
+            len(parse_failures),
+            root,
+            "; ".join(parse_failures[:5]),
+        )
     return records
 
 
@@ -126,20 +146,17 @@ def make_aliases(records):
 
 
 def get_latest_year_column(gdf):
-    """Return (year, column_name) for the latest available *_zonal_sum column."""
-    year_cols = []
-    for col in gdf.columns:
-        if col.endswith("_zonal_sum"):
-            try:
-                year = int(col.split("_")[0])
-                if year != 2014:
-                    year_cols.append((year, col))
-            except ValueError:
-                continue
-    if not year_cols:
-        return None, None
-    latest_year, latest_col = max(year_cols, key=lambda pair: pair[0])
-    return latest_year, latest_col
+    """Return (year, column_name) for the latest available *_zonal_sum column.
+
+    2014 comes from a different WorldPop release than the yearly series, so it is
+    excluded here even though the figure scripts accept it.
+    """
+    return resolve_latest_zonal_sum_column(
+        gdf,
+        exclude_years=(2014,),
+        keep_unparseable=False,
+        required=False,
+    )
 
 
 def compute_sensitivity_metrics(df, prediction_col, reference_col):
@@ -222,13 +239,10 @@ def compute_sensitivity_metrics(df, prediction_col, reference_col):
     }
 
 
-def _init_summary_worker(eu_ref_filepath, eu_utm, factor, threshold):
+def _init_summary_worker(eu_ref_filepath, factor, threshold):
     """Initialize process-local references for per-file metric computation."""
     global _REF_GDF, _THRESHOLD
-    ref_gdf = gpd.read_file(eu_ref_filepath)
-    ref_gdf = ref_gdf.to_crs(eu_utm)
-    ref_gdf["POP_SERVED_EU"] = factor * ref_gdf["uwwCapacity"]
-    _REF_GDF = ref_gdf
+    _REF_GDF = load_eu_reference_layer(eu_ref_filepath, factor)
     _THRESHOLD = threshold
 
 
@@ -271,18 +285,18 @@ def _process_single_record(record):
     return rows
 
 
-def build_summary_table(records, eu_ref_filepath, eu_utm, threshold, factor=1, max_workers=None):
+def build_summary_table(records, eu_ref_filepath, threshold, factor, max_workers=None):
     """Compute one-row-per-file-per-source summary using parallel file processing."""
     rows = []
     total = len(records)
 
     if max_workers is None:
-        max_workers = max(1, os.cpu_count() or 1)
+        max_workers = default_cpu_workers()
 
     with ProcessPoolExecutor(
         max_workers=max_workers,
         initializer=_init_summary_worker,
-        initargs=(eu_ref_filepath, eu_utm, factor, threshold),
+        initargs=(eu_ref_filepath, factor, threshold),
     ) as executor:
         futures = {executor.submit(_process_single_record, record): record for record in records}
         for i, future in enumerate(as_completed(futures), start=1):
@@ -321,10 +335,31 @@ def _safe_zscore(series):
     return (s - mean) / std
 
 
-def build_alias_order(summary):
-    """Create a single alias ordering from the average HW/EU score."""
+def build_alias_order(summary, hw_weight, eu_weight=None):
+    """Create a single alias ordering from weighted HW/EU scores."""
+    if eu_weight is None:
+        eu_weight = 1 - hw_weight
+
+    if hw_weight < 0 or eu_weight < 0:
+        raise ValueError("hw_weight and eu_weight must be non-negative")
+
+    total_weight = hw_weight + eu_weight
+    if total_weight == 0:
+        raise ValueError("At least one of hw_weight or eu_weight must be > 0")
+
+    hw_w = hw_weight / total_weight
+    eu_w = eu_weight / total_weight
+
     score_pivot = summary.pivot_table(index="alias", columns="source", values="sensitivity_score", aggfunc="mean")
-    score_pivot["joint_score"] = score_pivot.mean(axis=1)
+    hw_scores = score_pivot["HW"] if "HW" in score_pivot.columns else pd.Series(np.nan, index=score_pivot.index)
+    eu_scores = score_pivot["EU"] if "EU" in score_pivot.columns else pd.Series(np.nan, index=score_pivot.index)
+
+    weighted_sum = hw_scores.fillna(0) * hw_w + eu_scores.fillna(0) * eu_w
+    available_weight = (~hw_scores.isna()).astype(float) * hw_w + (~eu_scores.isna()).astype(float) * eu_w
+
+    score_pivot["joint_score"] = weighted_sum / available_weight.replace(0, np.nan)
+    score_pivot["hw_weight_used"] = hw_w
+    score_pivot["eu_weight_used"] = eu_w
     score_pivot = score_pivot.sort_values("joint_score", ascending=True)
     ordered_aliases = score_pivot.index.tolist()
     return ordered_aliases, score_pivot.reset_index()
@@ -442,18 +477,27 @@ def plot_split_metric_profiles(summary, ordered_aliases, output_filepath):
     plt.close(fig)
 
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run compare_pop_sweep_hw_eu.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Run split HW/EU sensitivity analysis on all pop-output GPKGs."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="compare_pop_sweep_hw_eu", **overrides)
 
     data_dir = cfg["paths"]["data_dir"]
     threshold = cfg["threshold"]
-    eu_utm = cfg["eu_utm"]
-    factor = 1
+    factor = cfg["eu_reference_factor"]
     eu_ref_filepath = cfg["paths"]["eu_ref_filepath"]
     max_workers = cfg["max_workers"]
+    hw_weight = float(cfg["hw_weight"])
+
+    if hw_weight < 0 or hw_weight > 1:
+        raise ValueError(f"hw_weight must be within [0, 1], got {hw_weight}")
 
     out_dir = os.path.join(data_dir, "sensitivity", "hw_eu_pop_sweep")
     os.makedirs(out_dir, exist_ok=True)
@@ -472,9 +516,8 @@ def main():
     summary_df = build_summary_table(
         records,
         eu_ref_filepath,
-        eu_utm,
         threshold,
-        factor=factor,
+        factor,
         max_workers=max_workers,
     )
     if summary_df.empty:
@@ -485,7 +528,7 @@ def main():
     summary_df.to_csv(summary_csv, index=False)
     logger.info("Saved summary metrics: %s", summary_csv)
 
-    ordered_aliases, score_table = build_alias_order(summary_df)
+    ordered_aliases, score_table = build_alias_order(summary_df, hw_weight=hw_weight)
     rank_csv = os.path.join(out_dir, "alias_rankings.csv")
     score_table.to_csv(rank_csv, index=False)
     logger.info("Saved ranking table: %s", rank_csv)
@@ -510,4 +553,5 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_logging()
     main()

@@ -33,47 +33,19 @@ Organization:
     9. Configuration & Main Execution
 """
 
-class UnionFind:
-    """Efficient union-find data structure with path compression."""
-    def __init__(self, n):
-        self.parent = list(range(n))
-        self.rank = [0] * n
-    
-    def find(self, x):
-        """Find root with path compression."""
-        if self.parent[x] != x:
-            self.parent[x] = self.find(self.parent[x])
-        return self.parent[x]
-    
-    def union(self, x, y):
-        """Union two sets by rank."""
-        px, py = self.find(x), self.find(y)
-        if px == py:
-            return
-        # Union by rank - attach smaller tree under larger
-        if self.rank[px] < self.rank[py]:
-            px, py = py, px
-        self.parent[py] = px
-        if self.rank[px] == self.rank[py]:
-            self.rank[px] += 1
-            
-import os, re, logging, sys
-from pathlib import Path
+import argparse
+import os, logging, sys
 from typing import Any, cast
-from multiprocessing import Pool
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from collections import defaultdict
-from joblib import Parallel, delayed
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import networkx as nx
 from tqdm import tqdm 
-from pyproj import CRS, Transformer
 from rasterio.features import shapes
 
-from scipy.spatial.distance import pdist, squareform
 from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 from skimage.measure import find_contours
 import cv2
@@ -83,7 +55,35 @@ from shapely.ops import unary_union
 from shapely.geometry import shape
 import shapely.affinity
 import shapely
-import duckdb
+
+try:
+    from .geo_utils import (
+        UnionFind,
+        cluster_point_indices,
+        estimate_utm_epsg,
+        estimate_utm_epsg_for_geom,
+        estimate_utm_crs,
+        parse_diameters_to_round_area,
+        ensure_duckdb_spatial,
+        buffer_geometry,
+        safe_to_wkt,
+        nearest_neighbor_distances,
+    )
+    from .utils import configure_logging, default_cpu_workers, duckdb_connection, ensure_output_dir_for_file, quote_sql_identifier
+except ImportError:  # Support running/importing as a top-level module
+    from geo_utils import (
+        UnionFind,
+        cluster_point_indices,
+        estimate_utm_epsg,
+        estimate_utm_epsg_for_geom,
+        estimate_utm_crs,
+        parse_diameters_to_round_area,
+        ensure_duckdb_spatial,
+        buffer_geometry,
+        safe_to_wkt,
+        nearest_neighbor_distances,
+    )
+    from utils import configure_logging, default_cpu_workers, duckdb_connection, ensure_output_dir_for_file, quote_sql_identifier
 
 # Configure module-level logging
 _LOG_LEVEL_NAME = os.environ.get(
@@ -91,10 +91,6 @@ _LOG_LEVEL_NAME = os.environ.get(
     "INFO",
 ).upper()
 _LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
-logging.basicConfig(
-    level=_LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
@@ -121,13 +117,6 @@ def geometry_contains_points(geometry, points):
                 dtype=bool,
                 count=len(points),
             )
-
-
-def ensure_output_dir_for_file(filepath):
-    """Create the parent directory for an output file path if needed."""
-    parent = Path(filepath).parent
-    if str(parent) and str(parent) != ".":
-        parent.mkdir(parents=True, exist_ok=True)
 
 
 ################################################################################
@@ -181,11 +170,13 @@ def is_valid_geom(geom):
         if not geom.is_valid:
             logger.debug(f"Invalid geometry topology: {geom.geom_type}")
             return False
-        coords = list(geom.coords) if hasattr(geom, "coords") else []
-        for x, y in coords:
-            if not np.isfinite(x) or not np.isfinite(y):
-                logger.debug(f"Non-finite coordinates in {geom.geom_type}: x={x}, y={y}")
-                return False
+        # Only Point/LineString expose .coords, so the previous hasattr check
+        # skipped this validation entirely for the Polygon/MultiPolygon geometries
+        # this pipeline actually handles. get_coordinates covers every type.
+        coords = shapely.get_coordinates(geom)
+        if coords.size and not np.isfinite(coords).all():
+            logger.debug(f"Non-finite coordinates in {geom.geom_type}")
+            return False
         return True
     except Exception as e:
         logger.debug(f"Exception during geometry validation: {e}")
@@ -213,37 +204,6 @@ def drop_duplicates(df, col):
         df = pd.concat([uniques, nans], ignore_index=True)
     return df
 
-def buffer_geometry(geom):
-    """Apply a zero-buffer topology fix to polygon geometries.
-
-    Point and line geometries are returned unchanged.
-
-    Parameters
-    ----------
-    geom : shapely.geometry.base.BaseGeometry
-        Geometry to process.
-
-    Returns
-    -------
-    shapely.geometry.base.BaseGeometry
-        Original geometry with topology artefacts repaired for polygonal
-        types; other geometry types are returned as-is.
-    """
-    if isinstance(geom, Point):
-        return geom
-    elif isinstance(geom, (LineString, MultiLineString)):
-        return geom
-    elif isinstance(geom, (Polygon, MultiPolygon)):
-        try:
-            buffered = geom.buffer(0)
-            return buffered
-        except Exception as e:
-            logger.debug(f"Error buffering geometry: {e}")
-            return geom
-    else:
-        logger.debug(f"Unknown geometry type in buffer_geometry: {type(geom)}")
-        return geom
-    
 def create_centroid_points(geom):
     """Extract a representative point from a geometry.
 
@@ -284,52 +244,6 @@ def create_centroid_points(geom):
 # SECTION 3: SPATIAL CLUSTERING
 ################################################################################
 
-def cluster_point_indices(geoms, threshold):
-    """
-    Group point geometries into spatial clusters using K-D tree and Union-Find.
-    
-    Finds all points within 'threshold' distance of each other using
-    K-D tree spatial indexing and Union-Find for efficient clustering.
-    
-    Args:
-        geoms (array-like): Iterable of shapely Point geometries
-        threshold (float): Distance threshold for clustering (in geometry units)
-        
-    Returns:
-        list[set]: List of point index clusters, each cluster is a set of indices
-        
-    Logs:
-        DEBUG: Summary of clustering results (total points and clusters found)
-        
-    Notes:
-        OPTIMIZED: Uses Union-Find with path compression for O(n log n) complexity
-        vs O(nÂ²) worst case with BFS. More efficient for large point sets.
-
-        Expected input is an iterable of Point geometries. Callers are
-        responsible for pre-filtering non-point geometries before clustering.
-    """
-    coords = np.array([(pt.x, pt.y) for pt in geoms])
-    tree = cKDTree(coords)
-    neighbors = tree.query_ball_point(coords, threshold)
-    
-    # Use Union-Find to group connected points
-    uf = UnionFind(len(coords))
-    for i, neighbor_list in enumerate(neighbors):
-        for j in neighbor_list:
-            if i != j:
-                uf.union(i, j)
-    
-    # Build clusters from union-find groups
-    clusters_dict = defaultdict(set)
-    for i in range(len(coords)):
-        root = uf.find(i)
-        clusters_dict[root].add(i)
-    
-    clusters = list(clusters_dict.values())
-    logger.debug(f"Clustered {len(coords)} points into {len(clusters)} clusters (threshold={threshold}m)")
-    logger.debug(f"Cluster sizes: min={min(len(c) for c in clusters)}, max={max(len(c) for c in clusters)}, mean={np.mean([len(c) for c in clusters]):.1f}")
-    return clusters
-
 def cluster_points(df, threshold):
     """
     Cluster nearby points and assign cluster IDs to DataFrame.
@@ -347,7 +261,7 @@ def cluster_points(df, threshold):
         
     Notes:
         Uses centroid-to-centroid distance for clustering
-        Union-Find ensures transitive closure (A~B and B~C â†’ A~C)
+        Union-Find ensures transitive closure (A~B and B~C → A~C)
     """
 
     df = df.copy()
@@ -455,15 +369,7 @@ def nearest_neighbor_distances_and_median(df):
     if len(coords) == 1:
         return np.array([np.nan], dtype=float), np.nan
 
-    points = np.asarray(coords, dtype=float)
-    tree = cKDTree(points)
-    # Query self + up to two nearest neighbors: k=3 for N>=3, otherwise k=2.
-    k = 3 if len(points) >= 3 else 2
-    distances, _ = tree.query(points, k=k)
-    if k == 2:
-        nn_distances = distances[:, 1].astype(float)
-    else:
-        nn_distances = np.nanmean(distances[:, 1:3], axis=1).astype(float)
+    nn_distances = nearest_neighbor_distances(coords, neighbors=2)
     median_distance = float(np.nanmedian(nn_distances))
     return nn_distances, median_distance
             
@@ -484,25 +390,24 @@ def auto_weight_scale(points):
         Used for weight scaling in additive distance functions.
     """
     points = [(x, y) for x, y in points if x is not None and y is not None and np.isfinite(x) and np.isfinite(y)]
-    distances = pdist(points, metric='euclidean')
-    distance_matrix = squareform(distances)
-    np.fill_diagonal(distance_matrix, np.nan)
-    min_dists = np.nanmin(distance_matrix, axis=1)
-    median_distance = np.nanmean(min_dists)
-    return median_distance
+    # nanmedian, not nanmean: the name, the docstring and every caller's use of
+    # the value all say median, and the O(n^2) pdist/squareform matrix this
+    # replaced was only ever reduced to each row's minimum.
+    return float(np.nanmedian(nearest_neighbor_distances(points, neighbors=1)))
 
 def default_distance_additive(a, b, weight, factor):
     """
     Additive weighted distance function for Voronoi weighting.
     
-    Computes distance in normalized space: sqrt(sum((a-b)Â²) - weightÂ²)
+    Computes distance in normalized space: sqrt(sum((a-b)^2) - w_eff^2)
     Acts as a contraction/expansion based on weight values.
     
     Args:
         a (np.ndarray): Grid points array shape (n, 2)
         b (tuple): Single point coordinate (x, y)
         weight (float): Weight parameter (affects distance directly)
-        factor (float): Unused parameter (kept for API compatibility with distance_fn interface)
+        factor (float): Optional scale normalization factor. When > 0,
+            effective additive weight is computed as ``weight / factor``.
         
     Returns:
         np.ndarray: Weighted distances for all points in a
@@ -511,8 +416,9 @@ def default_distance_additive(a, b, weight, factor):
         Result is clipped to minimum 0.01 for numerical stability.
     """
     a, b = normalize_plane(a, b)
+    effective_weight = weight / factor if factor and factor > 0 else weight
     result = np.sum((a - b) ** 2, axis=-1)
-    result -= weight**2
+    result -= effective_weight**2
     return np.sqrt(np.where(result >= 0, result, 0.01))
 
 def default_distance_multiplicative(a, b, weight, factor):
@@ -537,102 +443,6 @@ def default_distance_multiplicative(a, b, weight, factor):
     a, b = normalize_plane(a, b)
     return np.sqrt(np.sum((a - b) ** 2, axis=-1))/weight
 
-def estimate_utm_epsg(lon, lat):
-    """
-    Estimate UTM EPSG code from WGS84 longitude and latitude.
-    
-    Determines the appropriate UTM zone and hemisphere from coordinates,
-    then returns the corresponding EPSG code for that zone.
-    
-    Args:
-        lon (float): Longitude in degrees (-180 to 180)
-        lat (float): Latitude in degrees (-90 to 90)
-        
-    Returns:
-        int: EPSG code for the UTM zone (e.g., 32633 for UTM zone 33N)
-        
-    Notes:
-        UTM zones are 6 degrees wide
-        Hemisphere determined by latitude sign (S = southern, N = northern)
-        EPSG codes: 32601-32660 for northern, 32701-32760 for southern
-    """
-
-    if not (-180 <= lon <= 180 and -90 <= lat <= 90):
-        logger.error(f"Invalid coordinates: lon={lon}, lat={lat}")
-        raise ValueError("Invalid longitude or latitude")
-
-    zone = int((lon + 180) // 6) + 1
-    hemisphere = 'north' if lat >= 0 else 'south'
-    epsg = 32600 + zone if hemisphere == 'north' else 32700 + zone
-    logger.debug(f"Estimated UTM EPSG {epsg} for zone {zone} ({hemisphere}) from lon={lon:.2f}, lat={lat:.2f}")
-    try:
-        CRS.from_epsg(epsg)
-    except Exception as err:
-        logger.warning(f"Invalid EPSG {epsg} when estimating UTM: {err}. Falling back to Web Mercator (3857)")
-        return 3857
-    return epsg
-
-def estimate_utm_crs(gdf):
-    """
-    Estimate appropriate UTM CRS from GeoDataFrame geometries.
-    
-    Extracts a valid centroid from geometries and estimates UTM zone.
-    Validates the resulting CRS and falls back to Web Mercator if needed.
-    
-    Args:
-        gdf (pd.GeoDataFrame): GeoDataFrame with geometry column
-        
-    Returns:
-        pyproj.CRS: UTM CRS for the region, or Web Mercator EPSG:3857
-        
-    Logs:
-        WARNING: When valid geometries are insufficient or coordinates invalid
-        
-    Notes:
-        Validates both lon and lat are finite using 'and' logic.
-    """
-    valid_geoms = gdf.geometry[
-        gdf.geometry.is_valid & 
-        ~gdf.geometry.is_empty & 
-        gdf.geometry.notna()
-    ]
-    
-    if valid_geoms.empty:
-        logger.info("No valid geometries available to estimate UTM CRS. Falling back to Web Mercator (3857).")
-        return CRS.from_epsg(3857)
-    
-    centroid = valid_geoms.unary_union.centroid
-    lon, lat = centroid.x, centroid.y
-    logger.debug(f"Extracted centroid from {len(valid_geoms)} valid geometries: lon={lon:.4f}, lat={lat:.4f}")
-
-    if lon is None or lat is None or not (np.isfinite(lon) and np.isfinite(lat)):
-        logger.debug("Initial centroid has non-finite coordinates, searching for valid point geometry...")
-        check = True
-        for geom in valid_geoms:
-            if isinstance(geom, Point):
-                lon, lat = geom.x, geom.y
-                check = False
-                logger.debug(f"Found valid Point geometry: lon={lon:.4f}, lat={lat:.4f}")
-                break
-            elif isinstance(geom, (Polygon, LineString, MultiPolygon, MultiLineString)):
-                lon, lat = geom.centroid.x, geom.centroid.y
-                check = False
-                logger.debug(f"Found valid {geom.geom_type} with centroid: lon={lon:.4f}, lat={lat:.4f}")
-                break
-        if check:
-            logger.info("Centroid has non-finite coordinates (inf or NaN). Falling back to Web Mercator (3857).")
-            return CRS.from_epsg(3857)
-
-    zone = int((lon + 180) / 6) + 1
-    epsg = 32600 + zone if lat >= 0 else 32700 + zone
-    logger.debug(f"Estimated UTM EPSG {epsg} for zone {zone} from centroid")
-    try:
-        epgs = CRS.from_epsg(epsg)
-        return epgs
-    except Exception as err:
-        logger.info(f'Failed to create UTM CRS EPSG:{epsg}: {err}. Falling back to Web Mercator (3857)')
-        return CRS.from_epsg(3857)
-
 ################################################################################
 # SECTION 5: DATA PROCESSING & NORMALIZATION
 ################################################################################
@@ -641,7 +451,7 @@ def calculate_area(df, only_round=False):
     """
     Calculate Voronoi region areas from assigned points.
     
-    Computes area (in mÂ²) for each Voronoi region based on point assignments.
+    Computes area (in m²) for each Voronoi region based on point assignments.
     Optionally rounds values before calculating to handle overlapping regions.
     
     Args:
@@ -654,15 +464,10 @@ def calculate_area(df, only_round=False):
         
     Notes:
         Assumes 1 point per cell in Voronoi grid
-        Area = point_count Ã— cell_size (depends on Voronoi grid resolution)
+        Area = point_count × cell_size (depends on Voronoi grid resolution)
         Rounding reduces numeric precision but may handle overlaps better
     """
 
-    def round_function(diameters):
-        diameters_2 = [float(i) for i in re.findall(r"[-+]?\d*\.\d+|\d+", str(diameters))]
-        round_area = np.sum([(d/2)**2 * np.pi for d in diameters_2])
-        return round_area
-    
     if df is None or df.empty:
         logger.warning("Input dataframe is empty, returning as-is")
         return df
@@ -670,10 +475,10 @@ def calculate_area(df, only_round=False):
     if 'wwtp_area_rect' in df:
         df['wwtp_area_rect_2'] = df['wwtp_area_rect'].apply(
             lambda x: np.sum([
-                float(i) for i in str(x).strip().strip('[]').split() 
+                float(i) for i in str(x).strip().strip('[]').split()
                 if i and i.lower() != 'none'
             ]) if pd.notnull(x) else 0)
-        df['round_area'] = df['diameters'].apply(round_function)
+        df['round_area'] = df['diameters'].apply(parse_diameters_to_round_area)
         if only_round:
             df['total_area'] = df['round_area']
             logger.debug(f"Using round areas only for {len(df)} facilities")
@@ -753,7 +558,6 @@ def download_overture_maps(url, filepath):
     """
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     logger.info(f"Starting download of Overture Maps from {url}")
-    query = "INSTALL SPATIAL; LOAD SPATIAL;"
     download_query  = f"""
     COPY(
         SELECT * -- REPLACE(ST_AsWKB(geometry)) as geometry
@@ -764,10 +568,12 @@ def download_overture_maps(url, filepath):
     (FORMAT PARQUET, COMPRESSION ZSTD);
     """
     try:
-        logger.debug("Installing and loading DuckDB SPATIAL extension")
-        duckdb.sql(query)
-        logger.debug(f"Executing download query to save parquet at {filepath}")
-        duckdb.sql(download_query)
+        # duckdb_connection owns the scratch database: unique name, always removed.
+        with duckdb_connection() as con:
+            logger.debug("Installing and loading DuckDB SPATIAL extension")
+            ensure_duckdb_spatial(con)
+            logger.debug(f"Executing download query to save parquet at {filepath}")
+            con.sql(download_query)
         logger.info(f"Successfully downloaded Overture Maps country boundaries to {filepath}")
     except Exception as err:
         logger.warning(f"Error downloading country polygons from Overture Maps: {err}")
@@ -851,36 +657,39 @@ def intersect_with_polygon_sindex(df, polygons, col, concurrency=False):
     """
     if df is None or df.empty:
         return df
-    
-    # Separate rows with invalid or missing geometry
-    nans = df[df['geometry'].isna() | (~df['geometry'].is_valid) | (df['geometry'].is_empty)].copy()
-    df = df[df['geometry'].notna() & df['geometry'].is_valid & ~df['geometry'].is_empty].copy()
-    utm = df.crs
-    # Create centroids safely
-    polygons['geometry'] = polygons['geometry'].apply(buffer_geometry) 
-    df['geometry'] = df['geometry'].apply(buffer_geometry) 
-    df['centroid'] = df['geometry'].centroid
 
-    # Build spatial index on polygon layer
-    sidx = polygons.sindex
-    matched_col_values = []
-    args_list = [(centroid, sidx, polygons, col) for centroid in df['centroid']]
-    if concurrency:
-        logger.info(f"Intersecting {len(args_list)} centroids with polygons using ThreadPoolExecutor")
-        with ThreadPoolExecutor() as executor:
-            matched_col_values = list(executor.map(process_centroid, args_list))
-    else:
-        logger.info(f"Intersecting {len(args_list)} centroids with polygons (sequential)")
-        matched_col_values = [process_centroid(args) for args in args_list]
-    matched_count = sum(1 for v in matched_col_values if v is not None)
-    logger.debug(f"Successfully matched {matched_count}/{len(args_list)} centroids to polygons")
-    df[col] = matched_col_values
-    
-    df['geometry'] = df['geometry'].apply(buffer_geometry)    
-    df = df.drop(columns=['centroid'])
-    df = pd.concat([df, nans], ignore_index=True)
-    df = gpd.GeoDataFrame(df, geometry='geometry', crs=utm)
-    return df
+    try:
+        # Separate rows with invalid or missing geometry
+        nans = df[df['geometry'].isna() | (~df['geometry'].is_valid) | (df['geometry'].is_empty)].copy()
+        df = df[df['geometry'].notna() & df['geometry'].is_valid & ~df['geometry'].is_empty].copy()
+        utm = df.crs
+        # Create centroids safely
+        polygons['geometry'] = polygons['geometry'].apply(buffer_geometry)
+        df['geometry'] = df['geometry'].apply(buffer_geometry)
+        df['centroid'] = df['geometry'].centroid
+
+        # Build spatial index on polygon layer
+        sidx = polygons.sindex
+        matched_col_values = []
+        args_list = [(centroid, sidx, polygons, col) for centroid in df['centroid']]
+        if concurrency:
+            logger.info(f"Intersecting {len(args_list)} centroids with polygons using ThreadPoolExecutor")
+            with ThreadPoolExecutor() as executor:
+                matched_col_values = list(executor.map(process_centroid, args_list))
+        else:
+            logger.info(f"Intersecting {len(args_list)} centroids with polygons (sequential)")
+            matched_col_values = [process_centroid(args) for args in args_list]
+        matched_count = sum(1 for v in matched_col_values if v is not None)
+        logger.debug(f"Successfully matched {matched_count}/{len(args_list)} centroids to polygons")
+        df[col] = matched_col_values
+
+        df['geometry'] = df['geometry'].apply(buffer_geometry)
+        df = df.drop(columns=['centroid'])
+        df = pd.concat([df, nans], ignore_index=True)
+        return gpd.GeoDataFrame(df, geometry='geometry', crs=utm)
+    except Exception as err:
+        logger.error(f"Error during spatial-index polygon intersection on column '{col}': {err}")
+        raise
 
 def intersect_with_polygons_db(df, polygons, cols, df_join_col='ISO_2', polygon_join_col='ISO_2'):
     """Intersect features with a polygon layer in a single UTM zone using DuckDB.
@@ -908,18 +717,14 @@ def intersect_with_polygons_db(df, polygons, cols, df_join_col='ISO_2', polygon_
     This variant assumes all input geometries already belong to the same UTM
     zone and uses DuckDB spatial SQL for the join.
     """
-    def _quote_identifier(name):
-        return '"' + str(name).replace('"', '""') + '"'
-
     if isinstance(cols, str):
         cols = [cols]
     cols = list(cols)
     select_cols = ",\n        ".join(
-        f"b.{_quote_identifier(col)} AS {_quote_identifier(col)}" for col in cols
+        f"b.{quote_sql_identifier(col)} AS {quote_sql_identifier(col)}" for col in cols
     )
-    quoted_df_join_col = _quote_identifier(df_join_col)
-    quoted_polygon_join_col = _quote_identifier(polygon_join_col)
-    query = "INSTALL SPATIAL; LOAD SPATIAL;"
+    quoted_df_join_col = quote_sql_identifier(df_join_col)
+    quoted_polygon_join_col = quote_sql_identifier(polygon_join_col)
     query2 = f"""
     WITH
     data AS (
@@ -945,11 +750,11 @@ def intersect_with_polygons_db(df, polygons, cols, df_join_col='ISO_2', polygon_
         raise KeyError(f"Join column '{df_join_col}' not found in df.")
     if polygon_join_col not in polygons.columns:
         raise KeyError(f"Join column '{polygon_join_col}' not found in polygons.")
-    crs = df.crs
-    if crs is None:
-        df.set_crs(4326)
+    if df.crs is None:
+        # set_crs assigns a missing CRS; to_crs reprojects and needs one already.
+        df = df.set_crs(4326)
     if polygons.crs is None:
-        polygons = polygons.to_crs(4326)
+        polygons = polygons.set_crs(4326)
 
     utm = df['utm'].mode()[0]
     df = df.to_crs(utm)
@@ -959,33 +764,29 @@ def intersect_with_polygons_db(df, polygons, cols, df_join_col='ISO_2', polygon_
     df = df[df['geometry'].notna() & df['geometry'].is_valid & ~df['geometry'].is_empty].copy()
     
     df['centroid'] = df['geometry'].apply(create_centroid_points)
-    df['centroid'] = df['centroid'].map(lambda x: to_wkt(x) if isinstance(x, (Point, LineString, Polygon, MultiLineString, MultiPolygon)) else None)
-    df['geometry'] = df['geometry'].map(lambda x: to_wkt(x) if isinstance(x, (Point, LineString, Polygon, MultiLineString, MultiPolygon)) else None)
-    polygons['geometry'] = polygons['geometry'].map(lambda x: to_wkt(x) if isinstance(x, (Point, LineString, Polygon, MultiLineString, MultiPolygon)) else None)
+    df['centroid'] = df['centroid'].map(safe_to_wkt)
+    df['geometry'] = df['geometry'].map(safe_to_wkt)
+    polygons['geometry'] = polygons['geometry'].map(safe_to_wkt)
     
-    con = None
-    temp = f'temp_{int(np.random.randint(0, int(1e12)))}.db'
     logger.info(f"Starting DuckDB polygon intersection for {len(df)} points")
     try:
-        con = duckdb.connect(database=temp)
-        con.execute(query)
-        df = con.execute(query2).df()
-        logger.debug(f"Query returned {len(df)} results")
-        
-        df = df.drop(labels=['centroid'], axis=1)
-        df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
-        df = pd.concat([df, nans], ignore_index=True) 
-        df['geometry'] = df['geometry'].map(buffer_geometry)
-        df = gpd.GeoDataFrame(df, geometry='geometry', crs=utm).to_crs(4326)
-        return df
+        # duckdb_connection owns the scratch database: unique name, always removed.
+        with duckdb_connection() as con:
+            ensure_duckdb_spatial(con)
+            df = con.execute(query2).df()
+            logger.debug(f"Query returned {len(df)} results")
+
+            df = df.drop(labels=['centroid'], axis=1)
+            df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
+            df = pd.concat([df, nans], ignore_index=True)
+            df['geometry'] = df['geometry'].map(buffer_geometry)
+            return gpd.GeoDataFrame(df, geometry='geometry', crs=utm).to_crs(4326)
     except Exception as err:
-        logger.warning(f'Error during DuckDB polygon intersection: {err}')
-        return df
-    finally:
-        if con is not None:
-            con.close()
-        if os.path.exists(temp):
-            os.remove(temp)
+        # Never return `df` here: at this point its geometry column holds WKT
+        # strings, its null rows have been split off, and the requested `cols`
+        # are absent - the caller would wrap that in a GeoDataFrame and carry on.
+        logger.error(f'Error during DuckDB polygon intersection: {err}')
+        raise
 
 def intersect_with_polygons_parallelized(df, polygons, cols, use_duckdb=False, max_workers=16, df_join_col='ISO_2', polygon_join_col='ISO_2'):
     """
@@ -1029,14 +830,8 @@ def intersect_with_polygons_parallelized(df, polygons, cols, use_duckdb=False, m
     nans = df[df['geometry'].isna() | (~df['geometry'].is_valid) | (df['geometry'].is_empty)].copy().reset_index(drop=True) 
     df = df[df['geometry'].notna() & df['geometry'].is_valid & ~df['geometry'].is_empty].copy().reset_index(drop=True)  
     
-    df['utm'] = df.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-                                                        if isinstance(row['geometry'], Point)
-                                                        else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y),
-                                                        axis=1)
-    polygons['utm'] = polygons.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-                                                        if isinstance(row['geometry'], Point)
-                                                        else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y),
-                                                        axis=1)
+    df['utm'] = df['geometry'].apply(estimate_utm_epsg_for_geom)
+    polygons['utm'] = polygons['geometry'].apply(estimate_utm_epsg_for_geom)
     
     data = []
     unique_utms = set(df['utm'].unique()).union(polygons['utm'].unique())
@@ -1093,13 +888,9 @@ def intersects_with_country_db(df, filepath, polygon_country_col='country', outp
     The current implementation serializes geometries as WKT before executing the
     DuckDB spatial join.
     """
-    def _quote_identifier(name):
-        return '"' + str(name).replace('"', '""') + '"'
-
-    quoted_polygon_country_col = _quote_identifier(polygon_country_col)
-    quoted_output_country_col = _quote_identifier(output_country_col)
+    quoted_polygon_country_col = quote_sql_identifier(polygon_country_col)
+    quoted_output_country_col = quote_sql_identifier(output_country_col)
     logger.info(f"Starting DuckDB country boundary intersection for {len(df)} points")
-    query = "LOAD SPATIAL;"
     query2 = f"""
     WITH 
     data AS (
@@ -1137,179 +928,34 @@ def intersects_with_country_db(df, filepath, polygon_country_col='country', outp
     if df is None or df.empty:
         logger.warning("Input dataframe is empty, returning as-is")
         return df
-    crs = df.crs
-    if crs is not None and df.crs.to_epsg() != 4326:
-        logger.debug(f"Transforming from {df.crs.to_epsg()} to EPSG:4326 for intersection")
-        df = df.to_crs(epsg=4326)
 
-    logger.debug(f"Converting {len(df)} geometries to WKT format")
-    df['geometry'] = df['geometry'].map(lambda x: to_wkt(x) if isinstance(x, (Point, LineString, Polygon, MultiLineString, MultiPolygon)) else None)
-    duckdb.sql(query)
-    logger.debug(f"Executing DuckDB spatial intersection query")
-    df = duckdb.sql(query2).df()
-    iso_matched = df[output_country_col].notna().sum()
-    logger.info(f"DuckDB intersection complete: {iso_matched}/{len(df)} points matched to countries")
-    df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
-    df = gpd.GeoDataFrame(df, geometry='geometry', crs=4326)
-    df['geometry'] = df['geometry'].map(buffer_geometry)
-    return df
+    try:
+        if df.crs is None:
+            df = df.set_crs(4326)
+        elif df.crs.to_epsg() != 4326:
+            logger.debug(f"Transforming from {df.crs.to_epsg()} to EPSG:4326 for intersection")
+            df = df.to_crs(epsg=4326)
+
+        logger.debug(f"Converting {len(df)} geometries to WKT format")
+        df['geometry'] = df['geometry'].map(safe_to_wkt)
+        # duckdb_connection owns the scratch database: unique name, always removed.
+        with duckdb_connection() as con:
+            ensure_duckdb_spatial(con)
+            logger.debug("Executing DuckDB spatial intersection query")
+            df = con.sql(query2).df()
+        iso_matched = df[output_country_col].notna().sum()
+        logger.info(f"DuckDB intersection complete: {iso_matched}/{len(df)} points matched to countries")
+        df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
+        df = gpd.GeoDataFrame(df, geometry='geometry', crs=4326)
+        df['geometry'] = df['geometry'].map(buffer_geometry)
+        return df
+    except Exception as err:
+        logger.error(f"Error during DuckDB country boundary intersection using {filepath}: {err}")
+        raise
 
 ################################################################################
 # SECTION 7: BUFFER & GEOMETRY DISSOLUTION
 ################################################################################
-
-def dissolve_overlapping_geometries(subdf, radius, convex=False, recursion_lim=50000):
-    """
-    Dissolve overlapping polygon geometries into unified regions.
-    
-    Groups overlapping geometries using spatial bounds matching (longitude/latitude)
-    and connected components analysis, then merges overlapping regions.
-    
-    Parameters
-    ----------
-    subdf : geopandas.GeoDataFrame
-        Input geometries with a ``some_id`` column.
-    radius : float
-        Buffer radius used for overlap grouping.
-    convex : bool, default=False
-        Whether to use bounding boxes of original geometries instead of centroid
-        buffers.
-    recursion_lim : int, default=50000
-        Recursion limit used by the depth-first traversal.
-
-    Returns
-    -------
-    tuple | None
-        Tuple ``(final_groups, subdf)`` containing connected overlap groups and
-        the prepared GeoDataFrame, or ``None`` when processing cannot proceed.
-
-    Notes
-    -----
-    This is the slower overlap-resolution variant and relies on repeated
-    latitude/longitude grouping before connected-component merging.
-    """
-    import sys
-    sys.setrecursionlimit(int(recursion_lim))
-    if subdf is None or subdf.empty:
-        logger.warning("Input subdf is empty")
-        return None
-    logger.info(f"Starting dissolution of {len(subdf)} overlapping geometries with radius={radius}")
-    utm = estimate_utm_crs(subdf)
-    if utm is None:
-        logger.warning("Could not estimate UTM CRS")
-        return None
-    
-    subdf = subdf.to_crs(utm)
-    subdf = subdf[subdf['geometry'].notna()].reset_index(drop=True)
-    subdf['centroid'] = subdf['geometry'].apply(create_centroid_points)
-    if convex:
-        subdf['geometry'] = subdf['geometry'].apply(lambda c: box(*c.bounds))
-    else:
-        subdf['geometry'] = subdf['centroid'].apply(lambda c: box(*c.buffer(radius).bounds) if c else None)
-    subdf = subdf[subdf['geometry'].notna()].reset_index(drop=True)
-    subdf['lat_max'] = subdf['geometry'].apply(lambda geom: geom.bounds[3])  
-    subdf['lat_min'] = subdf['geometry'].apply(lambda geom: geom.bounds[1]) 
-    subdf['lon_max'] = subdf['geometry'].apply(lambda geom: geom.bounds[2])  
-    subdf['lon_min'] = subdf['geometry'].apply(lambda geom: geom.bounds[0])
-    subdf['centroid_lon'] = subdf['centroid'].x
-    subdf['centroid_lat'] = subdf['centroid'].y
-
-    # Create dictionaries to hold the intersections and the graph structure
-    lon_id_dict = {}
-    lat_id_dict = {}
-    longitude_groups = {}
-    latitude_groups = {}
-
-    # Grouping by Longitude 
-    subdf = subdf.sort_values(by=['centroid_lon', 'centroid_lat'], ascending=[False, False]).reset_index(drop=True)
-    for index, row in tqdm(subdf.iterrows(), total=len(subdf), desc="Processing longitude groups"):
-        unique_id = row.some_id
-        if unique_id in lon_id_dict:
-            continue
-        temp_list = [unique_id]
-        lon_id_dict[unique_id] = unique_id
-        last_row = row
-
-        for second_index, second_row in subdf.iloc[index + 1:].iterrows():
-            if last_row.lon_min <= second_row.lon_max:
-                if max(last_row.lat_min, second_row.lat_min) <= min(last_row.lat_max, second_row.lat_max):
-                    last_row = second_row
-                    temp_list.append(second_row.some_id)
-                    lon_id_dict[second_row.some_id] = unique_id
-            else:
-                break
-        longitude_groups[unique_id] = set(temp_list)
-
-    # Grouping by Latitude 
-    subdf = subdf.sort_values(by=['centroid_lat', 'centroid_lon'], ascending=[False, False]).reset_index(drop=True)
-    for index, row in tqdm(subdf.iterrows(), total=len(subdf), desc="Processing latitude groups"):
-        unique_id = row.some_id
-        if unique_id in lat_id_dict:
-            continue
-        temp_list = [unique_id]
-        lat_id_dict[unique_id] = unique_id
-        last_row = row
-
-        for second_index, second_row in subdf.iloc[index + 1:].iterrows():
-            if last_row.lat_min <= second_row.lat_max:
-                if max(last_row.lon_min, second_row.lon_min) <= min(last_row.lon_max, second_row.lon_max):
-                    last_row = second_row
-                    temp_list.append(second_row.some_id)
-                    lat_id_dict[second_row.some_id] = unique_id
-            else:
-                break
-        latitude_groups[unique_id] = set(temp_list)
-
-    # Create an intersection graph between longitude_groups and latitude_groups
-    graph = defaultdict(set)
-
-    # Find intersections between longitude and latitude groups
-    for lon_group_id, lon_group in longitude_groups.items():
-        for lat_group_id, lat_group in latitude_groups.items():
-            intersecting_ids = lon_group.intersection(lat_group)
-            if intersecting_ids:
-                # Create bidirectional edges between longitude and latitude group IDs
-                graph[lon_group_id].add(lat_group_id)
-                graph[lat_group_id].add(lon_group_id)
-
-    # Find connected components using DFS
-    visited = set()
-    components = []
-
-    def dfs(node, component):
-        visited.add(node)
-        component.add(node)
-        for neighbor in graph[node]:
-            if neighbor not in visited:
-                dfs(neighbor, component)
-
-    # Find connected components
-    for node in graph:
-        if node not in visited:
-            component = set()
-            dfs(node, component)
-            components.append(component)
-
-    # Now you have `components`, which are the connected components (groups that intersect)
-    # Merge the groups in each component into a single set of distinct groups
-
-    final_groups = []
-    for component in components:
-        merged_group = set()  # To merge all intersecting groups
-        for group_id in component:
-            if group_id in longitude_groups:
-                merged_group.update(longitude_groups[group_id])
-            if group_id in latitude_groups:
-                merged_group.update(latitude_groups[group_id])
-        final_groups.append(merged_group)
-
-    subdf = subdf.drop(labels=['centroid', 'lat_max',
-                                'lat_min', 'lon_max',
-                                'lon_min', 'centroid_lon',
-                                'centroid_lat'], axis=1).reset_index(drop=True)
-    subdf = subdf.to_crs(4326) 
-    subdf['geometry'] = subdf['geometry'].buffer(0)
-    return final_groups, subdf
 
 def dissolve_overlapping_geometries_fast(subdf, radius, convex=False):
     """Dissolve overlapping geometries with a spatial-index-based fast path.
@@ -1410,6 +1056,8 @@ def orchestrate_overlaps(df, max_workers, buffers_filepath, radius, convex=False
     Results are cached to ``buffers_filepath`` so subsequent runs can skip the
     expensive dissolve step.
     """
+    if not max_workers:
+        max_workers = default_cpu_workers()
     logger.info(f"Starting parallel dissolution orchestration for {len(df)} geometries")
     if os.path.exists(buffers_filepath):
         logger.info(f"Loading cached dissolved buffers from {buffers_filepath}")
@@ -1424,7 +1072,7 @@ def orchestrate_overlaps(df, max_workers, buffers_filepath, radius, convex=False
     df['some_id'] = np.arange(0, len(df))
     #subdf = df.copy()
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(dissolve_overlapping_geometries_fast, #dissolve_overlapping_geometries,
+        futures = [executor.submit(dissolve_overlapping_geometries_fast,
                                     df[df[country_col] == country].copy(), radius, convex
                                    ) for country in countries]
     
@@ -1435,10 +1083,7 @@ def orchestrate_overlaps(df, max_workers, buffers_filepath, radius, convex=False
         if future is None:
             continue
         try:
-            result = future.result()
-            if result is None:
-                continue
-            groups, subdf = result
+            groups, subdf = future.result()
             if groups:
                 final_groups.extend(groups)
             if subdf is not None and not subdf.empty:
@@ -1609,13 +1254,13 @@ def calculate_buffer(df, weights, *args, **kwargs):
     -----
     k is computed per site from two signals blended by detection confidence:
 
-        k_density     â€” log-scaled nearest-neighbor distance.
+        k_density     — log-scaled nearest-neighbor distance.
                         Isolated plants (large nnd) get higher k.
-        k_sophistication â€” log-scaled detection count.
+        k_sophistication — log-scaled detection count.
                         Complex, well-instrumented plants get higher k.
 
     When detection confidence is low (few or no detected structures),
-    k collapses to k_density alone â€” the safer, data-independent signal.
+    k collapses to k_density alone — the safer, data-independent signal.
 
     Buffer ceiling is derived from ``total_area`` when ``max_buffer`` is
     None, mapping detected infrastructure area to a physically realistic
@@ -1634,34 +1279,33 @@ def calculate_buffer(df, weights, *args, **kwargs):
     k_min                = kwargs['k_min']
     k_max                = kwargs['k_max']
     conf_threshold       = kwargs['detection_confidence_threshold']
-    k_value = kwargs.get('k_value', 0.5)
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
 
     def _size_ceiling(area: float) -> float:
-        """Map detected infrastructure area (mÂ²) to service radius ceiling (m).
+        """Map detected infrastructure area (m²) to service radius ceiling (m).
 
         Thresholds are calibrated against typical PE/area ratios for
         activated-sludge plants. They represent an upper bound, not a
-        target â€” the buffer formula may produce smaller values.
+        target — the buffer formula may produce smaller values.
 
-        Approximate calibration:
-            < 500 mÂ²   â‰ˆ <2 000 PE   â€” village plant,  gravity only
-            < 2 000 mÂ² â‰ˆ 10 000 PE   â€” small town
-            < 15 000 mÂ²â‰ˆ 100 000 PE  â€” medium city
-            < 100 000 mÂ²â‰ˆ1 000 000 PE â€” large city
-            â‰¥ 100 000 mÂ²              â€” mega plant
+        Implemented thresholds (detected area -> radius ceiling):
+            < 100 000 m2  ->  8 000 m   - village or small-town plant
+            < 200 000 m2  -> 15 000 m   - small town
+            < 300 000 m2  -> 25 000 m   - medium city
+            < 400 000 m2  -> 40 000 m   - large city
+            >= 400 000 m2 -> 50 000 m   - mega plant
 
         Note: thresholds assume European-style infrastructure density.
         Land-intensive treatment systems (stabilisation ponds) common in
         the Global South may warrant higher ceilings at equivalent area.
         """
-        if area < 500:        return  8_000
-        elif area < 2_000:    return 15_000
-        elif area < 15_000:   return 25_000
-        elif area < 100_000:  return 40_000
+        if area < 100_000:        return  8_000
+        elif area < 200_000:    return 15_000
+        elif area < 300_000:   return 25_000
+        elif area < 400_000:  return 40_000
         else:                 return 50_000
 
     def _compute_k(nnd: float, num_circles: int, num_rects: int,
@@ -1673,7 +1317,7 @@ def calculate_buffer(df, weights, *args, **kwargs):
         nnd : float
             Mean nearest-neighbor distance in metres.
         num_circles : int
-            Number of detected circular structures (primary capacity signal â€”
+            Number of detected circular structures (primary capacity signal —
             treatment tanks, clarifiers, digesters).
         num_rects : int
             Number of detected rectangular structures
@@ -1690,7 +1334,7 @@ def calculate_buffer(df, weights, *args, **kwargs):
         Notes
         -----
         Density signal weight (0.60) exceeds sophistication weight (0.40)
-        because nnd is a hard physical constraint â€” a plant cannot serve
+        because nnd is a hard physical constraint — a plant cannot serve
         people its pipes do not reach regardless of treatment sophistication.
 
         """
@@ -1705,8 +1349,8 @@ def calculate_buffer(df, weights, *args, **kwargs):
         k_soph = min(np.log1p(weighted_detections) / np.log1p(10), 1.0)
 
         # --- Confidence-gated blend ---
-        # When confidence == 0  â†’ k = k_density          (pure density)
-        # When confidence == 1  â†’ k = 0.6*k_density + 0.4*k_soph
+        # When confidence == 0  → k = k_density          (pure density)
+        # When confidence == 1  → k = 0.6*k_density + 0.4*k_soph
         k_raw = k_density + confidence * k_value * (k_soph - k_density)
 
         # --- Scale to [k_min, k_max] ---
@@ -1723,7 +1367,7 @@ def calculate_buffer(df, weights, *args, **kwargs):
     def _detection_confidence(num_circles: int, num_rects: int) -> float:
         """Confidence in [0,1] based on total weighted detections vs threshold.
 
-        Reaches 1.0 when weighted detections â‰¥ conf_threshold.
+        Reaches 1.0 when weighted detections ≥ conf_threshold.
         Below that it scales linearly so partial segmentation results
         still contribute proportionally rather than being binary.
         """
@@ -1733,20 +1377,26 @@ def calculate_buffer(df, weights, *args, **kwargs):
     # ------------------------------------------------------------------ #
     # Basin-level fallbacks (computed once, reused per site)              #
     # ------------------------------------------------------------------ #
-    total_area_series = pd.to_numeric(
-        df.get('basin_area', pd.Series(dtype=float)), errors='coerce'
-    ).fillna(0)
+    if 'base_values' in df.columns:
+        area_source = df['base_values']
+    elif 'total_area' in df.columns:
+        area_source = df['total_area']
+    else:
+        area_source = pd.Series(0.0, index=df.index)
+    total_area_series = pd.to_numeric(area_source, errors='coerce').reindex(df.index).fillna(0)
     positive_areas = total_area_series[total_area_series > 0]
     basin_median_area = float(positive_areas.median()) if not positive_areas.empty else 2_000
 
     # ------------------------------------------------------------------ #
-    # FIXED BUFFERING â€” trivial path                                      #
+    # FIXED BUFFERING — trivial path                                      #
     # ------------------------------------------------------------------ #
     if not dynamic_buffering:
         ceiling = max_buffer_global if max_buffer_global is not None else 50_000
         fixed = float(np.clip(buffer, min_buffer, ceiling))
         logger.debug("Fixed buffer: %.1f m for %d sites", fixed, len(df))
         return np.full(len(df), fixed, dtype=float)
+
+    k_value = kwargs['k_value']
 
     # ------------------------------------------------------------------ #
     # DYNAMIC BUFFERING                                                    #
@@ -1761,7 +1411,7 @@ def calculate_buffer(df, weights, *args, **kwargs):
         errors='coerce',
     ).to_numpy()
 
-    # Determine per-site NND: nnd_array â†’ mean_2_nnd column â†’ buffer
+    # Determine per-site NND: nnd_array → mean_2_nnd column → buffer
     if len(nnd_array) == len(df):
         site_nnds = np.where(np.isnan(nnd_array), mean_2_nnd_col, nnd_array)
         site_nnds = np.where(np.isnan(site_nnds), buffer, site_nnds)
@@ -1808,14 +1458,14 @@ def calculate_buffer(df, weights, *args, **kwargs):
         area    = float(total_area_series.iloc[i]) if total_area_series.iloc[i] > 0 else basin_median_area
         ceiling = max_buffer_global if max_buffer_global is not None else _size_ceiling(area)
 
-        # Core formula: nnd Ã— k
-        # sqrt(weight) deliberately excluded â€” weights already act on the
+        # Core formula: nnd × k
+        # sqrt(weight) deliberately excluded — weights already act on the
         # Voronoi distance metric; including them here double-penalises
         # small plants in dense basins.
         raw = nnd_val * k
         buffer_lengths[i] = np.clip(raw, min_buffer, ceiling)
     logger.debug(
-        "Dynamic buffer range: %.1f â€“ %.1f m (mean=%.1f m) for %d sites",
+        "Dynamic buffer range: %.1f – %.1f m (mean=%.1f m) for %d sites",
         buffer_lengths.min(), buffer_lengths.max(), buffer_lengths.mean(), len(df),
     )
     return buffer_lengths
@@ -1856,7 +1506,10 @@ def initialize_voronoi_weights(df, distance_fn, scale_weights, points):
     if distance_fn == default_distance_additive:
         if scale_weights:
             logger.debug("Additive distance: Computing weight scaling factor")
-            factor = auto_weight_scale(points)
+            #factor = auto_weight_scale(points)
+            #if factor is None or pd.isna(factor) or factor <= 0:
+            #    factor = 1.0
+            factor = 1.0
             weights = weights * factor
             logger.debug(f"Additive distance: Applied scaling factor {factor:.4f}")
         else:
@@ -2155,9 +1808,6 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
     if df.crs is None:
         df = df.set_crs('epsg:4326')
         utm = estimate_utm_crs(df)
-        if utm is None:
-            logger.warning("Could not estimate UTM CRS for Voronoi")
-            return
         df = df.to_crs(utm)
         logger.debug(f"Projected to UTM CRS: {utm}")
     crs = df.crs
@@ -2245,6 +1895,11 @@ def weighted_voronoi(df, col, country_clip, scale_weights=False, clipping=None, 
         if country_clip is not None and not country_clip.empty:
             region_polygons = gpd.clip(region_polygons, country_clip)
         region_polygons['geometry'] = region_polygons['geometry'].map(buffer_geometry)
+
+        # Same 'area' column the multi-site branch emits, computed in the metric
+        # CRS before reprojecting - without it downstream consumers see the
+        # column only for multi-site groups.
+        region_polygons['area'] = region_polygons.geometry.area
 
         # Convert all outputs to WGS84 for standard output format
         region_polygons = region_polygons.to_crs(4326)
@@ -2595,7 +2250,6 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
 
     task_stats = {
         'generated': 0,
-        'skipped_groups': 0,
     }
 
     def iter_voronoi_args(batch_size):
@@ -2615,11 +2269,6 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
             # Estimate UTM CRS for this group based on geometry centroid for accurate distance calculations in Voronoi
             # and apply it to both the sites and the clipping geometry for this group
             utm_crs = estimate_utm_crs(sub_df)
-            if utm_crs is None:
-                logger.debug(f"Group {key}: Could not estimate UTM CRS, skipping")
-                task_stats['skipped_groups'] += 1
-                continue
-
             sub_df = sub_df.to_crs(utm_crs)
             logger.debug(f"Group {key}: {len(sub_df)} sites after area calculation and CRS conversion")
             if sub_df is None or sub_df.empty:
@@ -2689,10 +2338,9 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
             return
 
         region_chunk = finalize_gdf(region_df_all, df.columns)
-        point_chunk = finalize_gdf(point_df_all, df.columns)
 
         # Persist region chunks to temp file (overwrite decision was already
-        # applied at startup â€” from here we always append if the file exists).
+        # applied at startup — from here we always append if the file exists).
         if temp_output_path is not None:
             ensure_output_dir_for_file(temp_output_path)
             if os.path.exists(temp_output_path):
@@ -2714,10 +2362,14 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
                         continue
                     region_df, point_df = result
                     region_df_all.append(region_df)
-                    point_df_all.append(point_df)
-                    processed_results += 1
                     if output_path:
+                        # Points are only returned in tuple mode; keeping them
+                        # here just grew memory until the next flush dropped them.
+                        processed_results += 1
                         flush_results()
+                    else:
+                        point_df_all.append(point_df)
+                        processed_results += 1
         if output_path:
             flush_results(force=True)
     except Exception as err:
@@ -2728,10 +2380,9 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
         logger.warning("No Voronoi tasks were generated")
     else:
         logger.debug(
-            "Processed %s Voronoi task results (generated=%s, skipped_groups=%s)",
+            "Processed %s Voronoi task results (generated=%s)",
             processed_results,
             task_stats['generated'],
-            task_stats['skipped_groups'],
         )
 
     # Output-path mode: finalize temp checkpoint into final file and return bool.
@@ -2746,8 +2397,8 @@ def orchestrate_voronoi_weights(df, col, country_df, workers=12, scale_weights=F
                         logger.warning("Output already exists and overwrite=False: %s", output_path)
                         return True
                 os.replace(temp_output_path, output_path)
-                logger.info("Orchestrate Voronoi complete: processed=%s (generated=%s, skipped_groups=%s) -> %s",
-                            processed_results, task_stats['generated'], task_stats['skipped_groups'], output_path)
+                logger.info("Orchestrate Voronoi complete: processed=%s (generated=%s) -> %s",
+                            processed_results, task_stats['generated'], output_path)
                 return True
             except Exception as err:
                 logger.error("Failed to finalize temp checkpoint %s -> %s: %s", temp_output_path, output_path, err)
@@ -2781,12 +2432,12 @@ This section orchestrates the complete Voronoi spatial allocation pipeline.
 4. Output: Saves results to GeoPackage per approach_id
 
 WORKFLOW:
-    overrides = parse_config_overrides(args=args)  # Parse optional level/version/buffer/weight_method/weight_func/dynamic_buffering/dynamic_buffer_k
+    overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="create_voronoi", **overrides)                 # Load YAML configuration
-  â†’ create_output_paths(cfg)              # Create output directory structure
-  â†’ prepare_data(cfg)                     # Load input spatial data
-  â†’ run_voronoi_approach()                # Execute requested approach(es)
-  â†’ Save results to cfg['paths']['voronoi_dir']
+  → create_output_paths(cfg)              # Create output directory structure
+  → prepare_data(cfg)                     # Load input spatial data
+  → run_voronoi_approach()                # Execute requested approach(es)
+  → Save results to cfg['paths']['voronoi_dir']
 
 APPROACH VARIANTS:
 
@@ -2802,7 +2453,7 @@ APPROACH VARIANTS:
     - Uses major cities instead of WWTP facilities
     - Weighted/unweighted and mult/add distance are read from weight_func in config
 
-  --only_round flag (applies to approaches 0 and 1):
+  --only-round flag (applies to approaches 0 and 1):
     - When set, uses only round-area weights instead of all points
 
 See pipelines.run_voronoi_approach() for parameter documentation.
@@ -2838,7 +2489,7 @@ def _filter_requested_approaches(requested_approaches, cfg, paths_dict, only_rou
 
         path_key = f"{approach_id}_only_round" if only_round and approach_id in {'0', '1'} else approach_id
         output_path = paths_dict['voronoi'][path_key]
-        if os.path.exists(output_path) and not cfg['voronoi_overwrite']:
+        if os.path.exists(output_path) and not cfg['overwrite_existing']:
             skipped_existing.append(approach_id)
         else:
             runnable.append(approach_id)
@@ -2847,7 +2498,7 @@ def _filter_requested_approaches(requested_approaches, cfg, paths_dict, only_rou
 
 ########################### Global Variables ####################################
 if __name__ == '__main__':
-    import argparse
+    configure_logging()
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
@@ -2859,10 +2510,10 @@ EXAMPLES:
   python -m src.create_voronoi --approach 0
 
   # Run approaches 0 and 1 with only-round weights
-  python -m src.create_voronoi --approach 0 1 --only_round
+  python -m src.create_voronoi --approach 0 1 --only-round
 
-  # Run all approaches with config overrides
-    python -m src.create_voronoi 8 2 15000 square_root mult true 0.75
+    # Run all approaches with config overrides
+    python -m src.create_voronoi --level 8 --version 2 --buffer 15000 --weight-method square_root --weight-func mult --dynamic-buffering true --dynamic-buffer-k 0.75
 
   # Run with verbose logging
   python -m src.create_voronoi --approach 1 --verbose
@@ -2873,16 +2524,14 @@ EXAMPLES:
     )
     parser.add_argument('--approach', nargs='+', type=str, default=None,
                        help='Approach(es) to run: 0 (WWTP no watersheds), 1 (WWTP with watersheds), 2 (cities). Default: all')
-    parser.add_argument('--only_round', action='store_true',
+    parser.add_argument('--only-round', action='store_true',
                        help='Use only round-area weights (default: all points)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
-    parser.add_argument('level', nargs='?', default=None, help='Optional config level override')
-    parser.add_argument('version', nargs='?', default=None, help='Optional config version override')
-    parser.add_argument('buffer', nargs='?', default=None, help='Optional config buffer override')
-    parser.add_argument('weight_method', nargs='?', default=None, help='Optional config weight_method override')
-    parser.add_argument('weight_func', nargs='?', default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
-    parser.add_argument('dynamic_buffering', nargs='?', default=None, help='Optional dynamic buffering override (true/false)')
-    parser.add_argument('dynamic_buffer_k', nargs='?', default=None, help='Optional dynamic buffer scaling override')
+    try:
+        from .starter import add_standard_override_arguments
+    except ImportError:
+        from starter import add_standard_override_arguments
+    add_standard_override_arguments(parser)
 
     args = parser.parse_args()
     
@@ -2898,13 +2547,12 @@ EXAMPLES:
         approaches_to_run = VALID_APPROACHES
     
     # Setup paths and logging
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     try:
-        from .starter import load_config, parse_config_overrides
+        from .starter import add_standard_override_arguments, load_config, parse_config_overrides
         from . import pipelines as _pipelines_module
         from .pipelines import create_output_paths, prepare_data, run_voronoi_approach, _resolve_configured_callable
     except ImportError:  # Support running as a top-level script
-        from starter import load_config, parse_config_overrides
+        from starter import add_standard_override_arguments, load_config, parse_config_overrides
         import pipelines as _pipelines_module
         from pipelines import create_output_paths, prepare_data, run_voronoi_approach, _resolve_configured_callable
     
@@ -3009,7 +2657,7 @@ EXAMPLES:
                                     paths_dict['voronoi'][path_key], buffer_id_col='buffer_id',
                                     scale_weights=scale_weights, only_round=only_round, buffering=False,
                                     method=cfg['weight_method'])
-                print("âœ“ Approach 0 completed")
+                print("✓ Approach 0 completed")
             
             # === APPROACH 1: Watershed-constrained Voronoi ===
             elif approach_id == '1':
@@ -3024,7 +2672,7 @@ EXAMPLES:
                                     paths_dict['voronoi'][path_key], buffer_id_col='buffer_id',
                                     scale_weights=scale_weights, only_round=only_round, buffering=True,
                                     method=cfg['weight_method'])
-                print("âœ“ Approach 1 completed")
+                print("✓ Approach 1 completed")
             
             # === APPROACH 2: City Voronoi ===
             elif approach_id == '2':
@@ -3073,11 +2721,11 @@ EXAMPLES:
                                     paths_dict['voronoi']['2'], buffer_id_col='buffer_id',
                                     scale_weights=scale_weights, only_round=only_round, buffering=False,
                                     method=cfg['weight_method'])
-                print("âœ“ Approach 2 completed")
+                print("✓ Approach 2 completed")
         
         except Exception as e:
             logger.error(f"Error executing approach {approach_id}: {e}", exc_info=True)
-            print(f"âœ— Approach {approach_id} FAILED: {e}")
+            print(f"✗ Approach {approach_id} FAILED: {e}")
             sys.exit(1)
     
     print("=" * 80)

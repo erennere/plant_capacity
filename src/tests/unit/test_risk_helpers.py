@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from types import SimpleNamespace
@@ -23,6 +24,32 @@ class _DuckResult:
 
     def df(self):
         return self._dataframe
+
+
+def _fake_duckdb_connection(conn):
+    """Replacement for find_unserved_pop.duckdb_connection yielding ``conn``.
+
+    find_unserved_pop now opens its scratch database through the shared
+    ``utils.duckdb_connection`` contextmanager rather than the duckdb module
+    global, so tests patch the contextmanager instead of ``duckdb.sql``.
+    """
+
+    @contextlib.contextmanager
+    def _cm(*args, **kwargs):
+        yield conn
+
+    return _cm
+
+
+class _FakeSqlConnection:
+    """Stub conn whose ``sql()`` always returns the same prepared result."""
+
+    def __init__(self, result):
+        self._result = result
+
+    def sql(self, query):
+        self.query = query
+        return self._result
 
 
 class _FakeDifferenceConnection:
@@ -74,6 +101,25 @@ class _ImmediateExecutor:
         return _ImmediateFuture(fn(*args, **kwargs))
 
 
+class _FakeUrbanIntersectionConnection:
+    def __init__(self, dataframe):
+        self._dataframe = dataframe
+        self.tables = {}
+
+    def execute(self, sql):
+        self.sql = sql
+        return self
+
+    def register(self, name, dataframe):
+        self.tables[name] = dataframe.copy()
+
+    def df(self):
+        return self._dataframe.copy()
+
+    def close(self):
+        return None
+
+
 def test_find_difference_returns_watershed_minus_served_geometry(monkeypatch, tiny_watershed_gdf):
     served = gpd.GeoDataFrame(
         {"HYBAS_ID": [101], "geometry": [box(-0.08, -0.02, 0.00, 0.02)]},
@@ -81,7 +127,7 @@ def test_find_difference_returns_watershed_minus_served_geometry(monkeypatch, ti
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(find_diff_pop.duckdb, "connect", lambda path: _FakeDifferenceConnection())
+    monkeypatch.setattr(find_diff_pop.duckdb, "connect", lambda *a, **k: _FakeDifferenceConnection())
     monkeypatch.setattr(find_diff_pop.os.path, "exists", lambda path: False)
 
     result = find_diff_pop.find_difference(tiny_watershed_gdf.iloc[[0]].copy(), served, basin_col="HYBAS_ID")
@@ -113,18 +159,24 @@ def test_find_difference_returns_none_when_duckdb_connect_fails(monkeypatch, tin
 def test_create_unserved_pop_writes_filtered_geometries(monkeypatch, tmp_path):
     input_path = tmp_path / "non_served.csv"
     output_path = tmp_path / "filtered.gpkg"
+    urban_path = tmp_path / "urban.gpkg"
+    wwtp_path = tmp_path / "wwtp.gpkg"
     captured = {}
 
     monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: path == str(input_path))
     monkeypatch.setattr(
-        find_unserved_pop.duckdb,
-        "sql",
-        lambda query: _DuckResult(
-            pd.DataFrame(
-                {
-                    "pop_sum": ["12"],
-                    "geometry": [box(0, 0, 1, 1).wkt],
-                }
+        find_unserved_pop,
+        "duckdb_connection",
+        _fake_duckdb_connection(
+            _FakeSqlConnection(
+                _DuckResult(
+                pd.DataFrame(
+                    {
+                        "pop_sum": ["12"],
+                        "geometry": [box(0, 0, 1, 1).wkt],
+                    }
+                    )
+                )
             )
         ),
     )
@@ -132,6 +184,27 @@ def test_create_unserved_pop_writes_filtered_geometries(monkeypatch, tmp_path):
         find_unserved_pop,
         "ensure_output_dir_for_file",
         lambda path: captured.setdefault("ensured", path),
+    )
+    monkeypatch.setattr(
+        find_unserved_pop,
+        "add_buffers_to_WWTP",
+        lambda gdf, **kwargs: captured.update(
+            {"wwtp_filepath": kwargs.get("wwtp_filepath"), "wwtp_buffer": kwargs.get("wwtp_buffer")}
+        ) or gdf,
+    )
+    monkeypatch.setattr(
+        find_unserved_pop,
+        "orchestrate_urban_intersection",
+        lambda gdf, urban_filepath, zoom_level=8, max_workers=32, is_parallel=True, urban_buffer=10000, tolerance=0.0001: captured.update(
+            {
+                "urban_filepath": urban_filepath,
+                "zoom_level": zoom_level,
+                "max_workers": max_workers,
+                "is_parallel": is_parallel,
+                "urban_buffer": urban_buffer,
+                "tolerance": tolerance,
+            }
+        ) or gdf,
     )
 
     original_to_file = gpd.GeoDataFrame.to_file
@@ -144,11 +217,27 @@ def test_create_unserved_pop_writes_filtered_geometries(monkeypatch, tmp_path):
 
     try:
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
-        rows_written = find_unserved_pop.create_unserved_pop(str(input_path), 5, str(output_path))
+        rows_written = find_unserved_pop.create_unserved_pop(
+            str(input_path),
+            5,
+            str(output_path),
+            str(urban_path),
+            str(wwtp_path),
+            max_workers=7,
+            is_parallel=False,
+            zoom_level=9,
+            urban_buffer=250,
+        )
     finally:
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
 
     assert rows_written == 1
+    assert captured["urban_filepath"] == str(urban_path)
+    assert captured["wwtp_filepath"] == str(wwtp_path)
+    assert captured["zoom_level"] == 9
+    assert captured["max_workers"] == 7
+    assert captured["is_parallel"] is False
+    assert captured["urban_buffer"] == 250
     assert captured["ensured"] == str(output_path)
     assert captured["path"] == str(output_path)
     assert captured["driver"] == "GPKG"
@@ -159,25 +248,33 @@ def test_create_unserved_pop_writes_filtered_geometries(monkeypatch, tmp_path):
 def test_create_unserved_pop_raises_when_input_file_is_missing(monkeypatch, tmp_path):
     input_path = tmp_path / "missing.csv"
     output_path = tmp_path / "filtered.gpkg"
+    urban_path = tmp_path / "urban.gpkg"
+    wwtp_path = tmp_path / "wwtp.gpkg"
 
     monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: False)
 
     with pytest.raises(FileNotFoundError, match="Input CSV not found"):
-        find_unserved_pop.create_unserved_pop(str(input_path), 5, str(output_path))
+        find_unserved_pop.create_unserved_pop(
+            str(input_path), 5, str(output_path), str(urban_path), str(wwtp_path)
+        )
 
 
 def test_create_unserved_pop_writes_empty_output_when_query_returns_no_rows(monkeypatch, tmp_path):
     input_path = tmp_path / "non_served.csv"
     output_path = tmp_path / "filtered.gpkg"
+    urban_path = tmp_path / "urban.gpkg"
+    wwtp_path = tmp_path / "wwtp.gpkg"
     captured = {}
 
     monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: path == str(input_path))
     monkeypatch.setattr(
-        find_unserved_pop.duckdb,
-        "sql",
-        lambda query: _DuckResult(pd.DataFrame(columns=["pop_sum", "geometry"])),
+        find_unserved_pop,
+        "duckdb_connection",
+        _fake_duckdb_connection(_FakeSqlConnection(_DuckResult(pd.DataFrame(columns=["pop_sum", "geometry"])))),
     )
     monkeypatch.setattr(find_unserved_pop, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
+    monkeypatch.setattr(find_unserved_pop, "orchestrate_urban_intersection", lambda gdf, *args, **kwargs: gdf)
+    monkeypatch.setattr(find_unserved_pop, "add_buffers_to_WWTP", lambda gdf, **kwargs: gdf)
 
     original_to_file = gpd.GeoDataFrame.to_file
 
@@ -189,7 +286,9 @@ def test_create_unserved_pop_writes_empty_output_when_query_returns_no_rows(monk
 
     try:
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
-        rows_written = find_unserved_pop.create_unserved_pop(str(input_path), 5, str(output_path))
+        rows_written = find_unserved_pop.create_unserved_pop(
+            str(input_path), 5, str(output_path), str(urban_path), str(wwtp_path)
+        )
     finally:
         monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
 
@@ -204,58 +303,86 @@ def test_create_unserved_pop_writes_empty_output_when_query_returns_no_rows(monk
 def test_create_unserved_pop_raises_when_geometry_column_is_missing(monkeypatch, tmp_path):
     input_path = tmp_path / "non_served.csv"
     output_path = tmp_path / "filtered.gpkg"
+    urban_path = tmp_path / "urban.gpkg"
+    wwtp_path = tmp_path / "wwtp.gpkg"
 
     monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: path == str(input_path))
     monkeypatch.setattr(
-        find_unserved_pop.duckdb,
-        "sql",
-        lambda query: _DuckResult(pd.DataFrame({"pop_sum": ["12"]})),
+        find_unserved_pop,
+        "duckdb_connection",
+        _fake_duckdb_connection(_FakeSqlConnection(_DuckResult(pd.DataFrame({"pop_sum": ["12"]})))),
     )
 
     with pytest.raises(ValueError, match="missing required 'geometry' column"):
-        find_unserved_pop.create_unserved_pop(str(input_path), 5, str(output_path))
+        find_unserved_pop.create_unserved_pop(
+            str(input_path), 5, str(output_path), str(urban_path), str(wwtp_path)
+        )
 
 
 def test_create_unserved_pop_rejects_negative_threshold(monkeypatch, tmp_path):
     input_path = tmp_path / "non_served.csv"
     output_path = tmp_path / "filtered.gpkg"
+    urban_path = tmp_path / "urban.gpkg"
+    wwtp_path = tmp_path / "wwtp.gpkg"
 
     monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: path == str(input_path))
 
     with pytest.raises(ValueError, match="threshold"):
-        find_unserved_pop.create_unserved_pop(str(input_path), -1, str(output_path))
+        find_unserved_pop.create_unserved_pop(
+            str(input_path), -1, str(output_path), str(urban_path), str(wwtp_path)
+        )
 
 
-def test_find_unserved_pop_main_raises_when_pop_threshold_is_missing(mock_cfg, monkeypatch):
+def test_find_unserved_pop_main_raises_when_threshold_value_is_missing(mock_cfg, monkeypatch):
     cfg = mock_cfg
-    cfg["figures"] = {}
+    cfg.pop("threshold_value", None)
 
     monkeypatch.setattr(find_unserved_pop.os, "chdir", lambda path: None)
-    monkeypatch.setattr(find_unserved_pop, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(find_unserved_pop, "parse_args", lambda: SimpleNamespace())
+    monkeypatch.setattr(find_unserved_pop, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(find_unserved_pop, "load_config", lambda **overrides: cfg)
 
-    with pytest.raises(KeyError, match="pop_threshold"):
+    with pytest.raises(KeyError, match="threshold_value"):
         find_unserved_pop.main()
 
 
 def test_find_unserved_pop_main_passes_configured_paths_and_threshold(mock_cfg, monkeypatch):
     cfg = mock_cfg
-    cfg["figures"] = {"pop_threshold": 37}
+    cfg["threshold_value"] = 37
+    cfg["max_workers"] = 11
+    cfg["is_parallel"] = False
+    cfg["zoom_level"] = 9
+    cfg["urban_buffer"] = 600
+    cfg["tolerance"] = 0.002
+    cfg["wwtp_buffer"] = 750
+    cfg["country_output_column"] = "ISO_2"
     cfg["paths"]["non_served_outpath"] = "./outputs/non_served.gpkg"
     cfg["paths"]["non_served_above_threshold_outpath"] = "./outputs/non_served_above_threshold.gpkg"
+    cfg["paths"]["urban_areas_filepath"] = "./outputs/urban.gpkg"
+    cfg["paths"]["annotated_all_filepath"] = "./outputs/all_annotated.gpkg"
     captured = {}
 
     monkeypatch.setattr(find_unserved_pop.os, "chdir", lambda path: None)
-    monkeypatch.setattr(find_unserved_pop, "parse_config_overrides", lambda start_index=1: {"config": "unused.yaml"})
+    monkeypatch.setattr(find_unserved_pop, "parse_args", lambda: SimpleNamespace())
+    monkeypatch.setattr(find_unserved_pop, "parse_config_overrides", lambda args=None: {"config": "unused.yaml"})
     monkeypatch.setattr(find_unserved_pop, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(
         find_unserved_pop,
         "create_unserved_pop",
-        lambda filepath, threshold, output_filepath: captured.update(
+        lambda filepath, threshold, output_filepath, urban_filepath, wwtp_filepath, max_workers=32, is_parallel=True, zoom_level=8, urban_buffer=10000, wwtp_buffer=10000, wwtp_country_col="ISO_2", tolerance=0.0001: captured.update(
             {
                 "filepath": filepath,
                 "threshold": threshold,
                 "output_filepath": output_filepath,
+                "urban_filepath": urban_filepath,
+                "wwtp_filepath": wwtp_filepath,
+                "max_workers": max_workers,
+                "is_parallel": is_parallel,
+                "zoom_level": zoom_level,
+                "urban_buffer": urban_buffer,
+                "wwtp_buffer": wwtp_buffer,
+                "wwtp_country_col": wwtp_country_col,
+                "tolerance": tolerance,
             }
         ) or 4,
     )
@@ -266,7 +393,65 @@ def test_find_unserved_pop_main_passes_configured_paths_and_threshold(mock_cfg, 
         "filepath": os.path.abspath("./outputs/non_served.csv"),
         "threshold": 37,
         "output_filepath": os.path.abspath("./outputs/non_served_above_threshold.gpkg"),
+        "urban_filepath": os.path.abspath("./outputs/urban.gpkg"),
+        "wwtp_filepath": os.path.abspath("./outputs/all_annotated.gpkg"),
+        "max_workers": 11,
+        "is_parallel": False,
+        "zoom_level": 9,
+        "urban_buffer": 600,
+        "wwtp_buffer": 750,
+        "wwtp_country_col": "ISO_2",
+        "tolerance": 0.002,
     }
+
+
+def test_orchestrate_urban_intersection_filters_matching_unserved_rows(monkeypatch):
+    unserved = gpd.GeoDataFrame(
+        {
+            "HYBAS_ID": [101, 202],
+            "geometry": [box(0.0, 0.0, 1.0, 1.0), box(10.0, 10.0, 11.0, 11.0)],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    urban = gpd.GeoDataFrame(
+        {"geometry": [box(0.2, 0.2, 0.8, 0.8)]},
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    monkeypatch.setattr(find_unserved_pop, "read_urban_areas", lambda filepath: urban.copy())
+
+    def fake_add_bbox(gdf, zoom_level, max_workers, is_parallel):
+        gdf["tiles"] = [["0-0-8"] for _ in range(len(gdf))]
+        return gdf
+
+    monkeypatch.setattr(find_unserved_pop, "add_bbox", fake_add_bbox)
+    monkeypatch.setattr(find_unserved_pop, "ensure_duckdb_spatial", lambda conn: None)
+    monkeypatch.setattr(find_unserved_pop, "duckdb_connection", _fake_duckdb_connection(_FakeUrbanIntersectionConnection(
+        pd.DataFrame(
+            {
+                "idx": [0],
+                "HYBAS_ID": [101],
+                "geometry": [box(0.0, 0.0, 1.0, 1.0).wkt],
+                "tile": ["0-0-8"],
+                "tiles": [["0-0-8"]],
+            }
+        )
+    )))
+    monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: False)
+
+    result = find_unserved_pop.orchestrate_urban_intersection(
+        unserved.copy(),
+        "urban.gpkg",
+        zoom_level=8,
+        max_workers=2,
+        is_parallel=True,
+        urban_buffer=0,
+    )
+
+    assert result["HYBAS_ID"].tolist() == [101]
+    assert "tiles" not in result.columns
 
 
 def test_find_differences_serial_mode_combines_multiple_epsg_results(monkeypatch, tiny_watershed_gdf):
@@ -282,8 +467,8 @@ def test_find_differences_serial_mode_combines_multiple_epsg_results(monkeypatch
 
     monkeypatch.setattr(
         find_diff_pop,
-        "estimate_utm_epsg",
-        lambda lon, lat: 32631 if lon < 0.5 else 32632,
+        "estimate_utm_epsg_for_geom",
+        lambda geom: 32631 if geom.centroid.x < 0.5 else 32632,
     )
 
     def fake_process_epsg_group(epsg, watershed_gdf, pop_local, basin_col="HYBAS_ID"):
@@ -320,7 +505,7 @@ def test_find_differences_returns_empty_geodataframe_when_all_groups_skip(monkey
         crs="EPSG:4326",
     )
 
-    monkeypatch.setattr(find_diff_pop, "estimate_utm_epsg", lambda lon, lat: 32631)
+    monkeypatch.setattr(find_diff_pop, "estimate_utm_epsg_for_geom", lambda geom: 32631)
     monkeypatch.setattr(find_diff_pop, "process_epsg_group", lambda *args, **kwargs: None)
 
     result = find_diff_pop.find_differences(
@@ -352,7 +537,7 @@ def test_find_differences_parallel_mode_collects_executor_results(monkeypatch, t
 
     monkeypatch.setattr(find_diff_pop, "ProcessPoolExecutor", _ImmediateExecutor)
     monkeypatch.setattr(find_diff_pop, "as_completed", lambda futures: futures)
-    monkeypatch.setattr(find_diff_pop, "estimate_utm_epsg", lambda lon, lat: 32631 if lon < 0.5 else 32632)
+    monkeypatch.setattr(find_diff_pop, "estimate_utm_epsg_for_geom", lambda geom: 32631 if geom.centroid.x < 0.5 else 32632)
 
     def fake_process_epsg_group(epsg, watershed_gdf, pop_local, basin_col="HYBAS_ID"):
         captured.append((epsg, basin_col, sorted(pop_local[pop_local["epsg"] == epsg]["HYBAS_ID"].tolist())))
@@ -382,59 +567,66 @@ def test_find_differences_parallel_mode_collects_executor_results(monkeypatch, t
 def test_create_unserved_pop_rejects_non_integer_like_threshold(monkeypatch, tmp_path):
     input_path = tmp_path / "non_served.csv"
     output_path = tmp_path / "filtered.gpkg"
+    urban_path = tmp_path / "urban.gpkg"
 
     monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: path == str(input_path))
 
     with pytest.raises(ValueError, match="integer-like"):
-        find_unserved_pop.create_unserved_pop(str(input_path), "not-a-number", str(output_path))
+        find_unserved_pop.create_unserved_pop(
+            str(input_path), "not-a-number", str(output_path), str(urban_path), str(tmp_path / "wwtp.gpkg")
+        )
 
 
-def test_find_unserved_pop_script_entrypoint_runs_via_fallback_imports(monkeypatch, tmp_path):
-    import os
-    import runpy
-    from pathlib import Path
-
-    import src.create_voronoi as create_voronoi_mod
-    import src.starter as starter_mod
-
+def test_find_unserved_pop_main_runs_with_module_imports(monkeypatch, tmp_path):
     cfg = {
-        "figures": {"pop_threshold": 5},
+        "threshold_value": 5,
+        "max_workers": 4,
+        "is_parallel": True,
+        "zoom_level": 8,
+        "urban_buffer": 100,
+        "tolerance": 0.0001,
+        "wwtp_buffer": 10000,
+        "country_output_column": "ISO_2",
         "paths": {
             "non_served_outpath": str(tmp_path / "non_served.gpkg"),
             "non_served_above_threshold_outpath": str(tmp_path / "filtered.gpkg"),
+            "urban_areas_filepath": str(tmp_path / "urban.gpkg"),
+            "annotated_all_filepath": str(tmp_path / "all_annotated.gpkg"),
         },
     }
     captured = {}
-    module_path = Path(__file__).resolve().parents[3] / "src" / "pop_at_risk_river_calculations" / "find_unserved_pop.py"
-
-    monkeypatch.setattr(os, "chdir", lambda path: None)
-    monkeypatch.setattr(find_unserved_pop.os.path, "exists", lambda path: path == os.path.abspath(str(tmp_path / "non_served.csv")))
-    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda start_index=1: {})
-    monkeypatch.setattr(starter_mod, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(create_voronoi_mod, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
+    monkeypatch.setattr(find_unserved_pop.os, "chdir", lambda path: None)
+    monkeypatch.setattr(find_unserved_pop, "parse_args", lambda: SimpleNamespace())
+    monkeypatch.setattr(find_unserved_pop, "parse_config_overrides", lambda args=None: {})
+    monkeypatch.setattr(find_unserved_pop, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(
-        find_unserved_pop.duckdb,
-        "sql",
-        lambda query: _DuckResult(pd.DataFrame({"pop_sum": ["7"], "geometry": [box(0, 0, 1, 1).wkt]})),
+        find_unserved_pop,
+        "create_unserved_pop",
+        lambda filepath, threshold, output_filepath, urban_filepath, wwtp_filepath, max_workers=32, is_parallel=True, zoom_level=8, urban_buffer=10000, wwtp_buffer=10000, wwtp_country_col="ISO_2", tolerance=0.0001: captured.update(
+            {
+                "filepath": filepath,
+                "threshold": threshold,
+                "output_filepath": output_filepath,
+                "urban_filepath": urban_filepath,
+                "max_workers": max_workers,
+                "is_parallel": is_parallel,
+                "zoom_level": zoom_level,
+                "urban_buffer": urban_buffer,
+            }
+        ) or 1,
     )
 
-    original_to_file = gpd.GeoDataFrame.to_file
+    find_unserved_pop.main()
 
-    def fake_to_file(self, path, driver=None, index=None, **kwargs):
-        captured["write"] = {"path": path, "driver": driver, "index": index, "rows": len(self)}
-
-    try:
-        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", fake_to_file)
-        runpy.run_path(str(module_path), run_name="__main__")
-    finally:
-        monkeypatch.setattr(gpd.GeoDataFrame, "to_file", original_to_file)
-
-    assert captured["ensured"] == os.path.abspath(cfg["paths"]["non_served_above_threshold_outpath"])
-    assert captured["write"] == {
-        "path": os.path.abspath(cfg["paths"]["non_served_above_threshold_outpath"]),
-        "driver": "GPKG",
-        "index": False,
-        "rows": 1,
+    assert captured == {
+        "filepath": os.path.abspath(str(tmp_path / "non_served.csv")),
+        "threshold": 5,
+        "output_filepath": os.path.abspath(str(tmp_path / "filtered.gpkg")),
+        "urban_filepath": os.path.abspath(str(tmp_path / "urban.gpkg")),
+        "max_workers": 4,
+        "is_parallel": True,
+        "zoom_level": 8,
+        "urban_buffer": 100,
     }
 
 
@@ -508,14 +700,23 @@ def test_parse_args_parses_index_parallel_flag_and_optional_overrides(monkeypatc
         "argv",
         [
             "find_diff_pop.py",
+            "--index",
             "2",
+            "--is-parallel",
             "false",
+            "--level",
             "lvl",
+            "--version",
             "v2",
+            "--buffer",
             "15000",
+            "--weight-method",
             "linear",
+            "--weight-func",
             "",
+            "--dynamic-buffering",
             "true",
+            "--dynamic-buffer-k",
             "0.75",
         ],
     )
@@ -539,13 +740,14 @@ def test_find_diff_pop_main_selects_sorted_input_and_writes_output(
     tiny_watershed_gdf,
 ):
     cfg = mock_cfg
-    cfg["paths"]["hydrowaste"] = "watersheds.gpkg"
+    cfg["paths"]["watershed"] = "watersheds.gpkg"
     cfg["paths"]["pop_output_dir"] = "./pop_outputs"
     cfg["paths"]["pop_tif_dir"] = "./tifs"
     cfg["paths"]["pop_dif_output_dir"] = "./diff_outputs"
     cfg["max_workers"] = 3
     cfg["basin_column_name"] = "HYBAS_ID"
     cfg["country_output_column"] = "country"
+    cfg["figures"] = {"approach": 1}
     captured = {}
 
     pop_gdf = gpd.GeoDataFrame(
@@ -574,7 +776,7 @@ def test_find_diff_pop_main_selects_sorted_input_and_writes_output(
     def fake_read_file(path):
         if path == os.path.join(cfg["paths"]["pop_output_dir"], "z_input.gpkg"):
             return pop_gdf.copy()
-        if path == cfg["paths"]["hydrowaste"]:
+        if path == cfg["paths"]["watershed"]:
             return tiny_watershed_gdf.copy()
         raise AssertionError(f"Unexpected read path: {path}")
 
@@ -647,10 +849,11 @@ def test_find_diff_pop_main_selects_sorted_input_and_writes_output(
 
 def test_find_diff_pop_main_raises_when_no_input_files_exist(mock_cfg, monkeypatch):
     cfg = mock_cfg
-    cfg["paths"]["hydrowaste"] = "watersheds.gpkg"
+    cfg["paths"]["watershed"] = "watersheds.gpkg"
     cfg["paths"]["pop_output_dir"] = "./pop_outputs"
     cfg["paths"]["pop_tif_dir"] = "./tifs"
     cfg["paths"]["pop_dif_output_dir"] = "./diff_outputs"
+    cfg["figures"] = {"approach": 1}
 
     monkeypatch.setattr(find_diff_pop, "parse_args", lambda: SimpleNamespace(index=0, is_parallel=True))
     monkeypatch.setattr(find_diff_pop.os, "chdir", lambda path: None)
@@ -664,10 +867,11 @@ def test_find_diff_pop_main_raises_when_no_input_files_exist(mock_cfg, monkeypat
 
 def test_find_diff_pop_main_ignores_non_gpkg_files(mock_cfg, monkeypatch):
     cfg = mock_cfg
-    cfg["paths"]["hydrowaste"] = "watersheds.gpkg"
+    cfg["paths"]["watershed"] = "watersheds.gpkg"
     cfg["paths"]["pop_output_dir"] = "./pop_outputs"
     cfg["paths"]["pop_tif_dir"] = "./tifs"
     cfg["paths"]["pop_dif_output_dir"] = "./diff_outputs"
+    cfg["figures"] = {"approach": 1}
 
     monkeypatch.setattr(find_diff_pop, "parse_args", lambda: SimpleNamespace(index=0, is_parallel=True))
     monkeypatch.setattr(find_diff_pop.os, "chdir", lambda path: None)
@@ -681,10 +885,11 @@ def test_find_diff_pop_main_ignores_non_gpkg_files(mock_cfg, monkeypatch):
 
 def test_find_diff_pop_main_raises_when_index_is_out_of_range(mock_cfg, monkeypatch):
     cfg = mock_cfg
-    cfg["paths"]["hydrowaste"] = "watersheds.gpkg"
+    cfg["paths"]["watershed"] = "watersheds.gpkg"
     cfg["paths"]["pop_output_dir"] = "./pop_outputs"
     cfg["paths"]["pop_tif_dir"] = "./tifs"
     cfg["paths"]["pop_dif_output_dir"] = "./diff_outputs"
+    cfg["figures"] = {"approach": 1}
 
     monkeypatch.setattr(find_diff_pop, "parse_args", lambda: SimpleNamespace(index=3, is_parallel=True))
     monkeypatch.setattr(find_diff_pop.os, "chdir", lambda path: None)

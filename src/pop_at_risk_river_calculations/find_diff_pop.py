@@ -14,16 +14,12 @@ import pandas as pd
 import geopandas as gpd
 from shapely import from_wkt, to_wkt
 from concurrent.futures import ProcessPoolExecutor, as_completed
-try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
-    from ..add_pop import intersect_all_files
-except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
-    from src.add_pop import intersect_all_files
+from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+from ..geo_utils import ensure_duckdb_spatial, estimate_utm_epsg_for_geom
+from ..utils import configure_logging, duckdb_connection, ensure_output_dir_for_file
+from ..add_pop import intersect_all_files
+from ..pipelines import create_pop_output_paths
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 def find_difference(watershed_gdf, pop_gdf, basin_col='HYBAS_ID'):
@@ -48,35 +44,28 @@ def find_difference(watershed_gdf, pop_gdf, basin_col='HYBAS_ID'):
 
     watershed_local["geometry"] = watershed_local["geometry"].map(to_wkt)
     pop_local["geometry"] = pop_local["geometry"].map(to_wkt)
-    temp_file = f'temp_{str(int(random.randint(0, int(1e12))))}.db'
-    conn = None
     try:
-        conn = duckdb.connect(temp_file)
-        conn.execute('INSTALL SPATIAL; LOAD SPATIAL;')
-        conn.register("watershed_gdf", watershed_local)
-        conn.register("pop_gdf", pop_local)
+        with duckdb_connection() as conn:
+            ensure_duckdb_spatial(conn)
+            conn.register("watershed_gdf", watershed_local)
+            conn.register("pop_gdf", pop_local)
 
-        query = f"""
-        SELECT a.*,
-        ST_AsText(ST_Difference(ST_GEOMFROMTEXT(a.geometry), ST_GEOMFROMTEXT(b.geometry))) as geometry
-        FROM watershed_gdf AS a
-        LEFT JOIN pop_gdf AS b
-        ON a.{basin_col} = b.{basin_col}
-        WHERE b.{basin_col} IS NOT NULL
-        """
-        df = conn.execute(query).df()
-        df = df[df["geometry"].notna()].copy()
-        df['geometry'] = df['geometry'].map(from_wkt)
-        logger.info("Computed %s difference rows", len(df))
-        return df
+            query = f"""
+            SELECT a.*,
+            ST_AsText(ST_Difference(ST_GEOMFROMTEXT(a.geometry), ST_GEOMFROMTEXT(b.geometry))) as geometry
+            FROM watershed_gdf AS a
+            LEFT JOIN pop_gdf AS b
+            ON a.{basin_col} = b.{basin_col}
+            WHERE b.{basin_col} IS NOT NULL
+            """
+            df = conn.execute(query).df()
+            df = df[df["geometry"].notna()].copy()
+            df['geometry'] = df['geometry'].map(from_wkt)
+            logger.info("Computed %s difference rows", len(df))
+            return df
     except Exception as e:
         logger.exception("Error while computing differences: %s", e)
         return None
-    finally:
-        if conn is not None:
-            conn.close()
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
 
 def process_epsg_group(epsg, watershed_gdf, pop_gdf, basin_col='HYBAS_ID'):
     """Process one EPSG bucket and return differences in EPSG:4326."""
@@ -97,9 +86,7 @@ def process_epsg_group(epsg, watershed_gdf, pop_gdf, basin_col='HYBAS_ID'):
 def find_differences(watershed_gdf, pop_gdf, max_workers=None, is_parallel=True, basin_col='HYBAS_ID'):
     """Compute all differences by grouping inputs in local UTM EPSG zones."""
     pop_local = pop_gdf.copy()
-    pop_local['epsg'] = pop_local['geometry'].apply(
-        lambda geom: estimate_utm_epsg(geom.centroid.x, geom.centroid.y)
-    )
+    pop_local['epsg'] = pop_local['geometry'].apply(estimate_utm_epsg_for_geom)
     gdf_list = []
 
     if is_parallel:
@@ -136,24 +123,22 @@ def parse_bool(value):
     raise ValueError(f"Invalid boolean value: {value}")
 
 def parse_args():
-    """Parse CLI args for input index and parallel execution mode."""
+    """Parse named CLI args for input index and parallel execution mode."""
     parser = argparse.ArgumentParser(
         description="Compute population difference polygons for one input file index."
     )
-    parser.add_argument("index", type=int, help="0-based file index from filtered pop output files")
     parser.add_argument(
-        "is_parallel",
-        nargs="?",
+        "--index",
+        type=int,
+        default=0,
+        help="0-based file index from filtered pop output files",
+    )
+    parser.add_argument(
+        "--is-parallel",
         default="true",
         help="Whether to process EPSG groups in parallel (true/false)",
     )
-    parser.add_argument("level", nargs="?", default=None)
-    parser.add_argument("version", nargs="?", default=None)
-    parser.add_argument("buffer", nargs="?", default=None)
-    parser.add_argument("weight_method", nargs="?", default=None)
-    parser.add_argument("weight_func", nargs="?", default=None, help="Optional config weight_func override: 'mult', 'add', or ''")
-    parser.add_argument("dynamic_buffering", nargs="?", default=None, help="Optional dynamic buffering override (true/false)")
-    parser.add_argument("dynamic_buffer_k", nargs="?", default=None, help="Optional dynamic buffer scaling override")
+    add_standard_override_arguments(parser)
     args = parser.parse_args()
     args.is_parallel = parse_bool(args.is_parallel)
     return args
@@ -161,28 +146,49 @@ def parse_args():
 def main():
     """Load config, select one population file, compute differences, and save output."""
     args = parse_args()
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="find_diff_pop", **overrides)
 
-    watershed_filepath = cfg['paths']['hydrowaste']
+    watershed_filepath = cfg['paths']['watershed']
     max_workers = cfg['max_workers']
     pop_output_dir = cfg['paths']['pop_output_dir']
     tif_dir = cfg['paths']['pop_tif_dir']
     pop_dif_output_dir = cfg['paths']['pop_dif_output_dir']
+
+    approach = str(cfg['figures']['approach'])
+    voronoi_map = create_pop_output_paths(cfg)['voronoi']
+    if approach not in voronoi_map:
+        raise KeyError(
+            f"Configured figures.approach '{approach}' is not available; "
+            f"expected one of {sorted(voronoi_map)}"
+        )
+
+    configured_input_path = os.path.abspath(voronoi_map[approach])
+    configured_input_name = os.path.basename(configured_input_path)
 
     filenames = sorted([
         x for x in os.listdir(pop_output_dir) if str(x).lower().endswith('.gpkg')
     ])
     if not filenames:
         raise FileNotFoundError(f"No matching input .gpkg files found in {pop_output_dir}")
-    if args.index < 0 or args.index >= len(filenames):
-        raise IndexError(f"index must be in [0, {len(filenames) - 1}], got {args.index}")
+    if os.path.exists(configured_input_path):
+        filename = configured_input_name
+        pop_input_path = configured_input_path
+        logger.info("Selected configured input file %s for approach %s", filename, approach)
+    else:
+        if args.index < 0 or args.index >= len(filenames):
+            raise IndexError(f"index must be in [0, {len(filenames) - 1}], got {args.index}")
+        filename = filenames[args.index]
+        pop_input_path = os.path.join(pop_output_dir, filename)
+        logger.warning(
+            "Configured input file not found: %s. Falling back to indexed selection %s (%s/%s)",
+            configured_input_path,
+            filename,
+            args.index,
+            len(filenames),
+        )
 
-    filename = filenames[args.index]
-    logger.info("Selected input file %s (%s/%s)", filename, args.index, len(filenames))
-
-    pop_gdf = gpd.read_file(os.path.join(pop_output_dir, filename))
+    pop_gdf = gpd.read_file(pop_input_path)
     watershed_gdf = gpd.read_file(watershed_filepath)
     logger.info("Loaded %s population features and %s watershed features", len(pop_gdf), len(watershed_gdf))
 
@@ -199,6 +205,7 @@ def main():
     logger.info("Wrote output to %s", output_filepath)
 
 if __name__ == '__main__':
+    configure_logging()
     main()
 
 

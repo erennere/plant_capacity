@@ -1,7 +1,7 @@
 import os
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from src.create_voronoi import ensure_output_dir_for_file
+from src.utils import ensure_output_dir_for_file
 
 # ==========================================================
 # PARAMETERS (adjust here)
@@ -22,10 +22,10 @@ os.makedirs(output_folder, exist_ok=True)
 grid = gpd.read_file(grid_fp)
 layers = [gpd.read_file(fp) for fp in layers_fps]
 
-print(f"ðŸ—º Loaded {len(layers)} layers")
+print(f"🗺 Loaded {len(layers)} layers")
 
 if id_field not in grid.columns:
-    raise Exception(f"âŒ The field '{id_field}' does not exist in the grid layer.")
+    raise Exception(f"❌ The field '{id_field}' does not exist in the grid layer.")
 
 # EXPORT LOOP
 for i, feature in grid.iterrows():
@@ -63,6 +63,6 @@ for i, feature in grid.iterrows():
         wf.write(f"{extent[0]}\n")
         wf.write(f"{extent[3]}\n")
 
-    print(f"âœ… Exported and georeferenced: {file_path}")
+    print(f"✅ Exported and georeferenced: {file_path}")
 
-print("ðŸŽ¯ All tiles exported successfully!")
+print("🎯 All tiles exported successfully!")

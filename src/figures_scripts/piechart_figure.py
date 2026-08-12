@@ -4,6 +4,7 @@ The figure combines a choropleth background with country-level donut markers
 that split residential and industrial WWTP area indicators.
 """
 
+import argparse
 import os
 import numpy as np
 import geopandas as gpd
@@ -12,47 +13,30 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Patch
 from matplotlib.colors import LogNorm
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 
 try:
-    from ..starter import load_config, parse_config_overrides
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
     from ..pipelines import create_pop_output_paths
-    from ..create_voronoi import ensure_output_dir_for_file
+    from ..utils import configure_logging, ensure_output_dir_for_file, industrial_category_mask, resolve_latest_zonal_sum_column
+    from ._shared import FULL_STATS, ensure_population_percentage_column
+    from . import _shared
 except ImportError:
-    from src.starter import load_config, parse_config_overrides
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
     from src.pipelines import create_pop_output_paths
-    from src.create_voronoi import ensure_output_dir_for_file
+    from src.utils import configure_logging, ensure_output_dir_for_file, industrial_category_mask, resolve_latest_zonal_sum_column
+    from src.figures_scripts._shared import FULL_STATS, ensure_population_percentage_column
+    from src.figures_scripts import _shared
 
 def aggregate_by_country(gdf, country_column, agg_column, industrial_column=None, is_pop=False):
     """Aggregate facility-level attributes to country-level summary statistics."""
-    gdf = gdf.copy()
-    agg_dict = {
-        f"{agg_column}_sum": "sum",
-        f"{agg_column}_mean": "mean",
-        f"{agg_column}_median": "median",
-        f"{agg_column}_std": "std",
-    }
-
-    if is_pop:
-        gdf = gdf.dropna(subset=[country_column, agg_column])
-        aggregated = gdf.groupby(country_column)[agg_column].agg(**agg_dict).reset_index()
-
-    else:
-        if industrial_column is None:
-            raise ValueError("industrial_column must be provided when is_pop=False")
-
-        gdf = gdf.dropna(subset=[country_column, agg_column, industrial_column])
-        grouped = gdf.groupby([country_column, industrial_column])[agg_column].agg(**agg_dict).reset_index()
-
-        ind = grouped[grouped[industrial_column] == True].drop(columns=[industrial_column]).reset_index(drop=True)
-        res = grouped[grouped[industrial_column] != True].drop(columns=[industrial_column]).reset_index(drop=True)
-        ind = ind.rename(columns={c: f"IND_{c}" for c in ind.columns if c != country_column})
-        res = res.rename(columns={c: f"RES_{c}" for c in res.columns if c != country_column})
-        aggregated = res.merge(ind, on=country_column, how="left")
-    return aggregated
+    return _shared.aggregate_by_country(
+        gdf, country_column, agg_column,
+        industrial_column=industrial_column, is_pop=is_pop, stats=FULL_STATS,
+    )
 
 def plot_splitted_piechart(dist_tag1, dist_tag2, ax,
                             size_tag1, size_tag2, min_size,
@@ -109,23 +93,12 @@ def get_pos(geometry):
 
 def calculate_size(value, min_value, max_value, min_size, max_size, scale='log'):
     """Map a value to a plotted pie size using log or linear scaling."""
-    if not np.isfinite(value):
-        return min_size
-    if not np.isfinite(min_value) or not np.isfinite(max_value):
-        return min_size
+    return _shared.calculate_size(
+        value, min_value, max_value, min_size, max_size,
+        scale=scale, degenerate='mid', floor_nonpositive=False,
+    )
 
-    if max_value <= min_value:
-        return (min_size + max_size) / 2.0
 
-    if scale == 'log':
-        if value <= 0 or min_value <= 0 or max_value <= 0:
-            return min_size
-        return (np.log(value) - np.log(min_value)) / (np.log(max_value) - np.log(min_value)) * (max_size - min_size) + min_size
-    elif scale == 'linear':
-        return (value - min_value) / (max_value - min_value) * (max_size - min_size) + min_size
-    else: 
-        raise ValueError("Invalid scale")
-    
 def round_numbers(arr, breaks):
     """Generate rounded legend break labels spanning the observed value range."""
     arr = np.asarray(arr)
@@ -142,56 +115,24 @@ def round_numbers(arr, breaks):
     return rounded
 
 
-def ensure_population_percentage_column(df, preferred_col="population_served_index", zonal_sum_col="2024_zonal_sum"):
-    """Ensure a population-served percentage column exists and return its name."""
-    if preferred_col in df.columns:
-        return preferred_col
-
-    if {'population_served', 'population_total'}.issubset(df.columns):
-        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
-        num = pd.to_numeric(df['population_served'], errors='coerce')
-        df[preferred_col] = (num / denom).fillna(0)
-        return preferred_col
-
-    zonal_sum_sum_col = f"{zonal_sum_col}_sum"
-    if {zonal_sum_sum_col, 'population_total'}.issubset(df.columns):
-        denom = pd.to_numeric(df['population_total'], errors='coerce').replace(0, np.nan)
-        num = pd.to_numeric(df[zonal_sum_sum_col], errors='coerce')
-        df[preferred_col] = (num / denom).fillna(0)
-        return preferred_col
-
-    raise KeyError(
-        "Could not derive population-served percentage. Expected one of: "
-        "'population_served_index', ('population_served' + 'population_total'), "
-        f"or ('{zonal_sum_sum_col}' + 'population_total')."
-    )
-
-
 def resolve_zonal_sum_columns(df, preferred):
     """Resolve preferred zonal-sum column with fallback to latest available year."""
-    if preferred in df.columns:
-        return preferred
-
-    candidate_cols = []
-    for col in df.columns:
-        if not col.endswith('_zonal_sum'):
-            continue
-        try:
-            year = int(col.split('_')[0])
-        except (ValueError, IndexError):
-            year = -1
-        candidate_cols.append((year, col))
-
-    if not candidate_cols:
-        raise KeyError("No '*_zonal_sum' column found in population layer.")
-
-    candidate_cols.sort(key=lambda x: x[0])
-    return candidate_cols[-1][1]
+    return resolve_latest_zonal_sum_column(
+        df,
+        preferred,
+        missing_message="No '*_zonal_sum' column found in population layer.",
+    )[1]
             
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run piechart_figure.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Create the static global WWTP-type summary figure and save it to disk."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="piechart_figure", **overrides)
 
     approach = str(cfg['figures']['approach'])
@@ -208,6 +149,8 @@ def main():
     tag1 = 'round_area'
     tag2 = 'wwtp_area_rect_2'
     min_total_size = float(cfg['min_total_size'])
+    nodata_country_color = cfg['nodata_country_color']
+    nodata_country_label = cfg['nodata_country_label']
     scale = 'linear'
     agg_type = 'sum'
 
@@ -227,9 +170,17 @@ def main():
     zonal_sum_col = resolve_zonal_sum_columns(pop_gdf, zonal_sum_col)
     filter_col = zonal_sum_col
     agg_columns[True] = [zonal_sum_col]
-    #pop_gdf[industrial_col] = np.random.randint(0, 2, len(pop_gdf)).astype(bool)
-    industrial_categories = {str(c) for c in cfg['industrial_category_numbers']}
-    pop_gdf[industrial_col] = pop_gdf['category_number'].astype(str).isin(industrial_categories)
+    # Mixed-use counts as industrial here too, so this split matches the
+    # unconnected-industrial layer instead of disagreeing with it.
+    industrial_mask = industrial_category_mask(
+        pop_gdf, cfg['industrial_category_numbers'], cfg['mix_use_categories']
+    )
+    if industrial_mask is None:
+        raise KeyError(
+            "Column 'category_number' is required to split industrial from "
+            f"residential sites; columns present: {sorted(pop_gdf.columns)}"
+        )
+    pop_gdf[industrial_col] = industrial_mask
 
     if not os.path.exists(stats_filepath):
         raise FileNotFoundError(f"Stats file not found: {stats_filepath}")
@@ -253,7 +204,7 @@ def main():
     boundaries = boundaries.drop_duplicates(subset=['country'])
     #boundaries[pop_column] = boundaries[pop_column]/1000
     pop_column = ensure_population_percentage_column(boundaries, pop_column, zonal_sum_col)
-    boundaries[pop_column] = pd.to_numeric(boundaries[pop_column], errors='coerce').fillna(0) * 100
+    boundaries[pop_column] = pd.to_numeric(boundaries[pop_column], errors='coerce') * 100
     """     boundaries[boundaries.geometry.notna()].plot(
         ax=ax,
         column=pop_column,
@@ -272,20 +223,36 @@ def main():
     ) """
     # Make a copy of your GeoDataFrame with valid geometries
     gdf = boundaries[boundaries.geometry.notna()].copy()
-    data = gdf[pop_column].dropna()
-    log_norm = LogNorm(vmin=data.min(),vmax=data.max())
-    norm = Normalize(vmin=data.min(),vmax=data.max())
+    gdf_nodata = gdf[gdf[pop_column].isna()].copy()
+    gdf_plot = gdf[gdf[pop_column].notna()].copy()
+
+    data = gdf_plot[pop_column].dropna()
+    if data.empty:
+        log_norm = LogNorm(vmin=1.0, vmax=10.0)
+        norm = Normalize(vmin=0.0, vmax=1.0)
+    else:
+        log_norm = LogNorm(vmin=data.min(), vmax=data.max())
+        norm = Normalize(vmin=data.min(), vmax=data.max())
     
     # Plot choropleth WITHOUT automatic legend
-    gdf.plot(
-        ax=ax,
-        column=pop_column,
-        cmap='viridis',
-        edgecolor='white',
-        linewidth=0.5,
-        legend=False##,
-        ##norm=log_norm,  # <-- THIS
-    )
+    if not gdf_nodata.empty:
+        gdf_nodata.plot(
+            ax=ax,
+            color=nodata_country_color,
+            edgecolor='white',
+            linewidth=0.5,
+            legend=False,
+        )
+
+    if not gdf_plot.empty:
+        gdf_plot.plot(
+            ax=ax,
+            column=pop_column,
+            cmap='viridis',
+            edgecolor='white',
+            linewidth=0.5,
+            legend=False,
+        )
     ax.set_global()
 
     # ScalarMappable for manual colorbar
@@ -302,6 +269,10 @@ def main():
 
     # Add coastlines for context
     ax.coastlines(resolution='110m', color='black', linewidth=0.5)
+    if not gdf_nodata.empty:
+        nodata_patch = Patch(facecolor=nodata_country_color, edgecolor='white', label=nodata_country_label)
+        ax.legend(handles=[nodata_patch], loc='upper left', frameon=True, fontsize=9)
+
     gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
     gl.top_labels = False
     gl.left_labels = False
@@ -365,13 +336,25 @@ def main():
         largest_size = max_pie_size
     legend_ax = inset_axes(ax, width=largest_size, height=largest_size, loc='lower left', bbox_to_anchor=(0.06, 0.02, 1, 1), bbox_transform=ax.transAxes)
     legend_ax.axis('off')
-    for i, size in enumerate([5000000, 10000000, 20000000, 30000000, 40000000, 50000000]):
-        relative_size = calculate_size(size, min_size, max_size, min_pie_size, max_pie_size, scale)/largest_size
+
+    # Keep the classic stacked-circle legend, but place it a bit higher and with a wider value range.
+    legend_sizes = [5000000, 10000000, 20000000, 40000000, 80000000, 120000000]
+    y_base = 0.34
+    for size in legend_sizes:
+        relative_size = calculate_size(size, min_size, max_size, min_pie_size, max_pie_size, scale) / largest_size
         if not np.isfinite(relative_size) or relative_size <= 0:
             continue
-        circle = Circle((0.5, 0.25 + relative_size / 2), relative_size / 2, color='black', fill=False)
+        circle = Circle((0.5, y_base + relative_size / 2), relative_size / 2, color='black', fill=False)
         legend_ax.add_patch(circle)
-        legend_ax.annotate(str(round(size/10**6)) + r" $\text{km}^2$", xy=(0.5, 0.25 + relative_size), xytext=(1.05, 0.25 + relative_size), ha='left', va='center', arrowprops=dict(arrowstyle='-', color='black'),fontsize=8)
+        legend_ax.annotate(
+            str(round(size / 10**6)) + r" $\text{km}^2$",
+            xy=(0.5, y_base + relative_size),
+            xytext=(1.05, y_base + relative_size),
+            ha='left',
+            va='center',
+            arrowprops=dict(arrowstyle='-', color='black'),
+            fontsize=8,
+        )
     legend_ax.set_title("Total WWTP Area", fontsize=14, weight="semibold")
 
     #create the piechart legend
@@ -399,4 +382,5 @@ def main():
     plt.savefig(cfg['paths']['static_piechart_filepath'], dpi=200)
 
 if __name__ == '__main__':
+    configure_logging()
     main()

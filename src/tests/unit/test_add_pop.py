@@ -8,7 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 
 from src import add_pop
 
@@ -23,7 +23,7 @@ def _add_pop_cfg_defaults(request):
 
     cfg = request.getfixturevalue("mock_cfg")
     cfg.setdefault("add_pop_max_workers", 8)
-    cfg.setdefault("pop_voronoi_overwrite", False)
+    cfg.setdefault("overwrite_existing", False)
 
 
 class _ImmediateFuture:
@@ -79,6 +79,24 @@ def test_find_country_tif_files_maps_existing_country_directories(monkeypatch, t
     assert result["ZZ"] is None
 
 
+def test_find_country_tif_files_normalizes_whitespace_and_case(monkeypatch, tmp_path):
+    pop_root = tmp_path / "population"
+    deu_dir = pop_root / "deu"
+    deu_dir.mkdir(parents=True)
+    (deu_dir / "worldpop_2020_deu.tif").write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(
+        add_pop,
+        "get_iso_codes",
+        lambda: ({"deu": "DE"}, {"DE": "DEU"}, {}, {}),
+    )
+
+    result = add_pop.find_country_tif_files([" de ", "de", "DE"], str(pop_root))
+
+    assert list(result.keys()) == ["DE"]
+    assert len(result["DE"]) == 1
+
+
 def test_intersect_single_file_clips_negative_stats_to_zero(monkeypatch, tiny_watershed_gdf):
     tif_path = "synthetic_2020_population.tif"
     original_exists = add_pop.os.path.exists
@@ -99,6 +117,32 @@ def test_intersect_single_file_clips_negative_stats_to_zero(monkeypatch, tiny_wa
 
     assert result["2020_zonal_sum"].tolist() == pytest.approx([10.0, 0.0])
     assert result["2020_zonal_std"].tolist() == pytest.approx([1.0, 0.0])
+
+
+def test_intersect_single_file_drops_empty_geometries_before_extract_and_sets_zero(monkeypatch):
+    gdf = gpd.GeoDataFrame(
+        {
+            "ISO_2": ["DE", "DE"],
+            "geometry": [Polygon([(0, 0), (0, 1), (1, 1), (0, 0)]), Polygon()],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    tif_path = "worldpop_2024_deu.tif"
+    monkeypatch.setattr(add_pop.os.path, "exists", lambda path: path == tif_path)
+    monkeypatch.setattr(add_pop.rasterio, "open", lambda path: _RasterStub())
+
+    def fake_extract(rast, vec, ops, output):
+        assert len(vec) == 1
+        return pd.DataFrame({"sum": [12.0], "stdev": [4.0]})
+
+    monkeypatch.setattr(add_pop, "exact_extract", fake_extract)
+
+    result = add_pop.intersect_single_file(gdf.copy(), [tif_path], all_years=True)
+
+    assert result["2024_zonal_sum"].tolist() == pytest.approx([12.0, 0.0])
+    assert result["2024_zonal_std"].tolist() == pytest.approx([4.0, 0.0])
 
 
 def test_find_newest_country_tif_files_selects_highest_year_from_seeded_random_order(monkeypatch, tmp_path):
@@ -296,12 +340,12 @@ def test_main_passes_configured_paths_and_avoids_false_existing_output_warning(m
     cfg["paths"]["pop_output_dir"] = str(tmp_path / "new_output")
     cfg["country_output_column"] = "ISO_2"
     cfg["add_pop_max_workers"] = 5
-    cfg["pop_voronoi_overwrite"] = False
+    cfg["overwrite_existing"] = False
     captured = {}
     state = {"output_exists": False}
 
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "2"])
-    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(sys, "argv", ["add_pop.py", "--index", "2"])
+    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(add_pop, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(add_pop.os, "chdir", lambda path: None)
 
@@ -321,7 +365,7 @@ def test_main_passes_configured_paths_and_avoids_false_existing_output_warning(m
     monkeypatch.setattr(
         add_pop,
         "orchestrate_intersections",
-        lambda data_dir, tif_dir, output_dir, index, max_workers, country_col=None: captured.update(
+        lambda data_dir, tif_dir, output_dir, index, max_workers, country_col=None, overwrite=True: captured.update(
             {
                 "call": {
                     "data_dir": data_dir,
@@ -330,6 +374,7 @@ def test_main_passes_configured_paths_and_avoids_false_existing_output_warning(m
                     "index": index,
                     "max_workers": max_workers,
                     "country_col": country_col,
+                    "overwrite": overwrite,
                 }
             }
         ),
@@ -346,21 +391,21 @@ def test_main_passes_configured_paths_and_avoids_false_existing_output_warning(m
         "index": 2,
         "max_workers": 5,
         "country_col": "ISO_2",
+        "overwrite": False,
     }
-    assert "already exists and pop_voronoi_overwrite is False" not in caplog.text
 
 
 def test_main_exits_on_non_integer_index(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "not-an-int"])
+    monkeypatch.setattr(sys, "argv", ["add_pop.py", "--index", "not-an-int"])
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match="2"):
         add_pop.main()
 
 
 def test_main_exits_when_index_argument_is_missing(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["add_pop.py"])
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match="2"):
         add_pop.main()
 
 
@@ -368,8 +413,8 @@ def test_main_exits_when_required_path_key_missing(monkeypatch, mock_cfg):
     cfg = mock_cfg
     cfg["paths"].pop("voronoi_dir", None)
 
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "0"])
-    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(sys, "argv", ["add_pop.py", "--index", "0"])
+    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(add_pop, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(add_pop.os, "chdir", lambda path: None)
 
@@ -381,8 +426,8 @@ def test_main_exits_when_paths_section_is_empty(monkeypatch, mock_cfg):
     cfg = mock_cfg
     cfg["paths"] = {}
 
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "0"])
-    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(sys, "argv", ["add_pop.py", "--index", "0"])
+    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(add_pop, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(add_pop.os, "chdir", lambda path: None)
 
@@ -390,39 +435,55 @@ def test_main_exits_when_paths_section_is_empty(monkeypatch, mock_cfg):
         add_pop.main()
 
 
-def test_main_logs_warning_when_output_exists_and_overwrite_disabled(monkeypatch, mock_cfg, caplog, tmp_path):
-    cfg = mock_cfg
-    cfg["paths"]["voronoi_dir"] = str(tmp_path / "voronoi")
-    cfg["paths"]["pop_tif_dir"] = str(tmp_path / "tifs")
-    cfg["paths"]["pop_output_dir"] = str(tmp_path / "existing_output")
-    cfg["country_output_column"] = "ISO_2"
-    cfg["add_pop_max_workers"] = 3
-    cfg["pop_voronoi_overwrite"] = False
+def test_orchestrate_intersections_skips_when_output_exists_and_overwrite_disabled(monkeypatch, caplog, tmp_path):
+    data_dir = tmp_path / "voronoi"
+    output_dir = tmp_path / "output"
+    data_dir.mkdir()
+    output_dir.mkdir()
+    (data_dir / "b_file.gpkg").write_text("stub", encoding="utf-8")
+    (output_dir / "pop_added_b_file.gpkg").write_text("stub", encoding="utf-8")
     captured = {}
 
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "1"])
-    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda start_index=2: {})
-    monkeypatch.setattr(add_pop, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(add_pop.os, "chdir", lambda path: None)
-    monkeypatch.setattr(add_pop.os.path, "exists", lambda path: path == cfg["paths"]["pop_output_dir"])
-    monkeypatch.setattr(add_pop.os, "makedirs", lambda path, exist_ok=False: captured.setdefault("makedirs", (path, exist_ok)))
-    monkeypatch.setattr(
-        add_pop,
-        "orchestrate_intersections",
-        lambda data_dir, tif_dir, output_dir, index, max_workers, country_col=None: captured.setdefault("called", True),
+    monkeypatch.setattr(add_pop, "intersect_all_files", lambda *a, **k: captured.setdefault("processed", True))
+
+    with caplog.at_level(logging.INFO):
+        add_pop.orchestrate_intersections(str(data_dir), "tifs", str(output_dir), index=0, overwrite=False)
+
+    assert "processed" not in captured
+    assert "already exists" in caplog.text and "overwrite is False" in caplog.text
+
+
+def test_orchestrate_intersections_reprocesses_when_overwrite_enabled(monkeypatch, tmp_path):
+    data_dir = tmp_path / "voronoi"
+    output_dir = tmp_path / "output"
+    data_dir.mkdir()
+    output_dir.mkdir()
+    (data_dir / "b_file.gpkg").write_text("stub", encoding="utf-8")
+    (output_dir / "pop_added_b_file.gpkg").write_text("stale", encoding="utf-8")
+    captured = {}
+
+    source_gdf = gpd.GeoDataFrame(
+        {"ISO_2": ["DE"], "geometry": [Point(0, 0)]},
+        geometry="geometry",
+        crs="EPSG:4326",
     )
+    monkeypatch.setattr(add_pop.gpd, "read_file", lambda path: source_gdf.copy())
+    def _fake_intersect(gdf, *a, **k):
+        captured["processed"] = True
+        return gdf
 
-    with caplog.at_level(logging.WARNING):
-        add_pop.main()
+    monkeypatch.setattr(add_pop, "intersect_all_files", _fake_intersect)
+    monkeypatch.setattr(add_pop, "ensure_output_dir_for_file", lambda path: None)
+    monkeypatch.setattr(gpd.GeoDataFrame, "to_file", lambda self, *a, **k: None)
 
-    assert captured["makedirs"] == (cfg["paths"]["pop_output_dir"], True)
-    assert captured["called"] is True
-    assert "already exists and pop_voronoi_overwrite is False" in caplog.text
+    add_pop.orchestrate_intersections(str(data_dir), "tifs", str(output_dir), index=0, overwrite=True)
+
+    assert captured.get("processed") is True
 
 
 def test_main_exits_when_config_overrides_are_invalid(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "0"])
-    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda start_index=2: (_ for _ in ()).throw(ValueError("invalid override")))
+    monkeypatch.setattr(sys, "argv", ["add_pop.py", "--index", "0"])
+    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda args=None: (_ for _ in ()).throw(ValueError("invalid override")))
 
     with pytest.raises(SystemExit, match="1"):
         add_pop.main()
@@ -437,7 +498,7 @@ def test_intersect_single_file_returns_empty_input_unchanged(tiny_watershed_gdf)
     assert result.columns.tolist() == empty.columns.tolist()
 
 
-def test_intersect_single_file_skips_missing_files_logs_errors_and_restores_original_crs(monkeypatch):
+def test_intersect_single_file_raises_with_context_on_extract_failure(monkeypatch):
     gdf = gpd.GeoDataFrame(
         {"geometry": [Point(0, 0)]},
         geometry="geometry",
@@ -455,15 +516,12 @@ def test_intersect_single_file_skips_missing_files_logs_errors_and_restores_orig
 
     monkeypatch.setattr(add_pop, "exact_extract", fake_exact_extract)
 
-    result = add_pop.intersect_single_file(
-        gdf.copy(),
-        ["missing_2019_deu.tif", "country_2020_deu.tif", "country_2021_deu.tif"],
-        all_years=True,
-    )
-
-    assert result.crs.to_epsg() == 3857
-    assert "2021_zonal_sum" in result.columns
-    assert "2020_zonal_sum" not in result.columns
+    with pytest.raises(RuntimeError, match="country=|country_2020_deu"):
+        add_pop.intersect_single_file(
+            gdf.copy(),
+            ["missing_2019_deu.tif", "country_2020_deu.tif", "country_2021_deu.tif"],
+            all_years=True,
+        )
 
 
 def test_intersect_single_file_latest_only_skips_older_years(monkeypatch, tiny_watershed_gdf):
@@ -518,7 +576,7 @@ def test_find_newest_country_tif_files_skips_missing_lists_and_unparseable_names
     assert "Could not parse year from filename" in caplog.text
 
 
-def test_intersect_all_files_logs_future_result_errors(monkeypatch, caplog):
+def test_intersect_all_files_raises_on_future_result_errors(monkeypatch):
     gdf = gpd.GeoDataFrame(
         {"ISO_2": ["DE"], "geometry": [Point(0, 0)]},
         geometry="geometry",
@@ -548,11 +606,8 @@ def test_intersect_all_files_logs_future_result_errors(monkeypatch, caplog):
     monkeypatch.setattr(add_pop.random, "shuffle", lambda seq: None)
     monkeypatch.setattr(add_pop, "find_country_tif_files", lambda countries, tif_dir: {"DE": ["de_2020.tif"]})
 
-    with caplog.at_level(logging.WARNING):
-        result = add_pop.intersect_all_files(gdf, tif_dir="unused", max_workers=1, all_years=True, country_col="ISO_2")
-
-    assert result.empty
-    assert "an error occurred while retrieving gdfs" in caplog.text
+    with pytest.raises(RuntimeError, match="failed for"):
+        add_pop.intersect_all_files(gdf, tif_dir="unused", max_workers=1, all_years=True, country_col="ISO_2")
 
 
 def test_orchestrate_intersections_reraises_read_errors(monkeypatch, tmp_path):
@@ -574,8 +629,8 @@ def test_main_exits_when_orchestration_fails(monkeypatch, mock_cfg, tmp_path):
     cfg["country_output_column"] = "ISO_2"
     cfg["add_pop_max_workers"] = 2
 
-    monkeypatch.setattr(sys, "argv", ["add_pop.py", "0"])
-    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda start_index=2: {})
+    monkeypatch.setattr(sys, "argv", ["add_pop.py", "--index", "0"])
+    monkeypatch.setattr(add_pop, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(add_pop, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(add_pop.os, "chdir", lambda path: None)
     monkeypatch.setattr(add_pop.os.path, "exists", lambda path: False)
@@ -597,7 +652,8 @@ def test_add_pop_import_fallback_block_executes(monkeypatch):
     module_path = Path(__file__).resolve().parents[3] / "src" / "add_pop.py"
     starter_stub = ModuleType("starter")
     starter_stub.load_config = lambda **kwargs: {}
-    starter_stub.parse_config_overrides = lambda start_index=2: {}
+    starter_stub.parse_config_overrides = lambda args=None: {}
+    starter_stub.add_standard_override_arguments = lambda parser: parser
     create_voronoi_stub = ModuleType("create_voronoi")
     create_voronoi_stub.ensure_output_dir_for_file = lambda path: None
     download_pop_stub = ModuleType("download_pop")
@@ -618,8 +674,9 @@ def test_add_pop_script_entrypoint_runs_main_guard(monkeypatch):
 
     module_path = Path(__file__).resolve().parents[3] / "src" / "add_pop.py"
     starter_stub = ModuleType("starter")
-    starter_stub.load_config = lambda **kwargs: {"paths": {}, "add_pop_max_workers": 1, "pop_voronoi_overwrite": False}
-    starter_stub.parse_config_overrides = lambda start_index=2: {}
+    starter_stub.load_config = lambda **kwargs: {"paths": {}, "add_pop_max_workers": 1, "overwrite_existing": False}
+    starter_stub.parse_config_overrides = lambda args=None: {}
+    starter_stub.add_standard_override_arguments = lambda parser: parser
     create_voronoi_stub = ModuleType("create_voronoi")
     create_voronoi_stub.ensure_output_dir_for_file = lambda path: None
     download_pop_stub = ModuleType("download_pop")
@@ -628,7 +685,7 @@ def test_add_pop_script_entrypoint_runs_main_guard(monkeypatch):
     monkeypatch.setitem(sys.modules, "starter", starter_stub)
     monkeypatch.setitem(sys.modules, "create_voronoi", create_voronoi_stub)
     monkeypatch.setitem(sys.modules, "download_pop", download_pop_stub)
-    monkeypatch.setattr(sys, "argv", [str(module_path), "0"])
+    monkeypatch.setattr(sys, "argv", [str(module_path), "--index", "0"])
 
     with pytest.raises(KeyError, match="voronoi_dir"):
         runpy.run_path(str(module_path), run_name="__main__")

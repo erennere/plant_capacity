@@ -8,8 +8,8 @@ Workflow:
 """
 
 import os
-import sys
 import logging
+import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
@@ -18,14 +18,10 @@ import numpy as np
 from shapely import box
 from tqdm import tqdm
 
-try:
-    from ..starter import load_config, parse_config_overrides
-    from ..create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
-except ImportError:
-    from src.starter import load_config, parse_config_overrides
-    from src.create_voronoi import estimate_utm_epsg, ensure_output_dir_for_file
+from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+from ..geo_utils import estimate_utm_epsg_for_geom
+from ..utils import configure_logging, ensure_output_dir_for_file
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def build_graph(df):
@@ -121,9 +117,7 @@ def orchestrate_settlement_river_intersections(polygons_gdf, rivers_gdf, x_dista
 
     if 'utm' not in polygons_gdf.columns:
         logger.info("Estimating UTM zones")
-        polygons_gdf['utm'] = polygons_gdf.geometry.centroid.apply(
-            lambda geom: estimate_utm_epsg(geom.x, geom.y)
-        )
+        polygons_gdf['utm'] = polygons_gdf.geometry.apply(estimate_utm_epsg_for_geom)
 
     gdfs = []
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -263,24 +257,35 @@ def main():
 
     ``weight_func`` accepts ``mult``, ``add``, or ``""`` for default.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=2)
+    parser = argparse.ArgumentParser(
+        description="Attach downstream river metadata to non-served polygons."
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=32,
+        help="Maximum worker processes for the river-intersection steps",
+    )
+    add_standard_override_arguments(parser)
+    args = parser.parse_args()
+    overrides = parse_config_overrides(args=args)
     cfg = load_config(script_name="find_intersection_river", **overrides)
 
     polygons_path = cfg['paths']['non_served_above_threshold_outpath']
     rivers_path = cfg['paths']['rivershed_output_path']
     output_path = cfg['paths']['non_served_nxt_river_outpath']
+    basin_col = cfg['basin_column_name']
     x_distance = float(cfg['x_distance'])
-    # max_workers is provided via CLI for this script.
-    max_workers = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 32
+    max_workers = int(args.max_workers)
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
 
     logger.info("Loading data")
     polygons_gdf = gpd.read_file(polygons_path)
+    river_columns = ['HYRIV_ID', 'NEXT_DOWN', 'MAIN_RIV', basin_col, 'geometry']
     rivers_gdf = gpd.read_file(
         rivers_path,
-        columns=['HYRIV_ID', 'NEXT_DOWN', 'MAIN_RIV', 'HYBAS_ID', 'geometry']
+        columns=river_columns
     )
     logger.info("Loaded %s polygons and %s river segments", len(polygons_gdf), len(rivers_gdf))
 
@@ -292,6 +297,39 @@ def main():
     
     polygons_gdf = polygons_gdf.to_crs(4326)
     rivers_gdf = rivers_gdf.to_crs(4326)
+
+    if basin_col not in polygons_gdf.columns:
+        raise KeyError(
+            f"Configured basin column '{basin_col}' missing in polygons; "
+            f"available: {sorted(polygons_gdf.columns)}"
+        )
+    if basin_col not in rivers_gdf.columns:
+        raise KeyError(
+            f"Configured basin column '{basin_col}' missing in rivers; "
+            f"available: {sorted(rivers_gdf.columns)}"
+        )
+
+    polygons_gdf[basin_col] = pd.to_numeric(polygons_gdf[basin_col], errors='coerce')
+    rivers_gdf[basin_col] = pd.to_numeric(rivers_gdf[basin_col], errors='coerce')
+    polygons_before = len(polygons_gdf)
+    rivers_before = len(rivers_gdf)
+    polygons_gdf = polygons_gdf[np.isfinite(polygons_gdf[basin_col])].copy()
+    rivers_gdf = rivers_gdf[np.isfinite(rivers_gdf[basin_col])].copy()
+    logger.info(
+        "Filtered invalid basin IDs on %s: polygons %s -> %s, rivers %s -> %s",
+        basin_col,
+        polygons_before,
+        len(polygons_gdf),
+        rivers_before,
+        len(rivers_gdf),
+    )
+
+    # Internal river-matching code expects HYBAS_ID. Keep data config-driven by
+    # projecting the configured basin key into this internal working column.
+    if basin_col != 'HYBAS_ID':
+        polygons_gdf['HYBAS_ID'] = polygons_gdf[basin_col]
+        rivers_gdf['HYBAS_ID'] = rivers_gdf[basin_col]
+
     polygons_gdf['HYBAS_ID'] = polygons_gdf['HYBAS_ID'].astype(np.int64)
     rivers_gdf['HYBAS_ID'] = rivers_gdf['HYBAS_ID'].astype(np.int64)
 
@@ -315,4 +353,5 @@ def main():
 
 
 if __name__ == '__main__':
+    configure_logging()
     main()

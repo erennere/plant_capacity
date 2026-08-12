@@ -4,6 +4,7 @@ This script reads annotation model outputs, parses category labels, plots class
 distribution, and copies sampled images into per-category folders for manual QA.
 """
 
+import argparse
 import os
 import re
 import shutil
@@ -12,8 +13,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from src.annotation_scripts.merge_annotations import decode_gen_text
-from src.create_voronoi import ensure_output_dir_for_file
-from src.starter import load_config, parse_config_overrides
+from src.utils import configure_logging, ensure_output_dir_for_file
+from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
 
 def plot_category_distribution(df, column='category_name', save_path=None, show=False):
     """Plot category frequency (including missing values) as a bar chart."""
@@ -111,10 +112,16 @@ def organize_files_by_category(df, source_col, category_col, base_dir):
 
     print(f"Done! Files copied: {copy_count} | Errors: {error_count}")
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run annotations_inspection.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Run full inspection flow: parse, plot, sample, export, and copy images."""
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="annotations_inspection", **overrides)
 
     image_input_dir = cfg['paths']['annotated_images_output_dir']
@@ -153,4 +160,5 @@ def main():
     organize_files_by_category(df_sampled, 'filepath', 'category_name', image_output_dir)
 
 if __name__ == "__main__":
+    configure_logging()
     main()

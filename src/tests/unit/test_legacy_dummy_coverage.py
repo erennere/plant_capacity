@@ -94,7 +94,11 @@ def test_query_overpass_handles_success_rate_limit_and_bad_json(monkeypatch):
             return _Response(200, payload={"elements": []})
         return _Response(200, bad_json=True)
 
-    monkeypatch.setattr(osm_extract.requests, "get", fake_get)
+    class _Session:
+        def get(self, url, params=None, timeout=None):
+            return fake_get(url, params=params, timeout=timeout)
+
+    monkeypatch.setattr(osm_extract, "requests_session_with_retries", lambda *a, **k: _Session())
     monkeypatch.setattr(osm_extract.time, "sleep", lambda _: None)
 
     ok = osm_extract.query_overpass("0,0,1,1", {"waterway": "river"}, "http://dummy")

@@ -1,47 +1,27 @@
 #!/bin/bash
 #SBATCH --partition=cpu-single
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=234gb
+#SBATCH --mem=32gb
 #SBATCH --time=96:00:00
+#SBATCH --output=logs/find_pop_in_danger_pop_%j.out
+#SBATCH --error=logs/find_pop_in_danger_pop_%j.err
 
-PROJECT_ROOT="$(pwd)"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+set -Eeuo pipefail
 
-mkdir -p "${LOG_DIR}"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "find_pop_in_danger_pop"
+enable_err_trap
 
-# Clean up previous run logs and scheduler outputs for a fresh run
-rm -f "${LOG_DIR}/find_pop_in_danger_pop.log"
+parse_overrides "$@"
 
+build_override_args
 
-#
-# Usage:
-#   ./find_pop_in_danger_pop.sh [level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
-#
-# Arguments (all optional config overrides):
-#   level        - Processing level (default: from config.yaml arguments.default_level)
-#   version      - Data version (default: from config.yaml arguments.default_version)
-#   buffer       - Buffer distance in metres (default: from config.yaml params.buffer)
-#   weight_method - Weight transform: linear | square_root | logarithmic | sigmoid
-#   weight_func  - Distance mode: mult | add | "" (empty = default multiplicative)
-## Parse optional config override arguments
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/find_pop_in_danger_pop.log"
-}
-
-log "Installing src module"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" 2>&1 | tee -a "${LOG_DIR}/find_pop_in_danger_pop.log"
+ensure_src_importable
 
 log "Running find_pop_in_danger_pop"
-${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_pop_in_danger_pop "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/find_pop_in_danger_pop.log"
+run_stage "find_pop_in_danger_pop" ${PYTHON_CMD} -m src.pop_at_risk_river_calculations.find_pop_in_danger_pop "${OVERRIDE_ARGS[@]}"
 log "Completed find_pop_in_danger_pop"
 
 

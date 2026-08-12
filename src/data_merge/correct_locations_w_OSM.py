@@ -4,21 +4,23 @@ This module combines manually corrected WWTP coordinates with nearby OSM
 geometries, performs country enrichment, and writes final GeoJSON artifacts.
 """
 
+import argparse
 import os
 import geopandas as gpd
 import pandas as pd
 import numpy as np
 from shapely import Point, Polygon, LineString, MultiPolygon, MultiLineString, to_wkt, from_wkt
 from shapely.geometry.base import BaseGeometry
-import duckdb
 try:
-    from ..create_voronoi import estimate_utm_epsg, download_overture_maps, buffer_geometry, ensure_output_dir_for_file
-    from ..starter import load_config, parse_config_overrides
-    from ..download_pop import get_iso_codes
+    from ..create_voronoi import intersects_with_country_db, download_overture_maps
+    from ..starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from ..geo_utils import buffer_geometry, estimate_utm_epsg, estimate_utm_epsg_for_geom
+    from ..utils import configure_logging, ensure_output_dir_for_file, get_iso_codes
 except ImportError:
-    from src.create_voronoi import estimate_utm_epsg, intersects_with_country_db, download_overture_maps, buffer_geometry, ensure_output_dir_for_file
-    from src.starter import load_config, parse_config_overrides
-    from src.download_pop import get_iso_codes
+    from src.create_voronoi import intersects_with_country_db, download_overture_maps
+    from src.starter import add_standard_override_arguments, load_config, parse_config_overrides
+    from src.geo_utils import buffer_geometry, estimate_utm_epsg, estimate_utm_epsg_for_geom
+    from src.utils import configure_logging, ensure_output_dir_for_file, get_iso_codes
 
 def corr_locations_wOSM(rad, pdf, df):
     """Match each input geometry to the nearest OSM geometry within a radius.
@@ -111,53 +113,6 @@ def coordinate_corr_locations_wOSM(rad, pdf, df):
         results.append(data)
     return pd.concat(results, ignore_index=True)
 
-def enrich_country_with_duckdb(df, filepath):
-    """Spatially intersect features with country polygons using DuckDB.
-
-    Parameters
-    ----------
-    df : geopandas.GeoDataFrame
-        Input features to enrich.
-    filepath : str
-        Parquet path containing country polygons.
-
-    Returns
-    -------
-    geopandas.GeoDataFrame
-        Input features in EPSG:4326 with ``ISO_2`` assigned where possible.
-    """
-    query = "INSTALL SPATIAL; LOAD SPATIAL;"
-    query2 = f"""
-    WITH 
-    data AS (
-        SELECT * REPLACE(ST_GeomFromText(geometry)) AS geometry
-        FROM df
-    ),
-    countries AS (
-        SELECT * REPLACE(ST_GeomFromWKB(geometry)) AS geometry
-        FROM read_parquet('{filepath}')
-    )
-    SELECT 
-        a.* REPLACE(ST_AsText(a.geometry)) AS geometry, 
-        b.country AS ISO_2
-    FROM data a 
-    LEFT JOIN countries b ON 
-        ST_Intersects(a.geometry, b.geometry)
-    """
-    if df is None or df.empty:
-        return df
-    crs = df.crs
-    if crs is not None and df.crs.to_epsg() != 4326:
-        df = df.to_crs(epsg=4326)
-
-    df['geometry'] = df['geometry'].map(lambda x: to_wkt(x) if isinstance(x, (Point, LineString, Polygon, MultiLineString, MultiPolygon)) else None)
-    duckdb.sql(query)
-    df = duckdb.sql(query2).df()
-    df['geometry'] = df['geometry'].map(lambda x: from_wkt(x) if not pd.isna(x) else None)
-    df = gpd.GeoDataFrame(df, geometry='geometry', crs=4326)
-    df['geometry'] = df['geometry'].map(buffer_geometry)
-    return df
-
 def create_HW_geom(row):
     """
     'lon' and 'lat' are HydroWASTE coordinates.
@@ -186,6 +141,13 @@ def create_corrected_geom(row):
         return Point(row['neigh_lon'], row['neigh_lat'])
     return None
 
+def parse_args():
+    """Parse the standardized named config-override flags."""
+    parser = argparse.ArgumentParser(description="Run correct_locations_w_OSM.")
+    add_standard_override_arguments(parser)
+    return parser.parse_args()
+
+
 def main():
     """Run the full WWTP location correction and export pipeline.
 
@@ -195,8 +157,7 @@ def main():
     unresolved HydroWASTE facilities, enriches missing country codes, and writes
     the final GeoJSON outputs.
     """
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    overrides = parse_config_overrides(start_index=1)
+    overrides = parse_config_overrides(args=parse_args())
     cfg = load_config(script_name="correct_locations_w_OSM", **overrides)
     paths = cfg['paths']
     rad = cfg['rad']
@@ -224,11 +185,9 @@ def main():
 # =============================================================================
     # Load global OSM candidates and assign local projected CRS IDs for distance checks.
     pdf = gpd.read_file(paths['osmgeo_filepath'])
-    pdf['epsg'] = pdf.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-                                                        if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
+    pdf['epsg'] = pdf.apply(lambda row: estimate_utm_epsg_for_geom(row['geometry']), axis=1)
     hw_WWTPs_wo_correction['geometry'] = hw_WWTPs_wo_correction['combined_geometry']
-    hw_WWTPs_wo_correction['epsg'] = hw_WWTPs_wo_correction.apply(lambda row: estimate_utm_epsg(row['geometry'].x, row['geometry'].y) 
-                                                        if isinstance(row['geometry'], Point) else estimate_utm_epsg(row['geometry'].centroid.x, row['geometry'].centroid.y) , axis=1)
+    hw_WWTPs_wo_correction['epsg'] = hw_WWTPs_wo_correction.apply(lambda row: estimate_utm_epsg_for_geom(row['geometry']), axis=1)
     
     hw_WWTPs_wo_correction_osm_corrected = coordinate_corr_locations_wOSM(rad, pdf, hw_WWTPs_wo_correction)
     hw_WWTPs_wo_correction_osm_corrected['geometry'] = hw_WWTPs_wo_correction_osm_corrected['matched_osm_geometry']
@@ -253,14 +212,21 @@ def main():
     na = final_df[final_df['WASTE_ID'].isna()]
     final_df = pd.concat([notna, na], ignore_index=True)
 
-    if 'ISO_2' not in final_df.columns: 
+    country_output_col = cfg['country_output_column']
+    country_boundary_col = cfg['country_boundary_column']
+    if country_output_col not in final_df.columns:
         # Fill missing country code via spatial join, then fallback via CNTRY_ISO mapping.
         if not os.path.exists(paths["overture"]):
             download_overture_maps(paths['overture_s3_url'], paths["overture"])
-        final_df = enrich_country_with_duckdb(final_df, paths["overture"])
+        final_df = intersects_with_country_db(
+            final_df,
+            paths["overture"],
+            polygon_country_col=country_boundary_col,
+            output_country_col=country_output_col,
+        )
         alpha_3_to_2, alpha_2_to_3, alpha_3_to_names, alpha_2_to_names = get_iso_codes()
-        final_df['ISO_2'] = final_df['ISO_2'].where(
-            final_df['ISO_2'].notna(),
+        final_df[country_output_col] = final_df[country_output_col].where(
+            final_df[country_output_col].notna(),
             final_df['CNTRY_ISO'].map(alpha_3_to_2),
         )
 
@@ -279,4 +245,5 @@ def main():
     print(len(final_df), len(pd.isna(final_df['geometry'])))
 
 if __name__ == '__main__':
+    configure_logging()
     main()

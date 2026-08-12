@@ -22,7 +22,6 @@ dependencies = [
   "opencv-python",
   "networkx",
   "duckdb",
-  "joblib",
   "tqdm",
   "requests",
   "pycountry",
@@ -33,6 +32,7 @@ dependencies = [
   "folium",
   "branca",
   "mercantile",
+  "mapbox-vector-tile",
   "hdx-python-api",
 ]
 
@@ -49,8 +49,10 @@ packages = [
   "src.annotation_scripts",
   "src.data_merge",
   "src.figures_scripts",
+  "src.industrial_analysis",
   "src.pop_at_risk_river_calculations",
   "src.pop_validation_scripts",
+  "src.sensitivity_analysis_scripts",
 ]
 
 [tool.setuptools.package-dir]
@@ -58,5 +60,7 @@ src = "."
 "src.annotation_scripts" = "annotation_scripts"
 "src.data_merge" = "data_merge"
 "src.figures_scripts" = "figures_scripts"
+"src.industrial_analysis" = "industrial_analysis"
 "src.pop_at_risk_river_calculations" = "pop_at_risk_river_calculations"
 "src.pop_validation_scripts" = "pop_validation_scripts"
+"src.sensitivity_analysis_scripts" = "sensitivity_analysis_scripts"

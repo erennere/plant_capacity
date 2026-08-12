@@ -179,10 +179,10 @@ def test_coordinate_corr_locations_wosm_leaves_unmatched_rows_empty():
     assert pd.isna(result.loc[0, "matched_osm_geometry"])
 
 
-def test_enrich_country_with_duckdb_returns_empty_input_unchanged():
+def test_intersects_with_country_db_returns_empty_input_unchanged():
     empty = gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326")
 
-    out = correct_locations_w_OSM.enrich_country_with_duckdb(empty, "unused.parquet")
+    out = correct_locations_w_OSM.intersects_with_country_db(empty, "unused.parquet")
 
     assert out.empty
     assert out.crs.to_epsg() == 4326
@@ -260,17 +260,16 @@ def test_find_safe_epsg_uses_polygon_centroid(monkeypatch):
     captured = {}
     polygon = Polygon([(10, 20), (12, 20), (12, 24), (10, 24)])
 
-    monkeypatch.setattr(
-        final_data_merge,
-        "estimate_utm_epsg",
-        lambda lon, lat: captured.setdefault("coords", (lon, lat)) or 32632,
-    )
+    def _fake_estimate(geom):
+        captured["geom"] = geom
+        return 32632
+
+    monkeypatch.setattr(final_data_merge, "estimate_utm_epsg_for_geom", _fake_estimate)
 
     epsg = final_data_merge.find_safe_epsg(pd.Series({"geometry": polygon}))
 
-    assert epsg == captured["coords"]
-    assert captured["coords"][0] == pytest.approx(polygon.centroid.x)
-    assert captured["coords"][1] == pytest.approx(polygon.centroid.y)
+    assert epsg == 32632
+    assert captured["geom"] is polygon
 
 
 def test_find_meter_coordinates_returns_empty_geodataframe_for_empty_input():
@@ -557,7 +556,7 @@ def test_final_data_merge_main_writes_new_and_corrected_outputs(monkeypatch, tmp
     corrected_low["matched_osm_geometry"] = [Point(7.1, 7.1)]
 
     monkeypatch.setattr(final_data_merge.os, "chdir", lambda path: None)
-    monkeypatch.setattr(final_data_merge, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(final_data_merge, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(final_data_merge, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(final_data_merge.gpd, "read_file", fake_read_file)
     monkeypatch.setattr(final_data_merge.pd, "read_csv", lambda path, encoding=None: canada_csv.copy())
@@ -609,6 +608,8 @@ def test_correct_locations_main_writes_corrected_and_missing_outputs(monkeypatch
     data_dir = str(tmp_path)
     cfg = {
         "rad": 100,
+        "country_output_column": "ISO_2",
+        "country_boundary_column": "country",
         "paths": {
             "data_dir": data_dir,
             "paul_corrected_filepath": paul_path,
@@ -671,10 +672,10 @@ def test_correct_locations_main_writes_corrected_and_missing_outputs(monkeypatch
         raise AssertionError(f"Unexpected read path: {path}")
 
     monkeypatch.setattr(correct_locations_w_OSM.os, "chdir", lambda path: None)
-    monkeypatch.setattr(correct_locations_w_OSM, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(correct_locations_w_OSM, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(correct_locations_w_OSM, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(correct_locations_w_OSM.gpd, "read_file", fake_read_file)
-    monkeypatch.setattr(correct_locations_w_OSM, "estimate_utm_epsg", lambda lon, lat: 3857)
+    monkeypatch.setattr(correct_locations_w_OSM, "estimate_utm_epsg_for_geom", lambda geom: 3857)
     monkeypatch.setattr(
         correct_locations_w_OSM,
         "coordinate_corr_locations_wOSM",
@@ -708,6 +709,8 @@ def test_correct_locations_main_downloads_overture_and_enriches_when_iso2_missin
     data_dir = str(tmp_path)
     cfg = {
         "rad": 100,
+        "country_output_column": "ISO_2",
+        "country_boundary_column": "country",
         "paths": {
             "data_dir": data_dir,
             "paul_corrected_filepath": paul_path,
@@ -767,10 +770,10 @@ def test_correct_locations_main_downloads_overture_and_enriches_when_iso2_missin
         raise AssertionError(f"Unexpected read path: {path}")
 
     monkeypatch.setattr(correct_locations_w_OSM.os, "chdir", lambda path: None)
-    monkeypatch.setattr(correct_locations_w_OSM, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(correct_locations_w_OSM, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(correct_locations_w_OSM, "load_config", lambda **overrides: cfg)
     monkeypatch.setattr(correct_locations_w_OSM.gpd, "read_file", fake_read_file)
-    monkeypatch.setattr(correct_locations_w_OSM, "estimate_utm_epsg", lambda lon, lat: 3857)
+    monkeypatch.setattr(correct_locations_w_OSM, "estimate_utm_epsg_for_geom", lambda geom: 3857)
     monkeypatch.setattr(
         correct_locations_w_OSM,
         "coordinate_corr_locations_wOSM",
@@ -787,7 +790,11 @@ def test_correct_locations_main_downloads_overture_and_enriches_when_iso2_missin
         geometry="geometry",
         crs="EPSG:4326",
     )
-    monkeypatch.setattr(correct_locations_w_OSM, "enrich_country_with_duckdb", lambda df, filepath: enriched.copy())
+    monkeypatch.setattr(
+        correct_locations_w_OSM,
+        "intersects_with_country_db",
+        lambda df, filepath, polygon_country_col=None, output_country_col=None: enriched.copy(),
+    )
     monkeypatch.setattr(
         correct_locations_w_OSM,
         "get_iso_codes",
@@ -1053,50 +1060,6 @@ def test_corr_locations_wosm_skips_missing_source_and_empty_candidates(monkeypat
     assert result["matched_osm_geometry"].isna().all()
 
 
-def test_enrich_country_with_duckdb_reprojects_and_buffers_non_wgs84_input(monkeypatch):
-    df = gpd.GeoDataFrame(
-        {"value": [1], "geometry": [Point(1000, 1000)]},
-        geometry="geometry",
-        crs="EPSG:3857",
-    )
-    captured = {"queries": [], "buffered": []}
-
-    class _DuckResult:
-        def __init__(self, dataframe=None):
-            self._dataframe = dataframe
-
-        def df(self):
-            return self._dataframe
-
-    def fake_sql(query):
-        captured["queries"].append(query)
-        if "SELECT" in query:
-            return _DuckResult(
-                pd.DataFrame(
-                    {
-                        "value": [1],
-                        "geometry": [Point(0.01, 0.01).wkt],
-                        "ISO_2": ["DE"],
-                    }
-                )
-            )
-        return _DuckResult()
-
-    monkeypatch.setattr(correct_locations_w_OSM.duckdb, "sql", fake_sql)
-    monkeypatch.setattr(
-        correct_locations_w_OSM,
-        "buffer_geometry",
-        lambda geom: captured["buffered"].append(geom) or geom,
-    )
-
-    out = correct_locations_w_OSM.enrich_country_with_duckdb(df, "countries.parquet")
-
-    assert len(captured["queries"]) == 2
-    assert len(captured["buffered"]) == 1
-    assert out.crs.to_epsg() == 4326
-    assert out["ISO_2"].tolist() == ["DE"]
-
-
 def test_correct_locations_import_fallback_block_executes():
     import runpy
     from pathlib import Path
@@ -1116,7 +1079,7 @@ def test_correct_locations_script_entrypoint_runs_main_guard(monkeypatch):
 
     module_path = Path(__file__).resolve().parents[3] / "src" / "data_merge" / "correct_locations_w_OSM.py"
 
-    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda start_index=1: {})
+    monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda *a, **k: {})
     monkeypatch.setattr(starter_mod, "load_config", lambda **overrides: {"paths": {}, "rad": 10})
 
     with pytest.raises(KeyError, match="data_dir"):
@@ -1128,7 +1091,6 @@ def test_merge_seg_results_script_entrypoint_runs_new_variant_via_run_path(monke
     import sys
     from pathlib import Path
 
-    import src.create_voronoi as create_voronoi_mod
     import src.starter as starter_mod
 
     corrected_path = str(tmp_path / "corrected_all.gpkg")
@@ -1153,7 +1115,7 @@ def test_merge_seg_results_script_entrypoint_runs_new_variant_via_run_path(monke
     monkeypatch.setattr(os, "chdir", lambda path: None)
     monkeypatch.setattr(starter_mod, "parse_config_overrides", lambda args=None: {})
     monkeypatch.setattr(starter_mod, "load_config", lambda **overrides: cfg)
-    monkeypatch.setattr(create_voronoi_mod, "ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
+    monkeypatch.setattr("src.utils.ensure_output_dir_for_file", lambda path: captured.setdefault("ensured", path))
     monkeypatch.setattr(gpd, "read_file", lambda path: points_df.copy())
     monkeypatch.setattr(pd, "read_csv", lambda path: seg_results.copy())
 

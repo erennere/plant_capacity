@@ -20,6 +20,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_argv(monkeypatch):
+    """Hide pytest's own argv from entry points that call ``parse_args()``.
+
+    Every ``main()`` now builds its own argparse parser, so without this the
+    parser would see pytest's command line and exit. Tests that care about
+    specific flags set ``sys.argv`` themselves after this fixture runs.
+    """
+    monkeypatch.setattr(sys, "argv", ["pipeline-entry-point"])
+
+
 def _deep_update(target, updates):
     for key, value in updates.items():
         if isinstance(value, dict):

@@ -8,31 +8,24 @@
 #SBATCH --output=logs/industrial_analysis_%j.out
 #SBATCH --error=logs/industrial_analysis_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
-PROJECT_ROOT="$(pwd)"
-cd "${PROJECT_ROOT}"
-LOG_DIR="${PROJECT_ROOT}/logs"
-PYTHON_CMD="python"
+PROJECT_ROOT="."
+# shellcheck source=lib/utils.sh
+source "${PROJECT_ROOT}/lib/utils.sh"
+init_log "industrial_analysis"
+enable_err_trap
 
 # Script paths
 DOWNLOAD_SCRIPT="src.industrial_analysis.download_and_vectorize"
 FIND_UNCONNECTED_SCRIPT="src.industrial_analysis.find_unconnected_industrial_areas"
 
 # Optional config overrides (all optional)
-LEVEL="${1:-}"
-VERSION="${2:-}"
-BUFFER="${3:-}"
-WEIGHT_METHOD="${4:-}"
-WEIGHT_FUNC="${5:-}"
-DYNAMIC_BUFFERING="${6:-}"
-DYNAMIC_BUFFER_K="${7:-}"
+parse_overrides "$@"
 
-mkdir -p "${LOG_DIR}"
+build_override_args
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_DIR}/industrial_analysis.log"
-}
+ensure_src_importable
 
 log "Starting industrial analysis pipeline"
 log "Configuration:"
@@ -44,15 +37,12 @@ log "  - Weight func: ${WEIGHT_FUNC:-default}"
 log "  - Dynamic buffering: ${DYNAMIC_BUFFERING:-default}"
 log "  - Dynamic buffer k: ${DYNAMIC_BUFFER_K:-default}"
 
-log "Installing src module (editable)"
-${PYTHON_CMD} -m pip install -e "${PROJECT_ROOT}" >/dev/null 2>&1
-
 # Step 1: Download and vectorize industrial land rasters
 log "=========================================="
 log "Step 1: Downloading and vectorizing industrial land rasters"
 log "=========================================="
 
-if ${PYTHON_CMD} -m "${DOWNLOAD_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/industrial_analysis.log"; then
+if ${PYTHON_CMD} -m "${DOWNLOAD_SCRIPT}" "${OVERRIDE_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"; then
     log "Step 1 completed successfully"
 else
     log "ERROR: Step 1 failed"
@@ -64,7 +54,7 @@ log "=========================================="
 log "Step 2: Finding unconnected industrial areas"
 log "=========================================="
 
-if ${PYTHON_CMD} -m "${FIND_UNCONNECTED_SCRIPT}" "${LEVEL}" "${VERSION}" "${BUFFER}" "${WEIGHT_METHOD}" "${WEIGHT_FUNC}" "${DYNAMIC_BUFFERING}" "${DYNAMIC_BUFFER_K}" 2>&1 | tee -a "${LOG_DIR}/industrial_analysis.log"; then
+if ${PYTHON_CMD} -m "${FIND_UNCONNECTED_SCRIPT}" "${OVERRIDE_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"; then
     log "Step 2 completed successfully"
 else
     log "ERROR: Step 2 failed"
