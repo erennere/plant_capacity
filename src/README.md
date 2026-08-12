@@ -8,19 +8,44 @@
 | `Required Starter Data Files` | Lists data artifacts the pipeline relies on before execution |
 | `Configuration at a Glance` | Highlights the shared settings that shape most runs |
 | `Shared Override Convention` | Shows how the shell wrappers pass runtime overrides |
-| `Core Root-Level Pipeline Scripts` | Explains the three key top-level scripts in more detail |
+| `Core Root-Level Pipeline Scripts` | Explains the key top-level scripts in more detail |
 | `Section Guide` | Directs the reader to the stage-specific READMEs |
 
 ## Module Overview
 `src/` is the executable heart of the project. Shell wrappers provide reproducible entry points and scheduler compatibility, while the Python modules hold the actual processing logic. Most scripts read `config.yaml` through `starter.py`, so the normal way to change paths or parameters is to edit config rather than code.
+
+> **Run every `.sh` wrapper from `src/`, never from anywhere else** — for both `bash` and `sbatch`. Each wrapper sets `PROJECT_ROOT="."` and resolves `lib/utils.sh`, `config.yaml`, and `logs/` relative to it.
+>
+> ```bash
+> cd src
+> bash pop_at_risk_river_calculations/create_rasters.sh --level 8
+> sbatch pop_at_risk_river_calculations/create_rasters.sh --level 8
+> ```
 
 ## Code Entry Files In This Package
 
 | File | Role | When you use it |
 | --- | --- | --- |
 | `config.yaml` | Canonical workflow configuration | before any run |
-| `starter.py` | Shared config resolver and positional override parser | when tracing how values are inherited |
+| `starter.py` | Shared config resolver and named-override parser | when tracing how values are inherited |
 | `pipelines.py` | Shared output-path and helper orchestration utilities | when tracing cross-stage path creation |
+| `geo_utils.py` | Shared spatial helpers | before writing any new CRS, geometry-repair, or nearest-neighbour code |
+| `utils.py` | Shared domain-agnostic helpers | before writing any new logging, filesystem, DuckDB, or column-resolution code |
+
+### Shared helper modules
+
+`geo_utils.py` and `utils.py` are the two consolidation targets. When the same
+logic is needed in more than one stage it belongs in one of them, not in a third
+copy — most of the duplication the repository has accumulated came from not
+knowing they exist.
+
+| Module | Scope | Representative helpers |
+| --- | --- | --- |
+| `geo_utils.py` | anything that depends on geometry or CRS | `estimate_utm_crs`, `estimate_utm_epsg_for_geom`, `repair_geometry`, `nearest_neighbor_distances`, `buffer_geometry`, `load_eu_reference_layer`, `ensure_duckdb_spatial` |
+| `utils.py` | filesystem, logging, SQL, column conventions — no geometry | `configure_logging`, `ensure_output_dir_for_file`, `duckdb_connection`, `resolve_latest_zonal_sum_column`, `industrial_category_mask`, `robust_bounds`, `clip_to_robust_bounds` |
+
+`figures_scripts/_shared.py` is a third, narrower target: figure-layer column
+conventions shared by the two piechart scripts only.
 
 Shell launchers are execution wrappers, not starter dependencies. They are documented in the stage READMEs and in the root README canonical run order.
 
@@ -65,7 +90,7 @@ The full parameter tables now live in the relevant module READMEs. This file kee
 | `create_voronoi.execution.mode` | `sequential` | Launcher mode for the Voronoi stage |
 | `create_rasters.annotations.default_mode` | `sequential` | Launcher mode for raster preparation |
 | `create_rasters.zoom_level` | `8` | Tile zoom used in raster/risk stages |
-| `find_unserved_pop.figures.pop_threshold` | `1000` | Threshold for non-served population filtering |
+| `find_unserved_pop.threshold_value` | `1000` | Threshold for non-served population filtering |
 | `find_intersection_river.x_distance` | `5000` | River proximity search distance for non-served polygons |
 | `impact_polygons_pop.impact_polygons_pop_params.c_limit` | `5.0` | Downstream concentration threshold |
 | `impact_polygons_pop.impact_polygons_pop_params.org_per_pop` | `60.0` | Organic load per person |
@@ -77,23 +102,38 @@ Module-specific settings are documented in the corresponding README files under 
 
 ## Shared Override Convention
 
-Most shell launchers accept the same positional override layout:
+Every entry point accepts the same seven named override flags, added by
+`starter.add_standard_override_arguments` and read back by
+`starter.parse_config_overrides`:
 
 ```bash
-[level] [version] [buffer] [weight_method] [weight_func] [dynamic_buffering] [dynamic_buffer_k]
+--level --version --buffer --weight-method --weight-func --dynamic-buffering --dynamic-buffer-k
 ```
+
+The shell wrappers collect whatever subset you pass and forward it verbatim as
+`"${OVERRIDE_ARGS[@]}"`:
+
+```bash
+cd src
+bash create_voronoi.sh --level 8 --buffer 9000 --dynamic-buffer-k 0.7
+```
+
+The older positional form (`level version buffer …`) has been removed: a stray
+argv token used to be silently accepted as `level`. Unknown flags now exit 2
+instead of being shifted away.
 
 `starter.py` resolves these overrides after YAML inheritance. Earlier sections in `config.yaml` define shared values; later sections inherit them with `null`; explicit CLI values win over both.
 
 ## Core Root-Level Pipeline Scripts
 
-Three of the most important production scripts sit directly under `src/` rather than inside a subpackage. They are documented here because they are central to the workflow and are often the first scripts a reader looks for.
+Four production scripts sit directly under `src/` rather than inside a subpackage. They are documented here because they are central to the workflow and are often the first scripts a reader looks for.
 
 | Script | Python module | What it does | Main inputs | Main outputs | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `download_pop.sh` | `src.download_pop` | Downloads and prepares WorldPOP population inputs used later by `add_pop.py` and the risk workflow | `download_pop.paths.pop_dir` and shared config overrides | population rasters under `data/population` | Installs the package in editable mode, logs to `logs/pop_run.log`, and supports the shared positional override layout |
+| `download_pop.sh` | `src.download_pop` | Downloads and prepares WorldPOP population inputs used later by `add_pop.py` and the risk workflow | `download_pop.paths.pop_dir` and shared config overrides | population rasters under `data/population` | Installs the package in editable mode, logs to `logs/pop_run.log`, and supports the shared named override flags |
 | `create_voronoi.sh` | `src.create_voronoi` | Runs the weighted Voronoi service-area stage across the configured approaches | canonical merged WWTP layer, watershed inputs, weighting settings, buffering settings | Voronoi GeoPackages under `create_voronoi.paths.voronoi_dir` and buffer outputs under `create_voronoi.paths.buffers_dir` | Supports `array`, `sequential`, and `parallel` execution modes via `create_voronoi.execution.mode` |
 | `add_pop.sh` | `src.add_pop` | Intersects Voronoi outputs with population rasters and writes population-enriched service areas | one Voronoi file index, Voronoi outputs, population rasters | population-enriched GeoPackages under `add_pop.paths.pop_output_dir` | Runs either as a local single-index job or as a SLURM array task |
+| `combine_watersheds.sh` | `src.combine_watersheds` | Unzips and merges the per-level HydroBASINS archives into one watershed layer per level | `../data/hydroshed_river_levels/lvl{level}/*.zip` | combined watershed GeoPackages consumed by `create_voronoi` and the risk stage | Iterates over the configured levels; raises naming any zip with no readable layer rather than skipping it |
 
 ### `download_pop`
 `download_pop.sh` is the population-ingest entry point. Run it after the source WWTP and watershed inputs are in place and before `add_pop.sh`. Its job is to build the population raster store consumed by later stages.
@@ -182,15 +222,15 @@ Workflow:
 - Write the enriched result as `pop_added_<original_filename>.gpkg`.
 
 Important behavior:
-- The script expects the first positional argument to be the Voronoi file index; config overrides start after that index.
+- The script takes the Voronoi file index as the required `--index` flag, alongside the shared override flags.
 - It can run locally for a single index or in SLURM array mode via `SLURM_ARRAY_TASK_ID`.
 - It processes all discovered raster years by default and restores the original CRS before writing outputs.
-- When `pop_voronoi_overwrite` is false, existing output directories are preserved and the script warns that files may be skipped.
+- When `overwrite_existing` is false, existing outputs are skipped rather than regenerated.
 
 Key config:
 - `add_pop.add_pop_max_workers`
 - `add_pop.country_output_column`
-- `add_pop.pop_voronoi_overwrite`
+- `add_pop.overwrite_existing`
 - `add_pop.paths.voronoi_dir`
 - `add_pop.paths.pop_tif_dir`
 - `add_pop.paths.pop_output_dir`
@@ -211,7 +251,7 @@ The stage-specific READMEs carry the detailed script descriptions, execution dia
 | Data merge | Builds the canonical WWTP dataset | `data_merge/combine_locations.sh` | `src/data_merge/README.md` |
 | Annotation | Builds grid, OSM, image, and label context | `annotation_scripts/grid_generation_and_osm_extract.sh`, `annotation_scripts/run_download_bing_annotate_array.sh`, `annotation_scripts/merge_annotations.sh` | `src/annotation_scripts/README.md` |
 | Population and risk | Creates risk intermediates and population-at-risk outputs | `pop_at_risk_river_calculations/create_rasters.sh`, `pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh`, `pop_at_risk_river_calculations/find_pop_in_danger_pop.sh` | `src/pop_at_risk_river_calculations/README.md` |
-| Figures and exports | Produces GeoJSON, plots, and report assets | `figures_scripts/convert_voronoi_to_geojson_for_map.sh`, `figures_scripts/composite_area_population_plots.sh`, `figures_scripts/pop_at_risk_figures.sh` | `src/figures_scripts/README.md` |
+| Figures and exports | Produces GeoJSON, plots, and report assets | `figures_scripts/piechart.sh`, `figures_scripts/composite_area_population_plots.sh`, `figures_scripts/pop_at_risk_figures.sh` | `src/figures_scripts/README.md` |
 | Validation | Compares outputs to HydroWASTE and EU references | `pop_validation_scripts/comparison.sh` | `src/pop_validation_scripts/README.md` |
 | Sensitivity analysis | Runs parameter sweeps and comparison summaries | `sensitivity_analysis_scripts/create_voronoi_param_sweep.sh`, `sensitivity_analysis_scripts/add_pop_param_sweep.sh`, `sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh` | `src/sensitivity_analysis_scripts/README.md` |
 | Industrial analysis | Quantifies industrial land not covered by eligible WWTPs | `industrial_analysis/industrial_analysis.sh` | `src/industrial_analysis/README.md` |

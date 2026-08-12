@@ -24,3 +24,6 @@ coverage.json
 # Temporary audit artifacts
 tmp_*.py
 tmp_*.json
+
+# DuckDB scratch databases (created and removed by utils.duckdb_connection)
+*.db

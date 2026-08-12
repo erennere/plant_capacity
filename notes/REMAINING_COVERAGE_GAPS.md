@@ -1,5 +1,13 @@
 # Remaining Test Coverage Gaps
 
+> **Stale in places.** This is a point-in-time analysis snapshot. Since it was
+> written, `create_voronoi.dissolve_overlapping_geometries` (the slow recursive
+> variant) has been deleted along with its `recursion_lim` config key — only
+> `dissolve_overlapping_geometries_fast` remains — and several helpers have moved
+> into `src/geo_utils.py` / `src/utils.py`. Verify against the code before acting
+> on any entry here.
+
+
 **Report Generated**: May 16, 2026  
 **Current Coverage**: 76.29% (7,899 / 10,354 statements)  
 **Target Achieved**: ✅ 75%+  

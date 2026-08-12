@@ -64,6 +64,7 @@
 - `src/annotation_scripts/merge_annotations.py`
 - `src/annotation_scripts/annotations_inspection.py`
 - `src/annotation_scripts/copy_falsy_images.py`
+- `src/annotation_scripts/sample_annotations_by_class.py`: ad-hoc class-check helper; the only `config.yaml` section that does not resolve, and not wired into any chain (see `src/annotation_scripts/README.md`).
 - `src/annotation_scripts/README.md` explicitly says `NEW_03_WASTEWATERJOIN_GEOJSON.py` is currently not used, and `NEW_04_EXPORTGEOTIFF.py` is not used and not tested.
 
 ### Industrial analysis
@@ -73,11 +74,14 @@
 
 ### Figures
 
-- `src/figures_scripts/convert_voronoi_to_geojson_for_map.py`
 - `src/figures_scripts/composite_area_population_plots.py`
 - `src/figures_scripts/piechart_figure.py`
 - `src/figures_scripts/piechart_interactive.py`
+- `src/figures_scripts/sizes_interactive_map.py`
+- `src/figures_scripts/interactive_unconnected_industrial_map.py`
 - `src/figures_scripts/pop_at_risk_figures.py`
+- `src/figures_scripts/_shared.py`: not an entrypoint; shared figure-layer column conventions for the two piechart scripts.
+- `convert_voronoi_to_geojson_for_map.py`/`.sh` were deleted; their function moved into the other figure scripts.
 
 ### Population-at-risk and river calculations
 
@@ -99,6 +103,7 @@
 
 - `src/sensitivity_analysis_scripts/create_voronoi_parallel_sweep.py`
 - `src/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.py`
+- `src/sensitivity_analysis_scripts/sweep_ver_ranking.py`
 
 ## 4. Bash Scripts And Which Python Files They Execute
 
@@ -127,17 +132,18 @@
 
 ### Figures
 
-- `src/figures_scripts/convert_voronoi_to_geojson_for_map.sh` -> `src/figures_scripts/convert_voronoi_to_geojson_for_map.py`
 - `src/figures_scripts/composite_area_population_plots.sh` -> `src/figures_scripts/composite_area_population_plots.py`
 - `src/figures_scripts/pop_at_risk_figures.sh` -> `src/figures_scripts/pop_at_risk_figures.py`
+- `src/figures_scripts/piechart.sh` -> `src/figures_scripts/piechart_figure.py`, `piechart_interactive.py`, `sizes_interactive_map.py`
+- `src/figures_scripts/interactive_unconnected_industrial_map.sh` -> `src/figures_scripts/interactive_unconnected_industrial_map.py`
 
 ### Population-at-risk and river calculations
 
 - `src/pop_at_risk_river_calculations/create_rasters.sh` -> `src/pop_at_risk_river_calculations/create_rasters.py`
 - `src/pop_at_risk_river_calculations/find_unserved_pop.sh` -> `src/pop_at_risk_river_calculations/find_unserved_pop.py`
-- `src/pop_at_risk_river_calculations/assign_rivers_to_basin.sh` -> `src/pop_at_risk_river_calculations/assign_rivers_to_basin.py`, with a leading worker-count argument of `2`
-- `src/pop_at_risk_river_calculations/find_intersection_river.sh` -> `src/pop_at_risk_river_calculations/find_intersection_river.py`, with a leading worker-count argument of `32`
-- `src/pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh` -> `src/pop_at_risk_river_calculations/find_unserved_pop.py` -> `src/pop_at_risk_river_calculations/find_diff_pop.py` with leading arguments `0` and `true` -> `src/pop_at_risk_river_calculations/assign_rivers_to_basin.py` with leading argument `2` -> `src/pop_at_risk_river_calculations/find_intersection_river.py` with leading argument `32` -> `src/pop_at_risk_river_calculations/impact_polygons_pop.py` with leading argument `64`
+- `src/pop_at_risk_river_calculations/assign_rivers_to_basin.sh` -> `src/pop_at_risk_river_calculations/assign_rivers_to_basin.py`, with `--max-workers 2`
+- `src/pop_at_risk_river_calculations/find_intersection_river.sh` -> `src/pop_at_risk_river_calculations/find_intersection_river.py`, with `--max-workers 32`
+- `src/pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh` -> `find_unserved_pop.py` -> `find_diff_pop.py --index 0 --is-parallel true` -> `assign_rivers_to_basin.py --max-workers 2` -> `find_intersection_river.py --max-workers 32` -> `impact_polygons_pop.py --max-workers 64`
 - `src/pop_at_risk_river_calculations/find_pop_in_danger_pop.sh` -> `src/pop_at_risk_river_calculations/find_pop_in_danger_pop.py`
 
 ### Validation
@@ -151,27 +157,29 @@
 - `src/sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel.sh` -> `src/sensitivity_analysis_scripts/create_voronoi_parallel_sweep.py` -> subprocess calls to `src/create_voronoi.py`
 - `src/sensitivity_analysis_scripts/industrial_analysis_sweep.sh` -> `src/industrial_analysis/download_and_vectorize.py` -> `src/industrial_analysis/find_unconnected_industrial_areas.py`
 - `src/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh` -> `src/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.py`
+- `src/sensitivity_analysis_scripts/sweep_ver_ranking.sh` -> `src/sensitivity_analysis_scripts/sweep_ver_ranking.py`
+- `src/sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel_additive.sh` and `create_voronoi_single_additive_test.sh` -> additive-regime variants of the parallel sweep
 
 ## 5. Configuration Systems And Parameter Interfaces
 
 - `src/config.yaml` is the single repository-wide default configuration source. The top-level and research-code READMEs both state that defaults live there rather than inside the Python modules.
 - `src/config.yaml` contains these explicit configuration sections: `arguments`, `paths`, `s3`, `params`, `annotations`, `booleans`, `figures`, `credentials`, `execution`, and `impact_polygons_pop_params`.
 - `src/starter.py` is the central config loader. It normalizes optional CLI values, parses optional integers, floats, and booleans, expands path templates, derives `weight_type` and `weight_func_suffix`, resolves dynamic-buffer path tokens, and returns the flattened runtime cfg dictionary.
-- The shared positional override interface, parsed by `src/starter.py`, is: `level`, `version`, `buffer`, `weight_method`, `weight_func`, `dynamic_buffering`, `dynamic_buffer_k`.
+- The shared override interface, added by `starter.add_standard_override_arguments` and parsed by `starter.parse_config_overrides`, is the seven named flags `--level`, `--version`, `--buffer`, `--weight-method`, `--weight-func`, `--dynamic-buffering`, `--dynamic-buffer-k`. The legacy positional form has been removed, and `lib/utils.sh parse_overrides` now exits 2 on an unknown flag instead of shifting it away.
 - The config explicitly supports swappable callable names through `calculate_area_fn`, `calculate_buffer_fn`, and `prepare_data_fn` in `src/config.yaml`, with deferred resolution handled in `src/pipelines.py`.
-- `src/create_voronoi.py` adds `--approach`, `--only_round`, and `--verbose` on top of the shared positional overrides.
-- `src/industrial_analysis/find_unconnected_industrial_areas.py` adds `--approach`, `--only_round`, and `--verbose`, but only accepts approach `0` or `1`.
+- `src/create_voronoi.py` adds `--approach`, `--only-round`, and `--verbose` on top of the shared overrides.
+- `src/industrial_analysis/find_unconnected_industrial_areas.py` adds `--approach`, `--only-round`, and `--verbose`, but only accepts approach `0` or `1`.
 - `src/data_merge/merge_seg_results.py` adds `--variant` with choices `old` and `new`.
 - `src/annotation_scripts/download_bing_annotate.py` adds `instance_id`, `--num-instances`, and `--split-seed`.
-- `src/pop_at_risk_river_calculations/create_rasters.py` adds `job_index` and `total_jobs` before the shared overrides.
-- `src/pop_at_risk_river_calculations/find_diff_pop.py` adds `index` and `is_parallel` before the shared overrides.
+- `src/pop_at_risk_river_calculations/create_rasters.py` adds `--job-index` and `--total-jobs`.
+- `src/pop_at_risk_river_calculations/find_diff_pop.py` adds `--index` and `--is-parallel`.
+- `src/add_pop.py` adds a required `--index` (Voronoi file index).
 - `src/figures_scripts/composite_area_population_plots.py` adds `--approach`, `--color-col`, `--zonal-col`, `--hist-lower-q`, and `--hist-upper-q`.
 - `src/sensitivity_analysis_scripts/create_voronoi_parallel_sweep.py` adds `task_id`, `version`, `--approach`, `--num-jobs`, `--retry-failed-runs`, and `--shuffle-seed`. Its positional `dynamic_buffering` and `dynamic_buffer_k` arguments are explicitly accepted only for backward compatibility and ignored.
 - `src/create_voronoi.sh` reads `execution.mode` from `src/config.yaml` to choose array, sequential, or parallel wrapper behavior.
 - `src/pop_at_risk_river_calculations/create_rasters.sh` reads `annotations.default_mode` from `src/config.yaml` to choose array, sequential, or parallel wrapper behavior.
 - The sweep wrappers use `SLURM_ARRAY_TASK_ID` and `SHUFFLE_SEED` as execution and sharding interfaces.
-- `src/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh` exports `COMPARE_POP_SWEEP_MAX_WORKERS` from `SLURM_CPUS_PER_TASK`.
-- Non-YAML config surface: `src/annotation_scripts/download_bing_annotate.py` contains a module-level `BING_API_KEY` constant.
+- Non-YAML config surface: the Bing Maps key is read from the required `BING_API_KEY` environment variable; it is no longer stored in `config.yaml` or in a module-level constant.
 
 ## 6. Model Architectures Available In The Repository
 
@@ -205,7 +213,6 @@
 
 ### Visualization stages
 
-- `src/figures_scripts/convert_voronoi_to_geojson_for_map.sh`: map-ready GeoJSON export.
 - `src/figures_scripts/composite_area_population_plots.sh`: composite histogram and scatter diagnostics.
 - `src/figures_scripts/piechart_figure.py`: static world map with donut markers.
 - `src/figures_scripts/piechart_interactive.py`: interactive Folium summary map.
@@ -265,7 +272,8 @@
 ### Shared code dependencies
 
 - `src/starter.py` is the central dependency for runtime configuration; nearly every executable module imports `load_config` and `parse_config_overrides`.
-- `src/pipelines.py` is the shared orchestration dependency for output-path generation, data preparation, and Voronoi execution; it is reused by `src/create_voronoi.py`, `src/industrial_analysis/find_unconnected_industrial_areas.py`, `src/figures_scripts/convert_voronoi_to_geojson_for_map.py`, `src/figures_scripts/composite_area_population_plots.py`, `src/figures_scripts/piechart_figure.py`, `src/figures_scripts/piechart_interactive.py`, `src/pop_at_risk_river_calculations/create_rasters.py`, and `src/sensitivity_analysis_scripts/create_voronoi_parallel_sweep.py`.
+- `src/geo_utils.py` (spatial) and `src/utils.py` (domain-agnostic) are the canonical shared-helper modules. New shared logic belongs in one of them; `src/figures_scripts/_shared.py` is a narrower target for figure-layer column conventions.
+- `src/pipelines.py` is the shared orchestration dependency for output-path generation, data preparation, and Voronoi execution; it is reused by `src/create_voronoi.py`, `src/industrial_analysis/find_unconnected_industrial_areas.py`, `src/figures_scripts/composite_area_population_plots.py`, `src/figures_scripts/piechart_figure.py`, `src/figures_scripts/piechart_interactive.py`, `src/pop_at_risk_river_calculations/create_rasters.py`, and `src/sensitivity_analysis_scripts/create_voronoi_parallel_sweep.py`.
 - `src/create_voronoi.py` also acts as a shared utility module; helpers from it are imported by `src/download_pop.py`, `src/combine_watersheds.py`, the data-merge scripts, annotation scripts, validation scripts, industrial-analysis scripts, and population-at-risk scripts.
 - `src/annotation_scripts/merge_annotations.py` provides `decode_gen_text`, which is reused by `src/annotation_scripts/annotations_inspection.py`.
 - `src/pop_validation_scripts/hw_comparison.py` provides `ndvi`, `multiples`, and `replace_inf`, which are reused by `src/pop_validation_scripts/eu_comparison.py` and `src/sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.py`.

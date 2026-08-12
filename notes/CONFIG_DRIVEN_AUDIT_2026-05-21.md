@@ -1,0 +1,176 @@
+# Config-Driven Audit Report (2026-05-21)
+
+## Summary Counts
+- hasattr occurrences: 58 (non-test: 3)
+- .get(...) occurrences: 53 (non-test: 49)
+- getattr(...) occurrences: 9 (non-test: 9)
+- literal candidates (string/int/float regex matches): 123052 (non-test: 4507)
+
+## Raw Files
+- notes/hasattr_issues.txt
+- notes/get_issues.txt
+- notes/getattr_issues.txt
+- notes/literal_candidates_raw.txt
+- notes/literal_candidates_raw_rel.txt
+
+## Prioritized Non-Test Hotspots (Literals)
+- 779	src\create_voronoi.py
+- 279	src\annotation_scripts\download_bing_annotate.py
+- 229	src\sensitivity_analysis_scripts\compare_pop_sweep_hw_eu.py
+- 205	src\download_pop.py
+- 186	src\pop_at_risk_river_calculations\impact_polygons_pop.py
+- 184	src\pop_at_risk_river_calculations\create_rasters.py
+- 172	src\pipelines.py
+- 171	src\industrial_analysis\download_and_vectorize.py
+- 168	src\figures_scripts\piechart_figure.py
+- 157	src\annotation_scripts\NEW_03_WASTEWATERJOIN_GEOJSON.py
+- 149	src\figures_scripts\piechart_interactive.py
+- 135	src\starter.py
+- 126	src\figures_scripts\composite_area_population_plots.py
+- 114	src\sensitivity_analysis_scripts\create_voronoi_parallel_sweep.py
+- 111	src\industrial_analysis\find_unconnected_industrial_areas.py
+- 111	src\figures_scripts\pop_at_risk_figures.py
+- 102	src\data_merge\correct_locations_w_OSM.py
+- 99	src\pop_validation_scripts\hw_comparison.py
+- 96	src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py
+- 94	src\pop_at_risk_river_calculations\find_intersection_river.py
+- 93	src\add_pop.py
+- 90	src\data_merge\final_data_merge.py
+- 80	src\data_merge\merge_seg_results.py
+- 73	src\pop_validation_scripts\eu_comparison.py
+- 72	src\pop_at_risk_river_calculations\find_pop_in_danger_pop.py
+- 70	src\pop_at_risk_river_calculations\find_diff_pop.py
+- 68	src\pop_at_risk_river_calculations\assign_rivers_to_basin.py
+- 59	src\annotation_scripts\annotations_inspection.py
+- 39	src\annotation_scripts\merge_annotations.py
+- 37	src\pop_validation_scripts\verification_script.py
+
+## All hasattr Issues
+- src\create_voronoi.py:184:coords = list(geom.coords) if hasattr(geom, "coords") else []
+- src\annotation_scripts\NEW_03_WASTEWATERJOIN_GEOJSON.py:38:if hasattr(handler, 'setLevel'):
+- src\figures_scripts\pop_at_risk_figures.py:181:if hasattr(ax, 'gridlines'):
+- src\tests\unit\test_phase2_orchestration.py:363:assert hasattr(add_pop, 'main')
+- src\tests\unit\test_phase2_orchestration.py:370:assert hasattr(cv, 'orchestrate_voronoi_weights')
+- src\tests\unit\test_phase3_error_handling.py:105:if hasattr(dp, 'extract_bounds'):
+- src\tests\unit\test_phase3_error_handling.py:141:if hasattr(df, 'to_csv'):
+- src\tests\unit\test_phase3_error_handling.py:210:if hasattr(cr, 'extract_islands'):
+- src\tests\unit\test_phase3_error_handling.py:220:if hasattr(cr, 'extract_islands'):
+- src\tests\unit\test_phase3_error_handling.py:237:if hasattr(cr, 'sign_raster'):
+- src\tests\unit\test_phase3_error_handling.py:251:if hasattr(cr, 'iter_windows'):
+- src\tests\unit\test_phase3_error_handling.py:453:if hasattr(dv, 'download_file'):
+- src\tests\unit\test_phase3_error_handling.py:465:if hasattr(dv, 'vectorize_raster'):
+- src\tests\unit\test_phase3_error_handling.py:540:if hasattr(prf, 'plot_population_at_risk'):
+- src\tests\unit\test_phase3_error_handling.py:556:if hasattr(prf, 'plot_population_at_risk'):
+- src\tests\unit\test_phase5_annotation_coverage.py:46:if hasattr(osm_extract, 'build_osm_query'):
+- src\tests\unit\test_phase5_annotation_coverage.py:59:if hasattr(osm_extract, 'parse_osm_response'):
+- src\tests\unit\test_phase5_annotation_coverage.py:75:if hasattr(osm_extract, 'bbox_from_geometry'):
+- src\tests\unit\test_phase5_annotation_coverage.py:86:if hasattr(osm_extract, 'geojson_to_gdf'):
+- src\tests\unit\test_phase5_annotation_coverage.py:119:if hasattr(wwtp_join, 'spatial_join'):
+- src\tests\unit\test_phase5_annotation_coverage.py:138:if hasattr(wwtp_join, 'resolve_duplicates'):
+- src\tests\unit\test_phase5_annotation_coverage.py:158:if hasattr(wwtp_join, 'merge_attributes'):
+- src\tests\unit\test_phase5_annotation_coverage.py:176:if hasattr(wwtp_join, 'gdf_to_geojson'):
+- src\tests\unit\test_phase5_annotation_coverage.py:192:if hasattr(bing_annotate, 'quad_key_to_tile'):
+- src\tests\unit\test_phase5_annotation_coverage.py:204:if hasattr(bing_annotate, 'tile_to_bbox'):
+- src\tests\unit\test_phase5_annotation_coverage.py:216:if hasattr(bing_annotate, 'bbox_to_tiles'):
+- src\tests\unit\test_phase5_annotation_coverage.py:237:if hasattr(bing_annotate, 'download_tile'):
+- src\tests\unit\test_phase5_annotation_coverage.py:251:if hasattr(bing_annotate, 'RateLimiter'):
+- src\tests\unit\test_phase5_annotation_coverage.py:371:if hasattr(bing_annotate, 'validate_bbox'):
+- src\tests\unit\test_phase5_annotation_coverage.py:381:if hasattr(bing_annotate, 'download_tile'):
+- src\tests\unit\test_phase5_annotation_coverage.py:403:if hasattr(osm_extract, 'geojson_to_gdf'):
+- src\tests\unit\test_phase5_industrial_coverage.py:83:if hasattr(dv, 'vectorize_raster_file'):
+- src\tests\unit\test_phase5_industrial_coverage.py:93:if hasattr(dv, 'transform_crs'):
+- src\tests\unit\test_phase5_industrial_coverage.py:116:if hasattr(dv, 'points_to_raster'):
+- src\tests\unit\test_phase5_industrial_coverage.py:157:if hasattr(cr, 'extract_worldpop_universal'):
+- src\tests\unit\test_phase5_industrial_coverage.py:175:if hasattr(cr, 'get_raster_windows'):
+- src\tests\unit\test_phase5_industrial_coverage.py:202:if hasattr(cr, 'find_islands'):
+- src\tests\unit\test_phase5_industrial_coverage.py:240:if hasattr(fir, 'intersect_river_basin'):
+- src\tests\unit\test_phase5_industrial_coverage.py:252:if hasattr(fir, 'segment_line'):
+- src\tests\unit\test_phase5_industrial_coverage.py:283:if hasattr(ipp, 'tile_polygon'):
+- src\tests\unit\test_phase5_industrial_coverage.py:309:if hasattr(ipp, 'assign_pop_to_tiles'):
+- src\tests\unit\test_phase5_industrial_coverage.py:319:if hasattr(ipp, 'validate_tile_coords'):
+- src\tests\unit\test_phase5_visualization_coverage.py:363:if hasattr(result, 'values'):
+- src\tests\unit\test_phase6_90pct_target.py:427:if hasattr(dba, 'linestring_angle'):
+- src\tests\unit\test_phase6_90pct_target.py:437:if hasattr(dba, 'process_bbox'):
+- src\tests\unit\test_phase6_90pct_target.py:461:if hasattr(ipp, 'generate_single_segment_plume'):
+- src\tests\unit\test_phase6_90pct_target.py:473:if hasattr(ipp, 'calculate_load_ratio'):
+- src\tests\unit\test_phase6_90pct_target.py:485:if hasattr(ipp, 'orchestrate_logic'):
+- src\tests\unit\test_phase7_visualization_focus.py:288:assert hasattr(pf, 'calculate_size')
+- src\tests\unit\test_phase7_visualization_focus.py:290:assert hasattr(capp, '_bleach_color')
+- src\tests\unit\test_phase7_visualization_focus.py:295:assert hasattr(capp, 'clip_outliers')
+- src\tests\unit\test_phase8_complex_orchestration.py:457:if hasattr(dav, 'vectorize_csv'):
+- src\tests\unit\test_phase8_complex_orchestration.py:472:if not hasattr(dav, 'download_industrial_data'):
+- src\tests\unit\test_phase8_complex_orchestration.py:510:if hasattr(dba, 'latlon_to_tile'):
+- src\tests\unit\test_phase8_complex_orchestration.py:527:if hasattr(dba, 'process_bbox'):
+- src\tests\unit\test_phase8_complex_orchestration.py:543:if hasattr(dba, 'linestring_angle'):
+- src\tests\unit\test_phase8_complex_orchestration.py:599:if not HAS_DAV or not hasattr(dav, 'vectorize_csv'):
+- src\tests\unit\test_phase8_complex_orchestration.py:616:if hasattr(dav, 'vectorize_csv'):
+
+## All .get(...) Issues
+- src\add_pop.py:219:futures = [executor.submit(intersect_single_file, gdf[gdf[country_col] == iso_2].copy(), tif_filepaths.get(iso_2, []), all_years=all_years)
+- src\create_voronoi.py:89:_LOG_LEVEL_NAME = os.environ.get(
+- src\create_voronoi.py:690:df.get('num_detection_rect', pd.Series(0, index=df.index)),
+- src\create_voronoi.py:694:df.get('num_detection_circle', pd.Series(0, index=df.index)),
+- src\create_voronoi.py:1637:k_value = kwargs.get('k_value', 0.5)
+- src\create_voronoi.py:1718:row.get('num_detection_circle', 0), errors='coerce') or 0)
+- src\create_voronoi.py:1720:row.get('num_detection_rect',   0), errors='coerce') or 0)
+- src\create_voronoi.py:1737:df.get('basin_area', pd.Series(dtype=float)), errors='coerce'
+- src\create_voronoi.py:2629:sub_clip = clip_groups.get(key, None)
+- src\download_pop.py:173:url = res.get('download_url')
+- src\download_pop.py:174:name = res.get('name')
+- src\download_pop.py:222:with requests.get(url, stream=True) as response:
+- src\download_pop.py:225:total_size = int(response.headers.get('Content-Length', 0))
+- src\download_pop.py:267:response = requests.get(url)
+- src\download_pop.py:275:response = requests.get(url.replace('BSGM', 'maxar_v1'))
+- src\starter.py:189:existing = merged.get(key, _MISSING)
+- src\starter.py:336:if cfg["dynamic_buffering"] and cfg.get("dynamic_buffer_k") is None:
+- src\starter.py:399:raw_data_dir = paths_cfg.get("data_dir")
+- src\annotation_scripts\download_bing_annotate.py:49:BING_API_KEY = os.environ.get("BING_API_KEY", "")
+- src\annotation_scripts\download_bing_annotate.py:103:r = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:80:r = requests.get(url, params={"data": q}, timeout=300)
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:113:tags = el.get("tags", {})
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:115:coords = [nodes[n] for n in el.get("nodes", []) if n in nodes]
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:124:for m in el.get("members", []):
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:125:if m.get("type") == "way" and m.get("role") == "outer":
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:126:way_el = ways.get(m["ref"])
+- src\annotation_scripts\NEW_02_EXTRACTOSMDATAFULL_GEOJSON.py:128:coords = [nodes[n] for n in way_el.get("nodes", []) if n in nodes]
+- src\figures_scripts\piechart_interactive.py:218:r1, r2 = (row.get(f'RES_{tag1}_{agg_t}', 0)/1e6), (row.get(f'RES_{tag2}_{agg_t}', 0)/1e6)
+- src\figures_scripts\piechart_interactive.py:219:i1, i2 = (row.get(f'IND_{tag1}_{agg_t}', 0)/1e6), (row.get(f'IND_{tag2}_{agg_t}', 0)/1e6)
+- src\figures_scripts\piechart_interactive.py:225:<b>Pop (2024):</b> {row.get('population_total', 0):,.0f}<br><hr style="margin:4px 0;">
+- src\figures_scripts\piechart_interactive.py:226:<b>Pop Served:</b> {row.get('population_served', 0):,.0f}<br>
+- src\figures_scripts\piechart_interactive.py:227:<b>Pop Served [%]:</b> {row.get(pop_col, 0):,.1f}%<br><hr style="margin:4px 0;">
+- src\industrial_analysis\download_and_vectorize.py:64:response = requests.get(url, stream=True)
+- src\industrial_analysis\download_and_vectorize.py:67:total_size = int(response.headers.get('content-length', 0))
+- src\pop_at_risk_river_calculations\create_rasters.py:171:h_id = row.get(basin_col)
+- src\pop_at_risk_river_calculations\create_rasters.py:211:"meta": {k: row.get(k) for k in ["NEXT_DOWN", "NEXT_SINK", "MAIN_BAS"]}
+- src\pop_at_risk_river_calculations\find_intersection_river.py:40:id1 = graph.get(id1)
+- src\pop_at_risk_river_calculations\find_intersection_river.py:44:id2 = graph.get(id2)
+- src\pop_at_risk_river_calculations\find_intersection_river.py:174:# We use .get(l[0]) to handle cases where the ID might be missing gracefully
+- src\pop_at_risk_river_calculations\find_intersection_river.py:176:lambda l: my_dict.get(l[0]) if (isinstance(l, list) and len(l) > 0) else None
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:107:for trib in upstream_adj.get(node, []):
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:344:levels = level_dict.get(int(main_riv), [])
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:370:state = local_next_dict.get(rid)
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:378:lat = lat_dict.get(rid, 0.0)
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:391:downstream_state = local_next_dict.get(down_id)
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:395:downstream_load_ratio = calculate_load_ratio(None, discharge_dict.get(down_id, 0.0),
+- src\pop_validation_scripts\eu_comparison.py:208:approach = params.get('approach') if isinstance(params, dict) else None
+- src\pop_validation_scripts\hw_comparison.py:262:approach = params.get('approach') if isinstance(params, dict) else None
+- src\sensitivity_analysis_scripts\create_voronoi_parallel_sweep.py:350:task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "0"))
+- src\tests\unit\test_uncovered_scripts.py:230:level = kwargs.get("level")
+- src\tests\unit\test_uncovered_scripts.py:532:assert "HYBAS_ID" not in unmatched.columns or pd.isna(unmatched.get("HYBAS_ID", pd.Series([pd.NA])).iloc[0])
+- src\tests\unit\test_weighting.py:193:to_file_calls.append({"filename": filename, "mode": kwargs.get("mode")})
+- src\tests\unit\test_weighting.py:276:to_file_calls.append({"filename": filename, "mode": kwargs.get("mode")})
+
+## All getattr(...) Issues
+- src\create_voronoi.py:93:_LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
+- src\create_voronoi.py:445:if geom is None or getattr(geom, 'is_empty', True):
+- src\pipelines.py:107:resolved = getattr(module, fn_name, None)
+- src\starter.py:119:raw_value = getattr(args, field_name, None)
+- src\industrial_analysis\download_and_vectorize.py:211:return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=getattr(gdf, "crs", None))
+- src\industrial_analysis\download_and_vectorize.py:376:empty = industrial_gdf.copy() if industrial_gdf is not None else gpd.GeoDataFrame(geometry=[], crs=getattr(watershed_gdf, "crs", None))
+- src\industrial_analysis\download_and_vectorize.py:381:return gpd.GeoDataFrame(empty, geometry="geometry", crs=getattr(empty, "crs", None))
+- src\pop_at_risk_river_calculations\create_rasters.py:231:geoms = getattr(merged, "geoms", None)
+- src\pop_at_risk_river_calculations\impact_polygons_pop.py:75:int(getattr(row, id_col)): (int(getattr(row, next_col)), float(getattr(row, weight_col)))
+
+## Notes
+- requests.get(...) lines are included in the .get regex results but are HTTP calls, not dict.get fallbacks.
+- literal scan is intentionally broad and includes test literals, format strings, and benign constants; use the non-test summary for cleanup prioritization.

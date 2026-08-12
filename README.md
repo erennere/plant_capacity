@@ -91,7 +91,7 @@ Weight transformation functions are controlled by `create_voronoi.weight_method`
 
 To avoid disproportionately large Voronoi cells, especially in sparse areas, cells are clipped to a buffer around each location after creation.
 
-- Static buffering: disable dynamic buffering with `create_voronoi.dynamic_buffering: false`. The positional `buffer` argument overrides the config value at runtime.
+- Static buffering: disable dynamic buffering with `create_voronoi.dynamic_buffering: false`. The `--buffer` flag overrides the config value at runtime.
 - Dynamic buffering: enable with `create_voronoi.dynamic_buffering: true`. The scale factor is `create_voronoi.dynamic_buffer_k`.
 
 The sweep analysis scripts support sensitivity analysis across combinations of model parameters. The configurable hooks that govern those runs are `create_voronoi.calculate_area_fn`, `create_voronoi.calculate_buffer_fn`, and `create_voronoi.prepare_data_fn`, which are resolved at runtime through `src/pipelines.py`.
@@ -125,7 +125,7 @@ The repository is organized around one canonical processing chain and several op
 | Area | Location | Purpose |
 | --- | --- | --- |
 | Runtime configuration | `src/config.yaml` | Global parameter and path control |
-| Config resolver | `src/starter.py` | Resolves inherited config values and positional overrides |
+| Config resolver | `src/starter.py` | Resolves inherited config values and named `--level`/`--version`/... overrides |
 | Main technical index | `src/README.md` | Stage index and cross-stage settings |
 | Merge stage | `src/data_merge/` | Build the canonical WWTP dataset |
 | Annotation stage | `src/annotation_scripts/` | Generate grids, OSM context, and annotation merges |
@@ -153,12 +153,16 @@ The standard end-to-end order is the following.
 8. `src/add_pop.sh`
 9. `src/pop_at_risk_river_calculations/create_rasters.sh`
 10. `src/pop_at_risk_river_calculations/pop_differences_and_impact_polygons.sh`
+    — chains `find_unserved_pop` → `find_diff_pop` → `assign_rivers_to_basin` →
+    `find_intersection_river` → `impact_polygons_pop`. Each of the first four also
+    has a standalone wrapper
+    (`find_unserved_pop.sh`, `assign_rivers_to_basin.sh`, `find_intersection_river.sh`)
+    for rerunning one stage without repeating the whole chain.
 11. `src/pop_at_risk_river_calculations/find_pop_in_danger_pop.sh`
 12. `src/pop_validation_scripts/comparison.sh`
 13. `src/industrial_analysis/industrial_analysis.sh`
-14. `src/figures_scripts/convert_voronoi_to_geojson_for_map.sh`
-15. `src/figures_scripts/composite_area_population_plots.sh`
-16. `src/figures_scripts/pop_at_risk_figures.sh`
+14. `src/figures_scripts/composite_area_population_plots.sh`
+15. `src/figures_scripts/pop_at_risk_figures.sh`
 
 The sensitivity-analysis launchers under `src/sensitivity_analysis_scripts/` are optional and sit outside the canonical production run.
 
@@ -189,25 +193,43 @@ graph TD
 	R --> S[(population-enriched Voronoi layers)]
 
 	S --> T[create_rasters.sh]
+	T --> T1[(raster country statistics)]
 	T --> U[pop_differences_and_impact_polygons.sh]
 	F --> U
 	V[(HydroRIVERS)] --> U
-	U --> W[find_pop_in_danger_pop.sh]
+	U --> U1[find_unserved_pop.sh]
+	U1 --> U2[find_diff_pop]
+	U1 --> U3[assign_rivers_to_basin.sh]
+	U3 --> U4[find_intersection_river.sh]
+	U4 --> U5[impact_polygons_pop]
+	U5 --> W[find_pop_in_danger_pop.sh]
 	W --> X[(population-at-risk outputs)]
 
 	S --> Y[comparison.sh]
 	Y --> Z[(validation outputs)]
 
-	L --> AA[industrial_analysis.sh]
-	F --> AA
-	AA --> AB[(industrial coverage outputs)]
+	AZ[(Zenodo industrial land-cover source)] --> AA[download_and_vectorize.sh]
+	AA --> AA1[(vectorized industrial areas)]
+	L --> AA2[find_unconnected_industrial_areas.sh]
+	F --> AA2
+	AA1 --> AA2
+	AA2 --> AB[(industrial coverage outputs)]
 
-	P --> AC[convert_voronoi_to_geojson_for_map.sh]
-	S --> AD[composite_area_population_plots.sh]
-	X --> AE[pop_at_risk_figures.sh]
-	Z --> AD
-	X --> AD
+	S --> AC[composite_area_population_plots.sh]
+	X --> AD[pop_at_risk_figures.sh]
+	T1 --> AG[piechart.sh]
+	AG --> AH[(static and interactive piecharts)]
+	S --> AI[sizes_interactive_map.py]
+	AI --> AJ[(interactive size map)]
+	AB --> AE[interactive_unconnected_industrial_map.sh]
+	AE --> AF[(unconnected-industrial HTML map)]
 ```
+
+Notes on this diagram:
+- `find_diff_pop` is a dead end sequenced after `find_unserved_pop.sh` (see `pop_differences_and_impact_polygons.sh`) — nothing downstream depends on its output, so it does not feed `assign_rivers_to_basin.sh`.
+- Only `find_unconnected_industrial_areas.sh` reads the annotation-enriched WWTP layer; `download_and_vectorize.sh` has no annotation dependency, so the two industrial-analysis stages are shown as gated separately.
+- `composite_area_population_plots.sh` reads the population-enriched Voronoi layers directly and does not consume validation or population-at-risk outputs.
+- `piechart.sh` (static and interactive) reads the raster country statistics produced by `create_rasters.sh`; `sizes_interactive_map.py` reads the population-enriched Voronoi layers directly, not the raster statistics.
 
 ## Environment Creation
 

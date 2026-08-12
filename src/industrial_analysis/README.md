@@ -21,7 +21,7 @@ It runs after the main Voronoi and population stages, but it uses the same confi
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
-| `industrial_analysis.sh` | shell launcher | Runs the industrial analysis chain | config values and positional overrides | logs plus industrial outputs |
+| `industrial_analysis.sh` | shell launcher | Runs the industrial analysis chain | config values and named `--level`/`--version`/... overrides | logs plus industrial outputs |
 | `download_and_vectorize.py` | Python worker | Downloads and vectorizes industrial raster data | Zenodo archive, basin data, country context | merged industrial GeoPackage |
 | `find_unconnected_industrial_areas.py` | Python worker | Finds industrial polygons outside service coverage | industrial polygons, corrected WWTP data, industrial categories | unconnected industrial parquet |
 
@@ -52,7 +52,7 @@ A successful run writes the merged industrial layer and the unconnected-industri
 ## Smart Behaviors
 - `download_and_vectorize.py` caches rasters when `industrial_persist_rasters=true` and can reuse the merged industrial GeoPackage when overwrite is disabled.
 - `find_unconnected_industrial_areas.py` uses `industrial_category_numbers` to restrict the Voronoi branch to industrial WWTPs.
-- Both scripts accept the same positional override layout used by the rest of the pipeline.
+- Both scripts accept the same named override flags used by the rest of the pipeline.
 
 Delete the industrial output directory or enable the overwrite flags to force a rerun.
 
@@ -63,9 +63,9 @@ Delete the industrial output directory or enable the overwrite flags to force a 
 | `download_and_vectorize.industrial_min_cells` | `100` | Minimum connected raster size |
 | `download_and_vectorize.industrial_persist_rasters` | `true` | Preserve downloaded rasters |
 | `download_and_vectorize.industrial_simplify_tolerance` | `0.001` | Geometry simplification tolerance |
-| `download_and_vectorize.industrial_vectorize_overwrite` | `false` | Overwrite vectorized outputs |
+| `download_and_vectorize.overwrite_existing` | `false` | Overwrite vectorized outputs |
 | `find_unconnected_industrial_areas.industrial_category_numbers` | `[]` | Numeric filter for industrial WWTP categories |
-| `find_unconnected_industrial_areas.industrial_unconnected_overwrite` | `false` | Overwrite unconnected outputs |
+| `find_unconnected_industrial_areas.overwrite_existing` | `false` | Overwrite unconnected outputs |
 | `find_unconnected_industrial_areas.paths.industrial_unconnected_output` | template | Unconnected industrial parquet |
 
 ## Known Issues / TODOs

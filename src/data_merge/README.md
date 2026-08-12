@@ -37,7 +37,7 @@ If cluster-specific segmentation results are present, override `merge_seg_result
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
-| `combine_locations.sh` | shell launcher | Runs the full merge chain in order | config values and positional overrides | logs plus the final merged WWTP dataset |
+| `combine_locations.sh` | shell launcher | Runs the full merge chain in order | config values and named `--level`/`--version`/... overrides | logs plus the final merged WWTP dataset |
 | `correct_locations_w_OSM.py` | Python worker | Corrects WWTP geometries using OSM and corrected-source fallback | HydroWASTE, OSM geometry, Overture cache, radius | corrected point layer |
 | `merge_seg_results.py` | Python worker | Merges segmentation outputs into corrected points | segmentation CSV, corrected layers, legacy flag | segmentation-enriched layer(s) |
 | `final_data_merge.py` | Python worker | Produces the canonical merged WWTP layer | corrected sources and country-specific files | `all_merged_v*.gpkg` |

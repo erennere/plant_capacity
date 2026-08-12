@@ -21,13 +21,10 @@ It runs after the population-enriched Voronoi stage. Its outputs are diagnostic 
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
-| `comparison.sh` | shell launcher | Runs the validation sequence | config values and positional overrides | logs plus validation outputs |
+| `comparison.sh` | shell launcher | Runs the validation sequence | config values and named `--level`/`--version`/... overrides | logs plus validation outputs |
 | `verification_script.py` | Python worker | Builds general verification summaries | pipeline outputs and reference layers | verification tables and diagnostics |
 | `hw_comparison.py` | Python worker | Compares outputs against HydroWASTE | verification subsets and HydroWASTE references | comparison figures and metrics |
 | `eu_comparison.py` | Python worker | Compares outputs against the EU reference layer | verification subsets and EU WWTP reference | comparison figures and metrics |
-| `plot_results.py` | Python worker | Utility plotting helper for validation artifacts | intermediate validation tables | plot files |
-| `de.py` | Python worker | Country-specific helper workflow | validation sources | helper outputs |
-| `NO_EU.py` | Python worker | Non-EU helper workflow | validation sources | helper outputs |
 
 ## Execution Flow
 ```mermaid

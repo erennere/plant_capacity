@@ -33,3 +33,6 @@ dependencies:
   - pytest-mock>=3.14
   - pip:
       - hdx-python-api
+      # Declared in src/pyproject.toml but missing here, so a conda-only setup
+      # could not import figures_scripts/interactive_unconnected_industrial_map.
+      - mapbox-vector-tile

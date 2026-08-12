@@ -28,6 +28,10 @@ It is an experiment and evaluation layer on top of the main pipeline. It reuses 
 | `industrial_analysis_sweep.sh` | shell launcher | Sweeps the industrial analysis branch | task id and industrial grid settings | industrial sweep outputs |
 | `compare_pop_sweep_hw_eu.sh` | shell launcher | Compares sweep outputs against HW and EU references | sweep outputs and reference layers | comparison tables and figures |
 | `compare_pop_sweep_hw_eu.py` | Python worker | Aggregates and scores sweep outputs | population-enriched sweep layers and references | alias maps, summaries, and ranking tables |
+| `sweep_ver_ranking.sh` | shell launcher | Ranks the sweep's verification subsets | sweep verification outputs and the EU reference layer | ranking tables |
+| `sweep_ver_ranking.py` | Python worker | Scores each sweep run's verification subsets against the EU reference | verification `.gpkg` outputs and the EU reference layer | per-subset and overall ranking CSVs |
+| `create_voronoi_param_sweep_parallel_additive.sh` | shell launcher | Parallel sweep variant restricted to the additive weighting regime | array task id and internal job count | additive-regime sweep outputs |
+| `create_voronoi_single_additive_test.sh` | shell launcher | Single-combination smoke run of the additive regime | one parameter combination | one Voronoi output plus logs |
 
 ## Execution Flow
 ```mermaid
@@ -39,6 +43,8 @@ graph TD
   F --> G([industrial_analysis_sweep.sh]) --> H[(industrial sweep outputs)]
   F --> I([compare_pop_sweep_hw_eu.sh]) --> J[compare_pop_sweep_hw_eu.py]
   J --> K[(comparison tables and figures)]
+  F --> L([sweep_ver_ranking.sh]) --> M[sweep_ver_ranking.py]
+  M --> N[(ranking tables)]
 ```
 
 ## Run Instructions
@@ -50,6 +56,7 @@ sbatch sensitivity_analysis_scripts/add_pop_param_sweep.sh
 sbatch sensitivity_analysis_scripts/create_voronoi_param_sweep_parallel.sh
 sbatch sensitivity_analysis_scripts/industrial_analysis_sweep.sh
 sbatch sensitivity_analysis_scripts/compare_pop_sweep_hw_eu.sh
+sbatch sensitivity_analysis_scripts/sweep_ver_ranking.sh
 ```
 
 ### Direct debug run
@@ -74,9 +81,17 @@ Delete the sweep output directories to force a rerun.
 | --- | --- | --- |
 | `create_voronoi_parallel_sweep.paths.buffers_dir` | null | Buffer directory input |
 | `create_voronoi_parallel_sweep.paths.voronoi_dir` | null | Voronoi output directory |
-| `compare_pop_sweep_hw_eu.eu_utm` | `32634` | UTM projection used for comparison |
 | `compare_pop_sweep_hw_eu.paths.eu_ref_filepath` | null | EU reference input |
 | `compare_pop_sweep_hw_eu.threshold` | null | Comparison threshold |
+| `compare_pop_sweep_hw_eu.hw_weight` | `0.7` | Weight of the HydroWASTE term in the combined score |
+| `compare_pop_sweep_hw_eu.eu_reference_factor` | `1` | Multiplier applied to `uwwCapacity` to obtain served population |
+| `sweep_ver_ranking.percent_verification` | template | Share of each run's sites used for verification |
+| `sweep_ver_ranking.hw_weight` / `eu_reference_factor` | null | Inherited from `compare_pop_sweep_hw_eu` so both rankings score identically |
+
+The former `eu_utm` key is gone: the EU reference layer's projection is now
+estimated from the layer itself (`geo_utils.estimate_utm_crs`) by the shared
+`load_eu_reference_layer` helper, so metre distances stay honest wherever the
+reference data sits.
 
 ## Known Issues / TODOs
 - `create_voronoi_param_sweep.sh` and `create_voronoi_param_sweep_parallel.sh` encode their parameter grids directly in the shell script rather than in `config.yaml`.

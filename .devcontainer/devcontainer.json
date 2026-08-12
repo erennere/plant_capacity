@@ -1,0 +1,61 @@
+{
+  "name": "WWTP Sandbox",
+
+  // Prebuilt, centrally published image — see README for configuration options
+  // and how to build your own variant.
+  "image": "repo.heigit.org/heigit/claude-devcontainer:latest",
+  "remoteUser": "vscode",
+
+  "features": {
+    // Docker-in-Docker (nested daemon, not docker-outside-of-docker) — see README.
+    // "ghcr.io/devcontainers/features/docker-in-docker:2": {
+    //   "moby": false
+    // }
+  },
+
+  // Named volumes only — see README's Security model.
+  "mounts": [
+    "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
+    "source=uv-cache-${devcontainerId},target=/home/vscode/.cache/uv,type=volume",
+    "source=maven-cache,target=/home/vscode/.m2,type=volume",
+    "source=zsh-history-${devcontainerId},target=/commandhistory,type=volume"
+  ],
+
+  // Overrides for defaults already baked into the image — see README's
+  // Configuration options table. Shown here commented-out with example values.
+  "containerEnv": {
+    // "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "0",
+    // "DEVCONTAINER_NAME": "cool-project",
+    // "NPM_EXTRA_PACKAGES": "",
+    // "JAVA_VERSION": "25.0.3-tem",
+    // "PYTHON_VERSION": "3.12",
+    // "GIT_AI_MESSAGE": "Assisted-by: Claude Code"
+  },
+
+  // Baked into the image at /usr/local/bin — bare commands, not repo-relative paths.
+  "updateContentCommand": "update-content.sh",
+  "postCreateCommand": "post-create.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
+    },
+    "jetbrains": {
+      "backend": "IntelliJ",
+      "plugins": [
+        "com.anthropic.code.plugin"
+      ],
+      "settings": {
+        "org.jetbrains.plugins.terminal:app:TerminalOptionsProvider.myShellPath": "/bin/zsh"
+      }
+    }
+  }
+}

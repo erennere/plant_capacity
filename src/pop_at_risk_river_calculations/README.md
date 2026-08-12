@@ -35,7 +35,7 @@ Note: `find_intersection_river.py` reads the river search distance from `find_in
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
-| `create_rasters.sh` | shell launcher | Runs raster preparation in the configured execution mode | config values and positional overrides | raster-country stats and non-served intermediates |
+| `create_rasters.sh` | shell launcher | Runs raster preparation in the configured execution mode | config values and named `--level`/`--version`/... overrides | raster-country stats and non-served intermediates |
 | `create_rasters.py` | Python worker | Builds raster inputs for the non-served analysis | population-enriched Voronoi layers, rasters, basin data | served/non-served raster products |
 | `find_unserved_pop.py` | Python worker | Thresholds and vectorizes non-served areas | raster products and threshold settings | non-served GeoPackages |
 | `find_diff_pop.py` | Python worker | Computes population differences for later impact logic | served/unserved products and references | difference layers and tables |
@@ -44,7 +44,14 @@ Note: `find_intersection_river.py` reads the river search distance from `find_in
 | `impact_polygons_pop.py` | Python worker | Propagates downstream impact and builds polygons | river-linked non-served features and propagation parameters | impact polygons and summaries |
 | `find_pop_in_danger_pop.py` | Python worker | Aggregates final at-risk population results | impact polygons and population rasters | final at-risk parquet |
 | `pop_differences_and_impact_polygons.sh` | shell launcher | Chains the middle risk stages | non-served outputs and config overrides | difference, river, and impact outputs |
+| `find_unserved_pop.sh` | shell launcher | Runs `find_unserved_pop.py` on its own | raster products and threshold settings | non-served GeoPackages |
+| `assign_rivers_to_basin.sh` | shell launcher | Runs `assign_rivers_to_basin.py` on its own | river and watershed layers | basin-linked river GeoPackage |
+| `find_intersection_river.sh` | shell launcher | Runs `find_intersection_river.py` on its own | non-served polygons and basin-linked rivers | river-linked non-served polygons |
 | `find_pop_in_danger_pop.sh` | shell launcher | Runs the final aggregation stage | impact outputs and config defaults | final risk logs and outputs |
+
+The three single-stage wrappers cover the same work as
+`pop_differences_and_impact_polygons.sh`; use them to rerun one stage (with its
+own SLURM resource profile) instead of repeating the whole chain.
 
 ## Execution Flow
 ```mermaid
@@ -101,7 +108,7 @@ Delete the corresponding risk output directory to force a rerun.
 | `create_rasters.annotations.default_mode` | `sequential` | Launcher execution mode |
 | `create_rasters.zoom_level` | `8` | Tile zoom level |
 | `create_rasters.min_pixels` | `9` | Minimum raster island size |
-| `find_unserved_pop.figures.pop_threshold` | `1000` | Non-served population threshold |
+| `find_unserved_pop.threshold_value` | `1000` | Non-served population threshold |
 | `find_intersection_river.x_distance` | `5000` | Max distance for matching non-served polygons to nearby rivers |
 | `impact_polygons_pop.impact_polygons_pop_params.org_per_pop` | `60.0` | Organic load per person |
 | `impact_polygons_pop.impact_polygons_pop_params.c_limit` | `5.0` | Concentration threshold |

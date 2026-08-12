@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile create_voronoi.py)",
+      "Bash(python3 -m py_compile download_pop.py)",
+      "Bash(python3 -m py_compile data_merge/final_data_merge.py data_merge/correct_locations_w_OSM.py)",
+      "Bash(python3 -m py_compile tests/unit/test_data_merge.py)",
+      "Bash(python3 -m py_compile pop_validation_scripts/hw_comparison.py pop_validation_scripts/eu_comparison.py)",
+      "Bash(tee /tmp/claude-1002/-home-eren-work-heigit-plant-capacity/d148c978-b37b-44e9-882a-cee505a3c016/scratchpad/noexec.txt)"
+    ]
+  }
+}

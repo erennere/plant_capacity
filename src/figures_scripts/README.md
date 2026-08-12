@@ -33,27 +33,25 @@ Before running this stage, these outputs from prior stages must exist.
 ## Scripts in This Folder
 | Script | Role | What it does | Key inputs | Key outputs |
 | --- | --- | --- | --- | --- |
-| `convert_voronoi_to_geojson_for_map.sh` | shell launcher | Exports Voronoi outputs to map-ready GeoJSON | config values and positional overrides | GeoJSON map layers |
-| `convert_voronoi_to_geojson_for_map.py` | Python worker | Converts Voronoi layers into lightweight GeoJSON | population-enriched Voronoi outputs | map-ready GeoJSON |
-| `composite_area_population_plots.sh` | shell launcher | Runs the composite plotting workflow | config values and positional overrides | histogram and scatter PNGs |
+| `piechart.sh` | shell launcher | Runs static, interactive, and sizes map pie/HTML workflows | config values and named `--level`/`--version`/... overrides | PNG/HTML/GeoJSON outputs |
+| `composite_area_population_plots.sh` | shell launcher | Runs the composite plotting workflow | config values and named `--level`/`--version`/... overrides | histogram and scatter PNGs |
 | `composite_area_population_plots.py` | Python worker | Builds area/population composite plots | pop-Voronoi outputs and country boundaries | diagnostic figures |
 | `piechart_figure.py` | Python worker | Builds a static pie-chart summary figure | raster-country stats and country boundaries | PNG summary figure |
 | `piechart_interactive.py` | Python worker | Builds an interactive pie-chart HTML map | raster-country stats and country boundaries | interactive HTML output |
-| `pop_at_risk_figures.sh` | shell launcher | Runs the risk-figure workflow | config values and positional overrides | risk figures and logs |
+| `sizes_interactive_map.py` | Python worker | Creates reduced centroid GeoJSON and versioned sizes interactive HTML | population-enriched Voronoi outputs and template HTML | map-ready GeoJSON and standalone HTML |
+| `pop_at_risk_figures.sh` | shell launcher | Runs the risk-figure workflow | config values and named `--level`/`--version`/... overrides | risk figures and logs |
 | `pop_at_risk_figures.py` | Python worker | Plots population-at-risk and impact summaries | risk outputs and tile overlays | risk-analysis figures |
-| `create_final_plots.sh` | shell launcher | Final report plot launcher | config and pipeline outputs | final plot bundle |
-| `create_final_plots.py` | Python worker | Produces final publication plots | validation/risk summaries | final figure set |
-| `create_interactive_map.sh` | shell launcher | Interactive map launcher | config and map inputs | HTML map output |
-| `create_interactive_map.py` | Python worker | Generates the interactive map | map-ready GeoJSON and styling inputs | standalone HTML map |
-| `data_for_aquaweb.py` | Python worker | Prepares web-facing exports | processed outputs | data extracts |
-| `gps_coordinates.py` | Python worker | Handles coordinate export utilities | geospatial sources | coordinate products |
-| `merge_results.py` | Python worker | Aggregates figure-stage intermediate results | outputs from module scripts | merged figure inputs |
+| `interactive_unconnected_industrial_map.sh` | shell launcher | Runs the unconnected-industrial map workflow | config values and named overrides | interactive HTML map and logs |
+| `interactive_unconnected_industrial_map.py` | Python worker | Builds a Folium map of industrial areas with no nearby WWTP | unconnected-industrial layer from `industrial_analysis/` | standalone HTML map |
+| `_shared.py` | shared helpers | Figure-layer column conventions used by both piechart scripts: `aggregate_by_country`, `calculate_size`, `ensure_population_percentage_column` | - | - |
 
 ## Execution Flow
 ```mermaid
 graph TD
-  A([convert_voronoi_to_geojson_for_map.sh]) --> B[convert_voronoi_to_geojson_for_map.py]
-  B --> C[(map geojson outputs)]
+  A([piechart.sh]) --> B[piechart_figure.py]
+  A --> C[piechart_interactive.py]
+  A --> D[sizes_interactive_map.py]
+  D --> E[(sizes map geojson/html outputs)]
 
   D([composite_area_population_plots.sh]) --> E[composite_area_population_plots.py]
   E --> F[(composite figures)]
@@ -61,16 +59,15 @@ graph TD
   G([pop_at_risk_figures.sh]) --> H[pop_at_risk_figures.py]
   H --> I[(risk figures)]
 
-  J([create_interactive_map.sh]) --> K[create_interactive_map.py]
-  C --> K
-  K --> L[(interactive HTML map)]
+  J([interactive_unconnected_industrial_map.sh]) --> K[interactive_unconnected_industrial_map.py]
+  K --> L[(unconnected-industrial HTML map)]
 ```
 
 ## Run Instructions
 ### Common reporting run
 ```bash
 cd src
-bash figures_scripts/convert_voronoi_to_geojson_for_map.sh
+bash figures_scripts/piechart.sh sizes
 bash figures_scripts/composite_area_population_plots.sh
 bash figures_scripts/pop_at_risk_figures.sh
 ```
@@ -80,7 +77,8 @@ bash figures_scripts/pop_at_risk_figures.sh
 cd src
 python -m src.figures_scripts.piechart_figure
 python -m src.figures_scripts.piechart_interactive
-python -m src.figures_scripts.create_interactive_map
+python -m src.figures_scripts.sizes_interactive_map
+python -m src.figures_scripts.interactive_unconnected_industrial_map
 ```
 
 ### HPC
@@ -94,7 +92,7 @@ A successful run produces PNG, HTML, and GeoJSON outputs under `data/figures/...
 
 ## Smart Behaviors
 - Figure scripts consume existing outputs and do not retrigger heavy upstream pipeline stages.
-- Map conversion scripts isolate geometry export from plotting logic so they can be rerun cheaply.
+- The sizes interactive workflow isolates reduced GeoJSON export from heavy plotting logic so it can be rerun cheaply.
 - The composite plotting script reads the configured default zonal-sum column and can fall back when the preferred year-specific column is absent.
 
 Delete the corresponding figure output directory to force a rerun.
@@ -102,7 +100,7 @@ Delete the corresponding figure output directory to force a rerun.
 ## Parameters
 | Config key | Default | Effect |
 | --- | --- | --- |
-| `convert_voronoi_to_geojson_for_map.figures.approach` | null | Map export approach selector |
+| `sizes_interactive_map.figures.approach` | null | Sizes map export approach selector |
 | `composite_area_population_plots.zonal_sum_default_column` | `2024_zonal_sum` | Preferred zonal-sum column |
 | `composite_area_population_plots.paths.country_boundaries_filepath` | template | Country boundary input |
 | `piechart_figure.industrial_category_numbers` | null | Industrial category filter |
@@ -117,4 +115,5 @@ Delete the corresponding figure output directory to force a rerun.
 
 ## Known Issues / TODOs
 - `piechart_figure.py` and `piechart_interactive.py` are direct modules rather than being launched by shell wrappers.
+- The two piechart scripts deliberately keep different size mappings (log vs linear) and different aggregation depth; the divergence is parameterised in `_shared.py` rather than duplicated.
 - No explicit `TODO` or `FIXME` markers were found in this module.
